@@ -52,11 +52,34 @@ The `build` script runs `wasm-pack build --target web` first (producing
 `pkg/`), then `tsc --noEmit`, then `vite build`. `web/main.ts` imports the
 generated `pkg/brain_visualizer.js` directly.
 
-## Threaded WASM build (phase 6 concern)
+## CPU backend & threaded WASM build (phase 6)
 
-The CPU backend (BV24) uses `wasm-bindgen-rayon`, which requires WASM threads:
-a **nightly** toolchain, `RUSTFLAGS='-C target-feature=+atomics,+bulk-memory'`,
-and a `build-std` rebuild of `std`:
+The CPU backend is event-driven (active-list) LIF on rayon, running the SAME
+network as the GPU backend (shared `connectivity::target`/`weight`, same BV21
+packing, same fixed-point current scale S=4096). It lives in `src/sim/cpu/`
+(`core.rs` = pure sim, native-testable; `mod.rs` = `CpuBackend`). Browser glue:
+`web/cpu-worker.ts` (coordinator Web Worker, BV24) + `web/cpu-renderer.ts`
+(WebGL2 instanced-billboard glow, GLSL ES 3.0 port of `render_far.wgsl`).
+
+### Native verification (no browser needed — the real path)
+The sim core is pure Rust and rayon runs natively. The harness runs the real
+`CpuBackend` and compares it to the `GpuBackend` on identical seeds:
+
+```bash
+# Single-threaded core check:
+cargo run --release --example cpu_check
+# Host rayon (20 cores) — determinism + firing-rate parity vs GPU:
+cargo run --release --example cpu_check --features cpu-threads
+```
+
+It asserts: first-100-targets CPU == shared Rust `target()` (== WGSL, the BV22
+gate); CPU vs GPU mean firing rate within ±10% at `focused`; lazy decay and
+render decay reach ≈0; and reports CPU ticks/s + syn-events/s.
+
+### Threaded WASM build (browser, optional)
+In the browser the rayon pool is `wasm-bindgen-rayon`, which requires WASM
+threads: a **nightly** toolchain + `rust-src`, `RUSTFLAGS='-C
+target-feature=+atomics,+bulk-memory'`, and a `build-std` rebuild of `std`:
 
 ```bash
 RUSTFLAGS='-C target-feature=+atomics,+bulk-memory' \
@@ -64,10 +87,14 @@ RUSTFLAGS='-C target-feature=+atomics,+bulk-memory' \
   -Z build-std=std,panic_abort --features cpu-threads
 ```
 
-To keep the phase-1 scaffold building cleanly on stable, `wasm-bindgen-rayon`
-and `rayon` are behind the **default-off `cpu-threads` cargo feature**. CPU
-simulation lands in phase 6; the threaded build is set up then. The non-threaded
-wasm build (`wasm-pack build --target web`) is the phase-1 deliverable.
+This recipe is **verified to compile** in this environment (nightly + rust-src).
+To keep the default scaffold building cleanly on stable, `rayon` and
+`wasm-bindgen-rayon` are behind the **default-off `cpu-threads` cargo feature**.
+The default wasm build (`wasm-pack build --target web`) stays non-threaded; the
+CPU backend then runs **single-threaded in the browser** (still correct, just
+slower). Cross-origin isolation (COOP/COEP) is already set by the dev/preview
+server and the `coi-serviceworker.js` shim, so SharedArrayBuffer/threads are
+available where the threaded build is deployed.
 
 ## Browser verification (manual TODO — no browser in build env)
 

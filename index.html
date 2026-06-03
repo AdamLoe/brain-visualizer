@@ -37,8 +37,8 @@
       </div>
       <div id="backend-toggle" class="btn-group">
         <button data-backend="gpu" class="active">GPU</button>
-        <!-- CPU disabled until Phase 6; tooltip explains why -->
-        <button data-backend="cpu" disabled title="CPU backend lands in phase 6">CPU</button>
+        <!-- Phase 6: CPU backend (event-driven rayon worker) is selectable. -->
+        <button data-backend="cpu" title="CPU backend (event-driven, rayon)">CPU</button>
       </div>
     </div>
 

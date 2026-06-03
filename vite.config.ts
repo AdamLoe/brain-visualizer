@@ -14,6 +14,11 @@ export default defineConfig({
   plugins: [wasm(), topLevelAwait()],
   server: { headers: crossOriginIsolation },
   preview: { headers: crossOriginIsolation },
+  // The CPU coordinator worker (web/cpu-worker.ts) dynamically imports the wasm
+  // pkg, which forces code-splitting; ES module workers are required for that
+  // (the default IIFE worker format cannot code-split). Module workers also
+  // carry crossOriginIsolated into the worker for SharedArrayBuffer (BV24).
+  worker: { format: "es", plugins: () => [wasm(), topLevelAwait()] },
   // The wasm-pack `pkg/` output is referenced directly by web/main.ts.
   optimizeDeps: { exclude: ["brain_visualizer"] },
 });

@@ -63,11 +63,11 @@ export function ticksThisFrame(speed: SpeedPreset, frameCounter: number): number
 }
 
 // ── Backend availability ─────────────────────────────────────────────────────
-// Phase 5: only GPU is implemented. CPU is gated until Phase 6.
+// Phase 6: both GPU (WebGPU compute) and CPU (event-driven rayon worker) are
+// implemented. The CPU backend runs single-threaded when cross-origin isolation
+// / WASM threads are unavailable (still correct), so it is always selectable.
 function backendAvailable(kind: BackendKind): boolean {
-  if (kind === "gpu") return true;
-  // "cpu" is not available until Phase 6 (CPU backend + rayon worker).
-  return false;
+  return kind === "gpu" || kind === "cpu";
 }
 
 // ── Toast notification ───────────────────────────────────────────────────────
@@ -86,7 +86,7 @@ export function showToast(msg: string, durationMs = 2500): void {
 }
 
 // ── DOM helpers ──────────────────────────────────────────────────────────────
-function setActiveButton(groupSelector: string, matchAttr: string, value: string): void {
+export function setActiveButton(groupSelector: string, matchAttr: string, value: string): void {
   document.querySelectorAll(`${groupSelector} button`).forEach((b) => {
     (b as HTMLElement).classList.toggle(
       "active",

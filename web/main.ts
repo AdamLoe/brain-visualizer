@@ -12,12 +12,14 @@ import {
   Controls,
   isMobile,
   scalerDecide,
+  setActiveButton,
   setBrainState,
   setSpeed,
   showToast,
   tickExcitability,
   ticksThisFrame,
 } from "./controls";
+import { CpuRenderer } from "./cpu-renderer";
 import { Profiler } from "./profiler";
 import { Renderer } from "./renderer";
 import { DEFAULT_CONFIG, ZERO_STATS, type AppConfig, type BackendKind, type BrainState, type SpeedPreset } from "./types";
@@ -126,13 +128,14 @@ async function boot(): Promise<void> {
   document.querySelectorAll("#backend-toggle button").forEach((btn) => {
     btn.addEventListener("click", () => {
       const kind = (btn as HTMLElement).dataset.backend as BackendKind;
-      // Disabled buttons (CPU in Phase 5) have the HTML `disabled` attribute;
-      // belt-and-suspenders: also check availability in setBackend via toast path.
+      // Phase 6: both backends are selectable. Belt-and-suspenders disabled
+      // guard kept in case a build re-disables a button.
       if ((btn as HTMLButtonElement).disabled) {
-        showToast("CPU backend is not available yet");
+        showToast(`${kind.toUpperCase()} backend is not available`);
         return;
       }
       if (kind !== config.backend) {
+        setActiveButton("#backend-toggle", "backend", kind);
         void restartWithBackend(kind);
       }
     });
@@ -142,25 +145,44 @@ async function boot(): Promise<void> {
   let rafHandle = 0;
   let duringRestart = false;
 
+  // Phase 6 CPU backend coordinator (BV24). Owns the worker + the SoA views the
+  // WebGL2 CpuRenderer draws. Tuning matches examples/cpu_check.rs / sim_check.rs.
+  const CPU_I_EXT = 0.040;
+  const CPU_SYN_SCALE = 0.03;
+  const cpu = new CpuCoordinator(canvas, CPU_I_EXT, CPU_SYN_SCALE);
+
   /**
-   * BV16 restart sequence: cancel rAF, destroy backend, reinit same seed.
-   * In Phase 5 only GPU is real; CPU shows disabled. The black-canvas gap
+   * BV16 restart sequence: cancel rAF, tear down the current backend, reinit the
+   * other one with the SAME seed (identical network). The black-canvas gap
    * during teardown+reinit is acceptable per the spec.
+   *
+   * CPU path is real here (spawns the coordinator worker + WebGL2 renderer); the
+   * GPU wasm bridge remains a browser TODO (Phase 3 OD11).
    */
   async function restartWithBackend(kind: BackendKind): Promise<void> {
     if (duringRestart) return;
     duringRestart = true;
     cancelAnimationFrame(rafHandle);
 
-    // Destroy current wasm backend (releases GPU buffers).
-    // In Phase 5 the wasm GPU bridge is a browser TODO; when wired, this will
-    // call wasmBackend.destroy() and re-create with same config.seed.
     console.log(`[main] restart → backend=${kind} seed=0x${config.seed.toString(16)}`);
+    const prev = config.backend;
     config.backend = kind;
     profiler.setConfig(kind, config.tier, config.n, config.k);
 
-    // TODO (browser): destroy wasm GpuBackend, re-create with same seed.
-    // backend = await WasmGpuBackend.create(config);
+    if (prev === "cpu") cpu.destroy();
+    // TODO (browser): if prev === "gpu", destroy wasm GpuBackend.
+
+    if (kind === "cpu") {
+      try {
+        await cpu.start(config);
+      } catch (e) {
+        console.warn("[main] CPU backend start failed, reverting to GPU:", e);
+        showToast("CPU backend failed to start");
+        config.backend = "gpu";
+        setActiveButton("#backend-toggle", "backend", "gpu");
+      }
+    }
+    // TODO (browser): if kind === "gpu", re-create wasm GpuBackend (same seed).
 
     duringRestart = false;
     rafHandle = requestAnimationFrame(rafLoop);
@@ -178,20 +200,28 @@ async function boot(): Promise<void> {
   function rafLoop(timestamp: DOMHighResTimeStamp): void {
     const ticks = ticksThisFrame(config.speed, frameCounter);
 
-    // Smooth excitability lerp (Phase 5). Result passed to backend.tick().
+    // Smooth excitability lerp (Phase 5). Passed to the backend's tick().
     const excitability = tickExcitability();
-    // TODO (browser): wasmBackend.tick(ticks, excitability)
-    void ticks;
-    void excitability;
-
-    const stats = ZERO_STATS;
     tickCount += ticks;
 
-    // Phase 4 LOD plumbing: update LOD distance before render each frame.
-    // TODO (browser): wasmBackend.set_lod_camera_distance(camera.cameraDistance())
-    // TODO (browser): wasmBackend.render_full(camera.eye(), camera.cameraDistance(), ...)
-    void camera.cameraDistance();
-    void camera.eye();
+    let stats = ZERO_STATS;
+
+    if (config.backend === "cpu") {
+      // CPU path: drive the coordinator worker + WebGL2 render (Phase 6).
+      if (ticks > 0) cpu.tick(ticks, excitability);
+      stats = cpu.lastStats();
+      cpu.render(camera);
+    } else {
+      // GPU path: tick + render via the wasm GpuBackend (browser TODO bridge).
+      // TODO (browser): wasmBackend.tick(ticks, excitability)
+      // TODO (browser): wasmBackend.set_lod_camera_distance(camera.cameraDistance())
+      // TODO (browser): wasmBackend.render_full(camera.eye(), camera.cameraDistance(), ...)
+      void ticks;
+      void excitability;
+      void camera.cameraDistance();
+      void camera.eye();
+      renderer.render(camera, tickCount);
+    }
 
     profiler.recordFrame(timestamp, timestamp - lastTimestamp, stats);
     const dumped = profiler.maybeDump(timestamp);
@@ -211,8 +241,6 @@ async function boot(): Promise<void> {
       }
     }
 
-    renderer.render(camera, tickCount);
-
     frameCounter++;
     lastTimestamp = timestamp;
     rafHandle = requestAnimationFrame(rafLoop);
@@ -220,7 +248,112 @@ async function boot(): Promise<void> {
 
   rafHandle = requestAnimationFrame(rafLoop);
 
-  console.log("[main] Phase 5 ready — controls wired, scaler active (GPU bridge = browser TODO)");
+  console.log("[main] Phase 6 ready — CPU backend selectable; GPU bridge = browser TODO");
+}
+
+/**
+ * CPU backend coordinator (Phase 6, BV24). Owns the dedicated sim Web Worker
+ * (which owns the WASM instance + rayon pool + sim state) and the WebGL2
+ * renderer on the main thread. The worker writes the SoA into the shared WASM
+ * memory; this class builds Float32Array/Uint32Array views over that memory and
+ * hands them to the CpuRenderer each frame (zero-copy, full upload).
+ *
+ * Compile/typecheck-only here — the runtime path needs a browser (no browser in
+ * the build env). Falls back to single-threaded sim when cross-origin isolation
+ * / WASM threads are unavailable (still correct, just slower).
+ */
+class CpuCoordinator {
+  private worker: Worker | null = null;
+  private renderer: CpuRenderer | null = null;
+  private memory: WebAssembly.Memory | null = null;
+  private neuronCount = 0;
+  private vRenderPtr = 0;
+  private lastSpikePtr = 0;
+  private positionsPtr = 0;
+  private tickCounter = 0;
+  private spikesThisFrame = 0;
+
+  constructor(
+    private canvas: HTMLCanvasElement,
+    private iExt: number,
+    private synScale: number,
+  ) {}
+
+  async start(config: AppConfig): Promise<void> {
+    const gl = this.canvas.getContext("webgl2");
+    if (!gl) throw new Error("WebGL2 unavailable (CPU backend requires it)");
+    this.renderer = new CpuRenderer(gl);
+
+    this.worker = new Worker(new URL("./cpu-worker.ts", import.meta.url), { type: "module" });
+    const ready = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("CPU worker init timeout")), 30000);
+      this.worker!.onmessage = (ev: MessageEvent) => {
+        const m = ev.data;
+        if (m.type === "ready") {
+          clearTimeout(timer);
+          this.memory = m.memory;
+          this.neuronCount = m.neuronCount;
+          this.vRenderPtr = m.vRenderPtr;
+          this.lastSpikePtr = m.lastSpikePtr;
+          this.positionsPtr = m.positionsPtr;
+          const pos = new Float32Array(this.memory!.buffer, this.positionsPtr, this.neuronCount * 3);
+          this.renderer!.setPositions(pos, this.neuronCount);
+          console.log(`[cpu] coordinator ready: N=${this.neuronCount} threaded=${m.threaded}`);
+          resolve();
+        } else if (m.type === "ticked") {
+          this.spikesThisFrame = m.spikes;
+          this.tickCounter = m.tick;
+          this.vRenderPtr = m.vRenderPtr;
+          this.lastSpikePtr = m.lastSpikePtr;
+        }
+      };
+      this.worker!.onerror = (e) => { clearTimeout(timer); reject(e); };
+    });
+    this.worker.postMessage({
+      type: "init",
+      n: config.n,
+      k: config.k,
+      seed: config.seed >>> 0,
+      iExt: this.iExt,
+      synapticScale: this.synScale,
+      requestedThreads: navigator.hardwareConcurrency || 4,
+    });
+    await ready;
+  }
+
+  tick(ticks: number, excitability: number): void {
+    this.worker?.postMessage({ type: "tick", ticks, excitability });
+  }
+
+  stimulate(x: number, y: number, z: number, radius: number, current: number): void {
+    this.worker?.postMessage({ type: "stim", x, y, z, radius, current });
+  }
+
+  render(camera: Camera): void {
+    if (!this.renderer || !this.memory || this.neuronCount === 0) return;
+    const vRender = new Float32Array(this.memory.buffer, this.vRenderPtr, this.neuronCount);
+    const lastSpike = new Uint32Array(this.memory.buffer, this.lastSpikePtr, this.neuronCount);
+    this.renderer.render(camera, this.tickCounter, vRender, lastSpike);
+  }
+
+  lastStats(): typeof ZERO_STATS {
+    return {
+      tickCount: 1,
+      spikes: this.spikesThisFrame,
+      synapticEvents: 0,
+      tickMs: 0,
+    };
+  }
+
+  destroy(): void {
+    this.worker?.postMessage({ type: "destroy" });
+    this.worker?.terminate();
+    this.worker = null;
+    this.renderer?.destroy();
+    this.renderer = null;
+    this.memory = null;
+    this.neuronCount = 0;
+  }
 }
 
 /**

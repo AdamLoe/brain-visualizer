@@ -40,7 +40,7 @@ verification notes. Started 2026-06-03._
 | 3 GPU render | complete | — | offscreen render PASS: 48.6% non-black, all 3 region channels, stim confirmed |
 | 4 Near LOD | complete | — | GPU indirect cull+draw PASS; 321 neurons/2565 synapses emitted at close zoom; 0 overflow; 70 tests pass |
 | 5 Controls | complete | — | UI wired (speed/brain-state/backend buttons); excitability lerp; scaler activated; 22 TS tests pass (vitest); 70 cargo tests still pass; GPU bridge = browser TODO |
-| 6 CPU backend | pending | — | |
+| 6 CPU backend | complete | — | Real event-driven CpuBackend (host rayon). CPU≡GPU connectivity bit-identical; CPU 12.42 Hz vs GPU 12.42 Hz at focused (0.0% diff); lazy+render decay ≈0; 73 cargo tests, 22 vitest, default+threaded wasm green; CPU unlocked in UI; browser worker/SAB/WebGL2 = compile-only TODO |
 | 7 Polish | pending | — | |
 
 ## Phase closeouts
@@ -466,3 +466,147 @@ The DOM-touching paths (`setBrainState`, `setSpeed`, `showToast`) call `document
 - The CPU button in `index.html` has `disabled` attribute — Phase 6 must remove it (or toggle it dynamically when `backendAvailable("cpu")` becomes true).
 - `restartWithBackend(kind)` in `main.ts` is a full teardown + reinit loop (BV16). When the CPU backend is real, it will call `wasmBackend.destroy()` (releases GPU buffers) then `WasmCpuBackend.create(config)` with the same `config.seed`. The `profiler.setConfig(kind, ...)` call is already in the restart path.
 - The `Controls.setBackend(kind)` facade and the DOM handler both route through `backendAvailable` — Phase 6 only needs to update that one function (plus remove the `disabled` attribute) to unlock the CPU path end-to-end.
+
+### Phase 6 — CPU Backend (2026-06-03)
+
+**Built:**
+
+- **`src/sim/cpu/core.rs`** (new): the pure-Rust, native-testable sim core.
+  `CpuNeuronBuffers` SoA exactly per spec — `v: Vec<f32>`, `last_spike: Vec<u32>`
+  (BV21-packed), `i: Vec<AtomicI32>` (fixed-point S=4096), `last_updated: Vec<u32>`,
+  `v_render: Vec<f32>`, `input_neurons: Vec<u32>`, plus a precomputed per-neuron
+  `cell_coord` so target lookups are O(1). `integrate_neuron` is the spec's lazy
+  decay (`leak_decay^ticks_dormant` for skipped ticks, swap-0 fixed-point current,
+  i_ext for input regions, gain `0.5+excit*1.5`, threshold+refractory, BV21 pack on
+  spike) — **matched to the GPU `integrate.wgsl` including the `synaptic_scale`
+  knob applied to recurrent current only** (Phase 2's tuning lever), so dynamics
+  are identical. `scatter_tick` parallelizes over fired sources with
+  `par_chunks(256)` (rayon under `cpu-threads`; single-thread fallback otherwise),
+  uses the SHARED `connectivity::target_with_cell`/`weight`, `fetch_add`s the
+  fixed-point weight (BV20 — no per-thread partial buffers), collects touched +
+  input neurons, sort+dedup. `integrate_active` is the scalar active-list integrate
+  (SIMD128 left as documented follow-up). `update_v_render` decays the snapshot
+  (`v[i]*leak_decay^(tick-last_updated[i])`) so silent neurons keep no stale glow.
+
+- **`src/connectivity/mod.rs`** (extended): added `target_with_cell(...)` — identical
+  to `target()` but takes the precomputed source cell, avoiding the O(N) `cell_of_index`
+  scan. `target()` now delegates to it, so both are bit-identical; the CPU hot path and
+  the GPU scatter (which reads its `cell_of_neuron` buffer) compute the same network.
+
+- **`src/sim/cpu/mod.rs`** (rewritten from stub): `CpuBackend` implements `SimBackend`.
+  `initialize()` mirrors `GpuBackend::initialize` (same manifold/seed → identical
+  network, BV16), seeds the active list with input neurons. `tick()` advances `ticks`
+  event-driven sub-ticks (integrate active → scatter fired → touched becomes next
+  active), tracks high-water |I|, refreshes `v_render`, returns real `TickStats`.
+  `stimulate()` adds fixed-point current to neurons in grid cells overlapping the
+  cursor sphere (bounded lookup, like `stimulate.wgsl`). `set_i_ext`/`set_synaptic_scale`
+  tuning knobs match `GpuBackend`. `destroy()` releases all state.
+
+- **`src/lib.rs`** (extended): wasm entry points (gated `#[cfg(target_arch="wasm32")]`).
+  `WasmCpuBackend` wraps `CpuBackend` and exposes `tick`/`stimulate`/`neuron_count`/
+  `tick_count`/`destroy` + `v_render_ptr`/`last_spike_ptr`/`positions_ptr` (so the main
+  thread builds typed-array views over the wasm memory / SAB — zero copy). `init_cpu_thread_pool`
+  (gated `cpu-threads`) starts the `wasm-bindgen-rayon` pool; absent in the default build.
+
+- **`web/cpu-worker.ts`** (new): the dedicated CPU sim coordinator Web Worker (BV24) —
+  owns the WASM instance + rayon pool + sim state, posts the shared `WebAssembly.Memory`
+  + SoA pointers to the main thread after init, then ticks on message. Graceful fallback:
+  if `crossOriginIsolated`/threads or `init_cpu_thread_pool` are unavailable it runs the
+  CPU backend single-threaded and reports `threaded:false`.
+
+- **`web/cpu-renderer.ts`** (new): WebGL2 (GLSL ES 3.0) instanced-billboard glow renderer,
+  a faithful port of `render_far.wgsl` (same `has_spiked ? exp(-Δtick/glow_tau) : 0` glow,
+  faint sub-threshold `v` glow, region colours from type bits, additive blend, 6-vert quad
+  from `gl_VertexID`). Per-instance attributes: position (static), `last_spike` (u32),
+  `v_render` (f32). Full upload each frame (fine for N≤200k per spec).
+
+- **`web/main.ts`** (extended): `CpuCoordinator` class owns the worker + `CpuRenderer` and
+  the SoA views. `restartWithBackend(kind)` now really tears down/spins up the CPU backend
+  (BV16, same seed) and reverts to GPU with a toast on failure. rAF loop branches: CPU path
+  drives the worker tick + WebGL2 render; GPU path keeps its browser-TODO bridge.
+
+- **UI unlock**: `backendAvailable("cpu")` → true (`web/controls.ts`); `disabled` removed
+  from the CPU button (`index.html`); `setActiveButton` exported and wired.
+
+- **`vite.config.ts`** (extended): `worker: { format: "es", plugins: ... }` — the worker's
+  dynamic wasm import forces code-splitting, which needs ES-module workers (and carries
+  cross-origin isolation into the worker for SAB). COOP/COEP unchanged (Phase 1).
+
+- **`Cargo.toml`** (extended): `rayon` is now an optional **non-target-gated** dep so the
+  native harness uses host rayon; `cpu-threads = ["dep:rayon", "wasm-bindgen-rayon"]`.
+  `wasm-bindgen-rayon` stays wasm-only. Default builds unchanged.
+
+- **`examples/cpu_check.rs`** (new): native verification harness (host rayon). Runs the
+  REAL `CpuBackend` and compares to `GpuBackend` (llvmpipe) on identical seeds.
+
+**Verified (this environment):**
+- `cargo build` host — clean, 0 warnings. `cargo build --target wasm32-unknown-unknown`
+  (default, non-threaded) — clean. `cargo test` — **73 pass** (70 unit + 3 integration;
+  +5 new CPU unit tests, −2 old stub tests). `cargo test --features cpu-threads` — 70 unit pass.
+- `tsc --noEmit` — clean. `npx vitest run` — **22 pass** (unchanged). `vite build` — clean
+  (worker bundles as a separate 1.86 kB ES chunk). `wasm-pack build --target web` (default) — clean.
+- **Threaded wasm build recipe VERIFIED to compile** (nightly + rust-src present):
+  `RUSTFLAGS='-C target-feature=+atomics,+bulk-memory' rustup run nightly cargo build
+  --target wasm32-unknown-unknown -Z build-std=std,panic_abort --features cpu-threads` →
+  Finished (only the expected "unstable feature atomics" warning). README extended with this.
+- **`examples/cpu_check.rs` PASSED (host rayon, 20 threads, N=30k K=32, focused excit=0.55):**
+  - **Determinism parity:** CPU `target_with_cell` first-100 targets for neuron 0 ==
+    shared Rust `target()` (== WGSL via the existing `wgsl_target_determinism` gate) —
+    **bit-identical**. CPU/Rust `targets[0..10] = [26659, 16993, 29271, 904, 27185, 18810,
+    1059, 11869, 27265, 19307]`.
+  - **Firing-rate parity:** CPU **12.42 Hz** vs GPU **12.42 Hz** → **0.0% rel diff, PASS
+    (±10%)**. (Near-exact because both run the identical integer connectivity + LIF
+    dynamics + tuning; CPU 223,589 spikes vs GPU 223,536 over 600 ticks.)
+  - **Lazy decay:** a neuron silent 500 ticks → v = 7.274e-12 (≈ v_init·0.95^500) → PASS.
+  - **Render decay:** untouched neuron's v_render after 500 ticks = 7.274e-12 ≈ 0 → PASS.
+  - **Native CPU throughput (context):** ~978 ticks/s, ~11.7 M syn-events/s on 20 threads
+    (≈988 ticks/s single-threaded — at focused the active list is small, so the event-driven
+    model keeps single-thread competitive; the parallel win shows at higher firing rates / N).
+    max|I|_hw = 2,674,316 (same as GPU; 803× i32 headroom, BV19 safe).
+
+**Decisions / deviations:**
+- **OD21 — `target_with_cell` (O(1) hot path).** Added a cell-passing variant of
+  `connectivity::target` so the CPU active-list scatter doesn't pay the O(N) `cell_of_index`
+  scan per synapse. `target()` delegates → bit-identical. This is the CPU analogue of the
+  GPU reading its precomputed `cell_of_neuron` buffer. (Does not fork the shared rule.)
+- **OD22 — `synaptic_scale` in the CPU integrate.** The phase-6 doc's `integrate_neuron`
+  pseudocode omits `synaptic_scale`; I included it (applied to recurrent current only, not
+  i_ext) to match the GPU `integrate.wgsl` Phase-2 added. Without it, CPU and GPU rates would
+  not match. This is the documented integration-side knob, not a weight-rule change.
+- **OD23 — `rayon` promoted to a non-target-gated optional dep.** Required so the native
+  harness can use host rayon under `cpu-threads`. `wasm-bindgen-rayon` stays wasm-only.
+- **OD24 — ES-module workers in vite.** The coordinator worker's dynamic wasm import forces
+  code-splitting; the default IIFE worker format can't, so `worker.format="es"`.
+- **OD25 — Single-threaded browser fallback is the default-build behavior.** The default
+  `wasm-pack build --target web` is non-threaded (stays on stable); the CPU backend then runs
+  single-threaded in-browser (correct, slower). The threaded pool lights up only with the
+  documented nightly/build-std build. The worker detects and reports which it got.
+- **OD26 — `i_ext`/`synaptic_scale` tuning in the worker init.** `web/main.ts` passes
+  `i_ext=0.040`, `synaptic_scale=0.03` (matching `sim_check.rs`/`cpu_check.rs`) so the browser
+  CPU dynamics land in the same 5–20 Hz band.
+
+**Browser-only TODOs (cannot verify headless — no browser):**
+1. **CPU runtime path** (worker + SAB + WebGL2): typechecks + bundles, but the actual run
+   needs a browser. Confirm: CPU button restarts into the worker, brain renders via WebGL2
+   matching the GPU look, profiler shows CPU `ticks/sec`/`synaptic_events/sec`. (Wire a richer
+   stats message from the worker into the profiler — currently `lastStats()` reports spikes
+   only; syn-events are computed natively and can be posted the same way.)
+2. **Threaded pool in-browser**: deploy the threaded build (recipe verified to compile) and
+   confirm `init_cpu_thread_pool` succeeds under COOP/COEP (already set by Phase 1 dev/preview
+   + coi-serviceworker). If unavailable, the single-threaded fallback already engages.
+3. **`wasm.memory` export name**: the worker reads `wasm.memory` (with a `__wbindgen_export_0`
+   fallback) to build the SAB views — verify against the generated `pkg` glue in-browser; the
+   threaded build exports a `SharedArrayBuffer`-backed `WebAssembly.Memory`.
+4. **GPU↔CPU restart**: GPU→CPU works (CPU is real); CPU→GPU re-creates the wasm GpuBackend,
+   which still depends on the Phase 3 OD11 WebGPU-context→wasm bridge (unchanged TODO).
+5. Visual parity tuning (`point_radius`/`glow_tau`) on real hardware.
+
+**For Phase 7 (polish) — must know:**
+- The CPU profiler HUD just needs the worker to post `synaptic_events` (already computed in
+  `TickStats`); `CpuCoordinator.lastStats()` is the single place to fill in.
+- SIMD128 integrate fast-path over contiguous active runs is the documented optimization left
+  for after profiling (scalar path is correct + already rate-matched to GPU).
+- Delta upload (only changed neurons) for N>200k is the documented WebGL2 follow-up; full
+  upload is in place and fine for tier caps.
+- BV24 ownership is clean: sim runs only on the coordinator worker; main thread does input +
+  WebGL2 render + profiler. No CPU sim work on the main thread.

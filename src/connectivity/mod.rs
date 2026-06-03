@@ -75,8 +75,27 @@ fn offset_component(h: u32) -> i32 {
 /// iterates `j in 0..k`.
 pub fn target(i: u32, j: u32, grid: &SpatialGrid, k: usize, seed: u32, source_type: u8) -> u32 {
     debug_assert!((j as usize) < k.max(1));
-
     let src_cell = grid.unpack(grid.cell_of_index(i));
+    target_with_cell(i, j, grid, k, seed, source_type, src_cell)
+}
+
+/// Identical to [`target`] but takes the source neuron's already-known integer
+/// cell coordinate, avoiding the O(N) `cell_of_index` scan. This is the hot-path
+/// entry the CPU backend uses (it precomputes `SpatialGrid::cell_of_neuron_map`
+/// once); the GPU scatter does the same by reading its `cell_of_neuron` buffer.
+/// `target` delegates here so both produce bit-identical results.
+#[inline]
+pub fn target_with_cell(
+    i: u32,
+    j: u32,
+    grid: &SpatialGrid,
+    k: usize,
+    seed: u32,
+    source_type: u8,
+    src_cell: [u32; 3],
+) -> u32 {
+    debug_assert!((j as usize) < k.max(1));
+
     let h = mix_key(seed, i, j, salt::CELL_OFFSET);
 
     // Three independent offset components from one 32-bit hash (10 bits each).

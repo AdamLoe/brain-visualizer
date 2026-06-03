@@ -83,6 +83,104 @@ mod wasm_entry {
         manifold.neuron_positions.len()
     }
 
+    // ── Phase 6: CPU backend (event-driven LIF on the coordinator worker) ────
+    //
+    // The coordinator Web Worker (web/cpu-worker.ts) owns this instance + the
+    // rayon pool (under `cpu-threads`) and writes the SoA into the wasm linear
+    // memory (a SharedArrayBuffer when threads are enabled). The main thread
+    // reads `v_render` + `last_spike` views (by pointer/len) each frame and
+    // uploads them to WebGL2 (web/cpu-renderer.ts). BV24 ownership boundary.
+    use crate::sim::backend::SimBackend;
+    use crate::sim::cpu::CpuBackend;
+
+    /// Thin wasm wrapper around the native-tested `CpuBackend`.
+    #[wasm_bindgen]
+    pub struct WasmCpuBackend {
+        inner: CpuBackend,
+    }
+
+    #[wasm_bindgen]
+    impl WasmCpuBackend {
+        /// Create + initialize the CPU backend for `n`/`k`/`seed`. Same seed as
+        /// the GPU backend → identical network (BV16 restart semantics).
+        #[wasm_bindgen(constructor)]
+        pub fn new(n: usize, k: usize, seed: u32, i_ext: f32, synaptic_scale: f32) -> WasmCpuBackend {
+            let config = SimConfig {
+                n,
+                k,
+                seed: seed as u64,
+                i_ext,
+                backend: crate::sim::backend::BackendKind::Cpu,
+                ..SimConfig::default()
+            };
+            let mut inner = CpuBackend::new(config.clone());
+            inner.set_i_ext(i_ext);
+            inner.set_synaptic_scale(synaptic_scale);
+            inner.initialize(&config);
+            WasmCpuBackend { inner }
+        }
+
+        /// Advance `ticks` sub-ticks at `excitability`. Returns spikes this batch
+        /// (the worker posts a richer stats object separately if needed).
+        pub fn tick(&mut self, ticks: u32, excitability: f32) -> f64 {
+            self.inner.tick(ticks, excitability).spikes as f64
+        }
+
+        /// Inject current near `pos` (world space) within `radius`.
+        pub fn stimulate(&mut self, x: f32, y: f32, z: f32, radius: f32, current: f32) {
+            self.inner.stimulate([x, y, z], radius, current);
+        }
+
+        pub fn neuron_count(&self) -> usize {
+            self.inner.config().n
+        }
+
+        pub fn tick_count(&self) -> u32 {
+            self.inner.tick_count()
+        }
+
+        /// Pointer to the decayed render-voltage array (`f32`, len = neuron_count).
+        /// JS builds a `Float32Array(memory.buffer, ptr, n)` view for WebGL upload.
+        pub fn v_render_ptr(&self) -> *const f32 {
+            match self.inner.render_state() {
+                crate::sim::backend::RenderState::Cpu { v_render, .. } => v_render.as_ptr(),
+                _ => std::ptr::null(),
+            }
+        }
+
+        /// Pointer to the packed `last_spike` array (`u32`, len = neuron_count).
+        pub fn last_spike_ptr(&self) -> *const u32 {
+            match self.inner.render_state() {
+                crate::sim::backend::RenderState::Cpu { last_spike, .. } => last_spike.as_ptr(),
+                _ => std::ptr::null(),
+            }
+        }
+
+        /// Pointer to neuron positions (`f32` xyz triples, len = 3*neuron_count).
+        pub fn positions_ptr(&self) -> *const f32 {
+            match self.inner.render_state() {
+                crate::sim::backend::RenderState::Cpu { positions, .. } => positions.as_ptr().cast(),
+                _ => std::ptr::null(),
+            }
+        }
+
+        /// Release all SoA state (BV16 teardown before a backend/tier restart).
+        pub fn destroy(&mut self) {
+            self.inner.destroy();
+        }
+    }
+
+    /// Initialize the `wasm-bindgen-rayon` thread pool (threaded wasm build only).
+    /// Returns a JS `Promise` the worker awaits before running the sim. Only
+    /// available under the `cpu-threads` feature + a threaded wasm build (nightly
+    /// + `+atomics,+bulk-memory` + `build-std`); otherwise the CPU backend runs
+    /// single-threaded (still correct) and this symbol is absent.
+    #[cfg(feature = "cpu-threads")]
+    #[wasm_bindgen]
+    pub fn init_cpu_thread_pool(num_threads: usize) -> js_sys::Promise {
+        wasm_bindgen_rayon::init_thread_pool(num_threads)
+    }
+
     /// Report cross-origin isolation status (SharedArrayBuffer availability) to
     /// the console — part of the phase-1 startup log (COOP/COEP check).
     #[wasm_bindgen]
