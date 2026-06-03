@@ -34,7 +34,7 @@ verification notes. Started 2026-06-03._
 ## Phase status
 | Phase | Status | Commit | Notes |
 |-------|--------|--------|-------|
-| 0 Benchmark | pending | — | |
+| 0 Benchmark | complete | — | GPU=llvmpipe (no real GPU); CPU numbers collected; browser TODO |
 | 1 Foundation | pending | — | |
 | 2 GPU sim | pending | — | |
 | 3 GPU render | pending | — | |
@@ -46,3 +46,34 @@ verification notes. Started 2026-06-03._
 ## Phase closeouts
 _(Each phase appends a short closeout here: what was built, what was verified,
 what is a manual/browser TODO, and any decisions made.)_
+
+### Phase 0 — Benchmark Spike (2026-06-03)
+
+**Built:** Standalone native Rust benchmark crate at `bench/` (isolated, not
+a workspace member). Native GPU path (wgpu 29) + CPU path (rayon). Minimal
+WGSL integrate + scatter shaders using the exact BV22 hash32/mix_key. Fixed-
+point i32 scatter (S=4096, BV19). 2D scatter dispatch to work around
+`maxComputeWorkgroupsPerDimension=65535`. GPU benchmark has graceful fallback
+on adapter failure. Web microbench stub at `bench/web/` compiles via wasm-pack
+(target web) but was not run.
+
+**GPU adapter:** NOT found (real GPU). `/dev/dri/renderD128` and `card0`
+returned `Permission denied` under WSL2. wgpu fell back to llvmpipe (software
+Vulkan CPU emulation). GPU numbers are CPU emulation, not real GPU — discarded
+for planning.
+
+**Headline CPU numbers (rayon, 20 cores):**
+- N=100k K=32: ~442 ticks/s, ~2.2 M syn-events/s
+- N=500k K=32: ~388 ticks/s, ~10.4 M syn-events/s
+- N=50k  K=64: ~390 ticks/s, ~2.2 M syn-events/s
+
+**Manual TODOs for user:**
+1. Grant GPU permissions (`sudo chmod a+rw /dev/dri/renderD128`) or set up a
+   Vulkan ICD, re-run native bench to get real GPU numbers.
+2. Serve `bench/web/index.html` with COOP+COEP headers in a real browser with
+   WebGPU support; collect browser numbers and paste into architecture.md §9.1.
+3. Browser WebGPU numbers are required before tier caps are locked for Phase 1.
+
+**Decisions:** Tier caps from §9 remain provisional. 10M stretch path rejected
+until confirmed by browser numbers. CPU Low tier realistic ceiling is ~10k–20k
+neurons at 60 fps on a 4-core device (not 100k as initially assumed).

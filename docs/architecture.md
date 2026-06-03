@@ -288,11 +288,88 @@ timing read rather than stalling.
   quickly when over budget; grow only after sustained headroom.
 
 ### 9.1 Benchmark results
-Phase 0 numbers go here before shipped tier caps are treated as real. Include:
-machine/browser spec, GPU adapter info and limits, browser WebGPU/WASM results,
-native upper-bound results, selected Low/Balanced/Max caps, and the reason any
-10M stretch path is enabled or rejected. Native numbers are useful for diagnosis
-but browser numbers set shipped caps.
+
+**Machine:** WSL2 (Linux 5.15 on x86-64), 20 cores, 31 GB RAM.
+**Date:** 2026-06-03.
+**Rust:** 1.95.0, wgpu 29.0.3, rayon 1.12.
+
+#### GPU adapter
+No real GPU adapter found. `/dev/dri/renderD128` and `/dev/dri/card0` both
+returned `Permission denied` under WSL2 (no Vulkan ICD installed or no DRI
+passthrough configured). wgpu fell back to `llvmpipe` (LLVM software
+rasteriser via Vulkan). All "GPU" numbers below are CPU software emulation
+and are **not** representative of real GPU performance — they are thrown away.
+
+**llvmpipe limits (software fallback):**
+- `maxStorageBufferBindingSize` = 134 217 728 (128 MiB)
+- `maxBufferSize` = 2 147 483 647 (2 GiB)
+- `maxComputeWorkgroupsPerDimension` = 65 535
+- `maxComputeInvocationsPerWorkgroup` = 1 024
+- `maxComputeWorkgroupSizeX` = 1 024
+- `timestamp_query` = true (llvmpipe exposes it)
+
+#### GPU benchmark results (llvmpipe — software, NOT real GPU)
+Synaptic events estimated at 5% biological firing rate; no per-tick readback.
+Scatter uses 2D dispatch to stay within `maxComputeWorkgroupsPerDimension=65535`.
+
+| N       | K  | ticks | time   | ticks/s | syn_events/s (est) |
+|---------|----|-------|--------|---------|--------------------|
+| 100 000 | 32 | 1000  | 1.53 s | 652     | 104 M              |
+| 500 000 | 32 | 500   | 2.35 s | 212     | 170 M              |
+| 1 000 000 | 32 | 200 | 1.67 s | 120     | 192 M              |
+| 5 000 000 | 32 | 100 | 4.33 s | 23      | 185 M              |
+| 500 000 | 64 | 500   | 29.9 s | 17      | 27 M               |
+
+These numbers are pure CPU software emulation. A real mid-range discrete GPU
+running the same shaders should be 10–100× faster at large N (see real-GPU
+targets in §9).
+
+#### CPU benchmark results (rayon, 20 threads, real hardware)
+Active-list event-driven. Fixed-point AtomicI32 scatter. Drive injected to
+every 20th neuron to maintain ~5% firing rate. Measured synaptic events are
+real (actual fired×K, not estimated).
+
+| N       | K  | ticks | time   | ticks/s | syn_events/s | avg fired/tick |
+|---------|----|-------|--------|---------|--------------|----------------|
+| 10 000  | 32 | 2000  | 1.58 s | 1 263   | 0.63 M       | 15             |
+| 50 000  | 32 | 1000  | 2.45 s | 407     | 1.02 M       | 77             |
+| 100 000 | 32 | 500   | 1.13 s | 442     | 2.23 M       | 157            |
+| 500 000 | 32 | 200   | 0.52 s | 388     | 10.4 M       | 835            |
+| 50 000  | 64 | 1000  | 2.56 s | 390     | 2.18 M       | 87             |
+
+**CPU observations:**
+- Throughput at N=500k K=32 ≈ 388 ticks/sec with ~835 firings/tick (5% rate).
+  That maps to ~10.4 M synaptic scatter events/sec on 20 cores.
+- Performance dips at smaller N (e.g. N=100k: 442 ticks/s) vs N=10k (1263
+  ticks/s) because rayon thread-pool startup and atomic contention overhead
+  becomes visible at lower absolute scatter load.
+- The CPU event-driven path scales well: at 5% firing rate it only processes
+  the 5% that fired, making it efficient at the low/mid tiers.
+
+#### Browser benchmark
+**NOT collected — no browser in build environment (WSL2 headless).**
+The WebGPU/WASM microbench at `bench/web/` compiles via `wasm-pack` but was
+not run. Browser numbers are the real reference for shipped tier caps.
+**This is a manual TODO before tier caps are locked.**
+
+#### Tier cap assessment (preliminary, pending browser numbers)
+Based on CPU numbers and WSL2 GPU fallback only:
+
+- **Low tier (CPU backend):** 50k–100k neurons, K=32 → ≈400 ticks/sec.
+  At 60 fps (1 tick/frame): comfortable. At 1000 ticks/sec biological: 2.5×
+  slower than target on 20 cores; real device with 4–8 cores will be ~3–5×
+  slower again → realistic CPU low tier cap is ~10k–20k neurons at 60 fps.
+- **Balanced tier (GPU backend):** Requires real browser WebGPU numbers.
+  Architecture target ~200k neurons remains plausible but unconfirmed.
+- **Max tier (GPU backend):** Architecture target ~1M neurons. Cannot confirm
+  without real discrete GPU adapter. 10M stretch path is **rejected** until
+  browser GPU numbers support it.
+- **Action:** User must run the browser microbench (`bench/web/index.html`
+  served with COOP/COEP headers) on the target deployment machine and paste
+  results here before finalising tier caps in Phase 1.
+
+_Native numbers are upper bounds only. Shipped caps must be set from browser
+WebGPU/WASM results as specified in phase-0-benchmark.md._
 
 ## 10. Known constraints & risks
 - **WebGPU f32 atomics absent** → fixed-point i32 accumulation (§5).

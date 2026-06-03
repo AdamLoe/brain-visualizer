@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Brain Visualizer — Phase 0 WebGPU Microbench</title>
+</head>
+<body>
+<h2>Brain Visualizer — Phase 0 WebGPU Microbench</h2>
+<p>Open DevTools console to see JSON output.</p>
+<p><strong>Note:</strong> The WebGPU bench is a manual TODO. This page runs a
+CPU-only WASM smoke test to confirm the build is functional, then calls the
+(stub) WebGPU bench entry point.</p>
+<pre id="output">Loading...</pre>
+<script type="module">
+  import init, { run_cpu_microbench, run_webgpu_bench } from './pkg/bench_web.js';
+
+  async function main() {
+    await init();
+
+    const out = document.getElementById('output');
+
+    // CPU smoke test
+    console.log('=== WASM CPU microbench (smoke test) ===');
+    const cpuResult = run_cpu_microbench(10000, 32, 100);
+    console.log(JSON.parse(cpuResult));
+    out.textContent = 'CPU smoke test:\n' + JSON.stringify(JSON.parse(cpuResult), null, 2);
+
+    // WebGPU bench (stub — not implemented until browser environment)
+    console.log('=== WebGPU bench (stub) ===');
+    const gpuResult = await run_webgpu_bench(100000, 32, 300);
+    console.log(JSON.parse(gpuResult));
+    out.textContent += '\n\nWebGPU bench:\n' + JSON.stringify(JSON.parse(gpuResult), null, 2);
+
+    // TODO: collect results at N=100k, 500k, 1M with K=32, K=64
+    // and paste into architecture.md §9.1 to set shipped tier caps.
+  }
+
+  main().catch(e => {
+    console.error(e);
+    document.getElementById('output').textContent = 'Error: ' + e;
+  });
+</script>
+</body>
+</html>
