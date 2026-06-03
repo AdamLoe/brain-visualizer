@@ -15,7 +15,10 @@ pub mod resources;
 
 use crate::sim::backend::{RenderState, SimBackend, SimConfig, TickStats};
 use pipelines::GpuPipelines;
-use resources::{GpuBindGroups, GpuLayouts, GpuResources, IntegrateUniforms};
+use resources::{
+    GpuBindGroups, GpuLayouts, GpuResources, IntegrateUniforms, ManifoldUniforms, RenderUniforms,
+    StimUniform,
+};
 
 /// LIF parameters (phase-2 spec; locked, adjust only via excitability gain).
 const LEAK_DECAY: f32 = 0.95;
@@ -51,6 +54,8 @@ pub struct GpuBackend {
     /// leaves locked weights + fixed_point_scale untouched; controls how many
     /// coincident inputs are needed to fire (biological plausibility).
     synaptic_scale: f32,
+    /// Pending stimulation parameters (written via stimulate(), consumed at tick start).
+    stim_pending: Option<StimUniform>,
 }
 
 impl GpuBackend {
@@ -72,6 +77,7 @@ impl GpuBackend {
             max_abs_current_hw: 0,
             i_ext,
             synaptic_scale: 1.0,
+            stim_pending: None,
         }
     }
 
@@ -180,11 +186,161 @@ impl GpuBackend {
             &manifold.neuron_regions,
             &manifold.spatial_grid,
         );
+        // Phase 3: upload manifold mesh + create render uniform buffers.
+        self.resources.init_render_resources(
+            &self.ctx.device,
+            &manifold.vertices,
+            &manifold.faces,
+            config.n as u32,
+            manifold.spatial_grid.dim,
+        );
         self.resources
             .refresh_bind_groups(&self.ctx.device, &self.layouts);
         self.tick = 0;
         self.parity = 0;
         self.max_abs_current_hw = 0;
+        self.stim_pending = None;
+    }
+
+    /// Build the render pipelines for a given color format.
+    /// Called once at startup (or on surface re-creation).
+    pub fn build_render_pipelines(&mut self, color_format: wgpu::TextureFormat) {
+        self.pipelines.build_render(&self.ctx.device, &self.layouts, color_format);
+    }
+
+    /// Resize the depth texture when the canvas/offscreen dimensions change.
+    pub fn resize_render_targets(&mut self, width: u32, height: u32) {
+        self.resources.resize_render_targets(&self.ctx.device, width, height);
+    }
+
+    /// Render one frame. Encodes:
+    ///   1. manifold dark mesh pass (depth write, opaque),
+    ///   2. far-LOD billboard glow pass (additive, no depth write).
+    /// Both passes draw into `target_view`. `mvp`, `camera_right`, `camera_up`
+    /// come from the camera; `tick` is the current sim tick counter.
+    ///
+    /// Upload pattern (per-frame): write render_uniform + manifold_uniform via
+    /// queue.write_buffer; the bind groups already reference those buffers so
+    /// no bind-group rebuild is needed.
+    pub fn render(
+        &mut self,
+        target_view: &wgpu::TextureView,
+        mvp: &[f32; 16],
+        camera_right: [f32; 3],
+        camera_up: [f32; 3],
+        glow_tau: f32,
+        point_radius: f32,
+    ) {
+        let bg = match self.resources.bind_groups.as_ref() {
+            Some(b) if b.render_far.is_some() => b,
+            _ => return,
+        };
+        let rr = match self.resources.render_resources.as_ref() {
+            Some(r) => r,
+            None => return,
+        };
+        let depth_view = match self.resources.render_targets.as_ref()
+            .and_then(|t| t.depth_view.as_ref())
+        {
+            Some(d) => d,
+            None => return,
+        };
+        let pipe_far = match self.pipelines.render_far.as_ref() {
+            Some(p) => p,
+            None => return,
+        };
+        let pipe_manifold = match self.pipelines.render_manifold.as_ref() {
+            Some(p) => p,
+            None => return,
+        };
+
+        let n = self.config.n as u32;
+
+        // Upload per-frame render uniforms.
+        let ru = RenderUniforms {
+            mvp: *mvp,
+            camera_right,
+            _pad0: 0.0,
+            camera_up,
+            _pad1: 0.0,
+            tick: self.tick,
+            glow_tau,
+            point_radius,
+            n,
+        };
+        self.ctx.queue.write_buffer(&rr.render_uniform, 0, bytemuck::bytes_of(&ru));
+
+        let mu = ManifoldUniforms { mvp: *mvp };
+        self.ctx.queue.write_buffer(&rr.manifold_uniform, 0, bytemuck::bytes_of(&mu));
+
+        let mut enc = self.ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("render-frame"),
+        });
+
+        // Pass 1: manifold dark mesh (depth prepass).
+        {
+            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("manifold-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(pipe_manifold);
+            pass.set_bind_group(0, bg.render_manifold.as_ref().unwrap(), &[]);
+            pass.set_vertex_buffer(0, rr.manifold_vb.slice(..));
+            pass.set_index_buffer(rr.manifold_ib.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..rr.manifold_index_count, 0, 0..1);
+        }
+
+        // Pass 2: far-LOD billboard glow (additive, reads depth from pass 1).
+        {
+            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("far-glow-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load, // preserve manifold render
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load, // use depth written by manifold pass
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(pipe_far);
+            pass.set_bind_group(0, bg.render_far.as_ref().unwrap(), &[]);
+            // 6 vertices per billboard instance, N instances.
+            pass.draw(0..6, 0..n);
+        }
+
+        self.ctx.queue.submit([enc.finish()]);
     }
 
     /// Debug-mode correctness check (architecture §"correctness checks"). Reads
@@ -263,6 +419,24 @@ impl SimBackend for GpuBackend {
         let pipe_write = self.pipelines.write_dispatch.as_ref().unwrap();
         let pipe_scatter = self.pipelines.scatter.as_ref().unwrap();
 
+        // Phase 3: write stimulation uniform. Pre-extract stim resources so the
+        // borrow checker can split self.pipelines / self.resources borrows.
+        let stim_pending = self.stim_pending.take();
+        let do_stim = stim_pending.is_some()
+            && self.pipelines.stimulate.is_some()
+            && bg.stimulate.is_some();
+        if let Some(su) = stim_pending {
+            if let Some(rr) = self.resources.render_resources.as_ref() {
+                queue.write_buffer(&rr.stim_uniform, 0, bytemuck::bytes_of(&su));
+            }
+        }
+        // Pre-borrow stim pipeline + bg for the loop (both are immutable refs).
+        let pipe_stim = self.pipelines.stimulate.as_ref();
+        let stim_bgs = bg.stimulate.as_ref();
+        // Initial parity for stimulate (stimulate runs before integrate so it uses
+        // the SAME i_current buffer that integrate will read this tick).
+        let initial_parity = self.parity;
+
         let gain_excit = excitability;
         let fp_scale = self.config.fixed_point_scale as f32;
 
@@ -273,7 +447,21 @@ impl SimBackend for GpuBackend {
         });
 
         let zero = [0u32];
-        for _ in 0..ticks {
+        for tick_idx in 0..ticks {
+            // Phase 3: stimulate dispatch at the start of the FIRST tick only
+            // (the stim uniform was written once above for this batch).
+            if tick_idx == 0 && do_stim {
+                if let (Some(ps), Some(sbgs)) = (pipe_stim, stim_bgs) {
+                    let mut cp = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("stimulate"),
+                        timestamp_writes: None,
+                    });
+                    cp.set_pipeline(ps);
+                    cp.set_bind_group(0, &sbgs[initial_parity], &[]);
+                    cp.dispatch_workgroups(1, 1, 1);
+                }
+            }
+
             // Update the integrate uniform (cheap; per-tick tick counter).
             let u = IntegrateUniforms {
                 tick: self.tick,
@@ -361,8 +549,16 @@ impl SimBackend for GpuBackend {
         }
     }
 
-    fn stimulate(&mut self, _pos: [f32; 3], _radius: f32, _current: f32) {
-        // Phase 2: stimulation lands in phase 5 (controls). No-op here.
+    fn stimulate(&mut self, pos: [f32; 3], radius: f32, current: f32) {
+        // Convert current to fixed-point (S = FIXED_POINT_SCALE = 4096).
+        let current_fp = (current * self.config.fixed_point_scale as f32) as i32;
+        self.stim_pending = Some(StimUniform {
+            pos,
+            radius,
+            current_fp,
+            is_active: 1,
+            _pad: [0; 2],
+        });
     }
 
     fn render_state(&self) -> RenderState<'_> {

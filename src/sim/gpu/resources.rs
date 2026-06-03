@@ -63,19 +63,82 @@ pub struct SimBuffers {
     pub connect_uniform: wgpu::Buffer,
 }
 
-/// Color / depth / HDR render targets. Phase 1 stub (no allocation).
+/// Color / depth / HDR render targets. Phase 3: real depth texture + dimensions.
 pub struct RenderTargets {
     pub width: u32,
     pub height: u32,
+    /// Depth texture for the manifold mesh pass (depth-test before glow).
+    pub depth_texture: Option<wgpu::Texture>,
+    pub depth_view: Option<wgpu::TextureView>,
 }
 
-/// Bind-group layouts shared by pipelines (phase 2 real handles).
+/// Render-pass GPU resources (Phase 3).
+/// Created once per resize; never per frame.
+pub struct RenderResources {
+    /// Static manifold mesh vertex buffer (vec3 positions).
+    pub manifold_vb: wgpu::Buffer,
+    /// Static manifold mesh index buffer (u32 triangle indices).
+    pub manifold_ib: wgpu::Buffer,
+    /// Index count for the manifold draw call.
+    pub manifold_index_count: u32,
+    /// Uniform buffer: render uniforms (mvp, camera_right, camera_up, tick, …).
+    pub render_uniform: wgpu::Buffer,
+    /// Uniform buffer: manifold pass MVP (mat4x4 only).
+    pub manifold_uniform: wgpu::Buffer,
+    /// Stimulation uniform buffer (pos, radius, current_fp, active).
+    pub stim_uniform: wgpu::Buffer,
+    /// Grid uniform buffer for stimulate pass (grid_dim, n).
+    pub stim_grid_uniform: wgpu::Buffer,
+}
+
+/// Stimulation state written each frame from the JS/native caller.
+/// Field names match `StimUniforms` in stimulate.wgsl (active → is_active).
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct StimUniform {
+    pub pos: [f32; 3],
+    pub radius: f32,
+    pub current_fp: i32,
+    pub is_active: u32,
+    pub _pad: [u32; 2],
+}
+
+/// Render far-LOD uniform — layout must match `Uniforms` in render_far.wgsl.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct RenderUniforms {
+    pub mvp: [f32; 16],
+    pub camera_right: [f32; 3],
+    pub _pad0: f32,
+    pub camera_up: [f32; 3],
+    pub _pad1: f32,
+    pub tick: u32,
+    pub glow_tau: f32,
+    pub point_radius: f32,
+    pub n: u32,
+}
+
+/// Manifold-pass uniform — only the MVP matrix.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ManifoldUniforms {
+    pub mvp: [f32; 16],
+}
+
+/// Bind-group layouts shared by pipelines (phase 2 real handles + phase 3 render).
 pub struct GpuLayouts {
     pub integrate_bgl: wgpu::BindGroupLayout,
     pub integrate_uniform_bgl: wgpu::BindGroupLayout,
     pub write_dispatch_bgl: wgpu::BindGroupLayout,
     pub scatter_bgl: wgpu::BindGroupLayout,
     pub connect_uniform_bgl: wgpu::BindGroupLayout,
+    /// Phase 3: render far-LOD bind-group layout
+    /// group(0): uniform + 5 storage (pos_x/y/z, last_spike, v).
+    pub render_far_bgl: wgpu::BindGroupLayout,
+    /// Phase 3: manifold mesh bind-group layout (uniform only).
+    pub render_manifold_bgl: wgpu::BindGroupLayout,
+    /// Phase 3: stimulate compute bind-group layout.
+    pub stimulate_bgl: wgpu::BindGroupLayout,
 }
 
 impl GpuLayouts {
@@ -147,12 +210,112 @@ impl GpuLayouts {
                 entries: &[uniform(0)],
             });
 
+        // Phase 3: render far-LOD bind-group layout.
+        // group(0) binding 0 = uniform (RenderUniforms),
+        //          bindings 1-5 = storage read-only (pos_x, pos_y, pos_z, last_spike, v).
+        let render_vs_storage = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let render_vs_uniform = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let render_far_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("render-far-bgl"),
+            entries: &[
+                render_vs_uniform(0),
+                render_vs_storage(1),
+                render_vs_storage(2),
+                render_vs_storage(3),
+                render_vs_storage(4),
+                render_vs_storage(5),
+            ],
+        });
+
+        // Manifold mesh layout: just the uniform buffer (MVP).
+        let render_manifold_bgl =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("render-manifold-bgl"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+
+        // Stimulate compute layout: 2 uniforms + 5 read-only storages + 1 read-write.
+        let stim_uniform_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let stim_storage_ro = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let stim_storage_rw = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: false },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let stimulate_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("stimulate-bgl"),
+            entries: &[
+                stim_uniform_entry(0), // stim uniforms
+                stim_uniform_entry(1), // grid uniforms
+                stim_storage_ro(2),    // pos_x
+                stim_storage_ro(3),    // pos_y
+                stim_storage_ro(4),    // pos_z
+                stim_storage_ro(5),    // cell_of_neuron (unused by shader but included for layout)
+                stim_storage_ro(6),    // cell_start
+                stim_storage_ro(7),    // cell_neurons
+                stim_storage_rw(8),    // i_current (atomic write)
+            ],
+        });
+
         Self {
             integrate_bgl,
             integrate_uniform_bgl,
             write_dispatch_bgl,
             scatter_bgl,
             connect_uniform_bgl,
+            render_far_bgl,
+            render_manifold_bgl,
+            stimulate_bgl,
         }
     }
 }
@@ -167,6 +330,13 @@ pub struct GpuBindGroups {
     pub write_dispatch: wgpu::BindGroup,
     pub scatter: [wgpu::BindGroup; 2],
     pub connect_uniform: wgpu::BindGroup,
+    /// Phase 3: render far-LOD bind group (pos_x/y/z, last_spike, v read-only).
+    /// None until `init_render_resources` has been called.
+    pub render_far: Option<wgpu::BindGroup>,
+    /// Phase 3: manifold mesh bind group (MVP uniform only).
+    pub render_manifold: Option<wgpu::BindGroup>,
+    /// Phase 3: stimulate compute bind groups — two variants for I/I_next parity.
+    pub stimulate: Option<[wgpu::BindGroup; 2]>,
 }
 
 /// Owns all GPU buffers/targets and tracks when bind groups must be rebuilt.
@@ -176,6 +346,8 @@ pub struct GpuResources {
     pub sim_buffers: Option<SimBuffers>,
     pub bind_groups: Option<GpuBindGroups>,
     pub render_targets: Option<RenderTargets>,
+    /// Phase 3: render-pass resources (manifold mesh + uniform buffers).
+    pub render_resources: Option<RenderResources>,
     /// Set whenever a buffer/texture is recreated; cleared by
     /// `refresh_bind_groups`. The frame loop checks this before encoding.
     pub bind_groups_dirty: bool,
@@ -189,6 +361,7 @@ impl Default for GpuResources {
             sim_buffers: None,
             bind_groups: None,
             render_targets: None,
+            render_resources: None,
             bind_groups_dirty: false,
         }
     }
@@ -334,15 +507,98 @@ impl GpuResources {
         self.bind_groups_dirty = true;
     }
 
-    /// Recreate render targets only when dimensions/format change.
-    pub fn resize_render_targets(&mut self, _device: &wgpu::Device, width: u32, height: u32) {
+    /// Initialise the static render resources (manifold mesh + uniform buffers).
+    /// Called ONCE after `resize_neurons`; call again on tier resize.
+    /// Manifold geometry is static; uniforms are updated per-frame via writeBuffer.
+    pub fn init_render_resources(
+        &mut self,
+        device: &wgpu::Device,
+        manifold_vertices: &[[f32; 3]],
+        manifold_faces: &[[u32; 3]],
+        n: u32,
+        grid_dim: u32,
+    ) {
+        use wgpu::util::DeviceExt;
+
+        // Flat-pack vertices to [f32; 3] for vertex attribute binding.
+        let vb_data: Vec<f32> = manifold_vertices.iter().flat_map(|v| v.iter().copied()).collect();
+        let manifold_vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("manifold_vb"),
+            contents: bytemuck::cast_slice(&vb_data),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let ib_data: Vec<u32> = manifold_faces.iter().flat_map(|f| f.iter().copied()).collect();
+        let manifold_ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("manifold_ib"),
+            contents: bytemuck::cast_slice(&ib_data),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        let manifold_index_count = ib_data.len() as u32;
+
+        let render_uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("render_uniform"),
+            size: std::mem::size_of::<RenderUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let manifold_uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("manifold_uniform"),
+            size: std::mem::size_of::<ManifoldUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let stim_uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("stim_uniform"),
+            size: std::mem::size_of::<StimUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Grid uniform: static (grid_dim, n). Written once.
+        let stim_grid_uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("stim_grid_uniform"),
+            contents: bytemuck::cast_slice(&[grid_dim, n, 0u32, 0u32]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        self.render_resources = Some(RenderResources {
+            manifold_vb,
+            manifold_ib,
+            manifold_index_count,
+            render_uniform,
+            manifold_uniform,
+            stim_uniform,
+            stim_grid_uniform,
+        });
+        self.bind_groups_dirty = true;
+    }
+
+    /// Recreate render targets (depth texture) only when dimensions/format change.
+    pub fn resize_render_targets(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         let changed = self
             .render_targets
             .as_ref()
             .map(|t| t.width != width || t.height != height)
             .unwrap_or(true);
         if changed {
-            self.render_targets = Some(RenderTargets { width, height });
+            let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("depth"),
+                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Depth32Float,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            let depth_view = depth_texture.create_view(&Default::default());
+            self.render_targets = Some(RenderTargets {
+                width,
+                height,
+                depth_texture: Some(depth_texture),
+                depth_view: Some(depth_view),
+            });
             self.bind_groups_dirty = true;
         }
     }
@@ -418,12 +674,68 @@ impl GpuResources {
             entries: &[entry(0, &sim.connect_uniform)],
         });
 
+        // Phase 3: render far-LOD bind group.
+        // Requires render_resources (uniform buf) + neuron buffers (read-only).
+        let (render_far, render_manifold, stimulate) =
+            if let Some(rr) = &self.render_resources {
+                let pos_x = chunk0(&nb.pos_x);
+                let pos_y = chunk0(&nb.pos_y);
+                let pos_z = chunk0(&nb.pos_z);
+                let render_far_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("render-far-bg"),
+                    layout: &layouts.render_far_bgl,
+                    entries: &[
+                        entry(0, &rr.render_uniform),
+                        entry(1, pos_x),
+                        entry(2, pos_y),
+                        entry(3, pos_z),
+                        entry(4, last_spike),
+                        entry(5, v),
+                    ],
+                });
+                let render_manifold_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("render-manifold-bg"),
+                    layout: &layouts.render_manifold_bgl,
+                    entries: &[entry(0, &rr.manifold_uniform)],
+                });
+                // Stimulate bind groups: two variants for I parity.
+                // parity 0: stim writes i_front (same buffer integrate reads at p=0).
+                // parity 1: stim writes i_back.
+                let make_stim = |i_buf: &wgpu::Buffer| {
+                    device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("stimulate-bg"),
+                        layout: &layouts.stimulate_bgl,
+                        entries: &[
+                            entry(0, &rr.stim_uniform),
+                            entry(1, &rr.stim_grid_uniform),
+                            entry(2, pos_x),
+                            entry(3, pos_y),
+                            entry(4, pos_z),
+                            entry(5, &grid.cell_of_neuron),
+                            entry(6, &grid.cell_start),
+                            entry(7, &grid.cell_neurons),
+                            entry(8, i_buf),
+                        ],
+                    })
+                };
+                (
+                    Some(render_far_bg),
+                    Some(render_manifold_bg),
+                    Some([make_stim(i_front), make_stim(i_back)]),
+                )
+            } else {
+                (None, None, None)
+            };
+
         self.bind_groups = Some(GpuBindGroups {
             integrate,
             integrate_uniform,
             write_dispatch,
             scatter,
             connect_uniform,
+            render_far,
+            render_manifold,
+            stimulate,
         });
         self.bind_groups_dirty = false;
     }
@@ -435,6 +747,7 @@ impl GpuResources {
         self.sim_buffers = None;
         self.bind_groups = None;
         self.render_targets = None;
+        self.render_resources = None;
         self.bind_groups_dirty = false;
     }
 }
@@ -543,9 +856,21 @@ mod tests {
     fn destroy_releases_everything() {
         let mut r = GpuResources::new();
         r.neuron_buffers = Some(NeuronBuffers::new(100));
-        r.render_targets = Some(RenderTargets { width: 800, height: 600 });
+        r.render_targets = Some(RenderTargets {
+            width: 800,
+            height: 600,
+            depth_texture: None,
+            depth_view: None,
+        });
         r.destroy();
         assert!(r.neuron_buffers.is_none());
         assert!(r.render_targets.is_none());
+    }
+
+    #[test]
+    fn render_uniform_size_aligned() {
+        assert_eq!(std::mem::size_of::<RenderUniforms>() % 16, 0);
+        assert_eq!(std::mem::size_of::<ManifoldUniforms>() % 16, 0);
+        assert_eq!(std::mem::size_of::<StimUniform>() % 16, 0);
     }
 }

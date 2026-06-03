@@ -37,7 +37,7 @@ verification notes. Started 2026-06-03._
 | 0 Benchmark | complete | — | GPU=llvmpipe (no real GPU); CPU numbers collected; browser TODO |
 | 1 Foundation | complete | — | scaffold builds (host+wasm), 58 tests pass, BV22 WGSL=Rust gate PASS (llvmpipe); CPU-threads wasm build deferred to phase 6 |
 | 2 GPU sim | complete | — | Real LIF on GPU (llvmpipe verified); indirect scatter, no per-tick readback; 64 tests pass; WGSL target==Rust target gate PASS; rates deep_sleep 0Hz / focused 12.4Hz / seizure 33Hz; browser/real-GPU 100k confirmation = manual TODO |
-| 3 GPU render | pending | — | |
+| 3 GPU render | complete | — | offscreen render PASS: 48.6% non-black, all 3 region channels, stim confirmed |
 | 4 Near LOD | pending | — | |
 | 5 Controls | pending | — | |
 | 6 CPU backend | pending | — | |
@@ -265,3 +265,62 @@ cell ids in a GPU buffer instead.
 3. Timestamp queries: llvmpipe reports TIMESTAMP_QUERY=true and the feature is
    requested when present, but per-pass timestamp wiring is deferred to the
    render frame-graph (Phase 3); current timing is wall-clock `tick_ms`.
+
+### Phase 3 — GPU Rendering / Far LOD + Camera (2026-06-03)
+
+**Built:**
+
+- **`src/sim/gpu/shaders/render_far.wgsl`**: Billboard glow pass exactly per spec. Reads pos_x/pos_y/pos_z/last_spike/v from storage buffers + `Uniforms` struct (mvp mat4x4, camera_right/camera_up vec3 with padding, tick u32, glow_tau f32, point_radius f32, n u32). `glow = has_spiked ? exp(-tick_diff/glow_tau) : 0`, plus faint sub-threshold v glow. Region color from type bits (Input=blue, Assoc=green, Output=orange). Additive blend (src=One, dst=One). `draw(6, N)` instanced billboards, triangle-list. No point_size.
+
+- **`src/sim/gpu/shaders/render_manifold.wgsl`**: Static dark mesh pass. Reads MVP uniform + vertex positions. Flat `vec4(0.05, 0.05, 0.08, 1.0)` fill. No culling (brain viewed from both sides). Depth write enabled, depth test Less. Rendered BEFORE glow pass.
+
+- **`src/sim/gpu/shaders/stimulate.wgsl`**: Cursor stimulation compute pass. Bounded brute-force over spatial grid CSR: iterates cells overlapping the sphere bounding box (~27 cells at dim=16, radius=0.15), atomicAdds fixed-point current to neurons within radius. Guard `is_active == 0` skips dispatch when no hover. Note: WGSL keyword `active` is reserved — field renamed `is_active`.
+
+- **`src/sim/gpu/resources.rs`** (extended): New structs `RenderResources`, `StimUniform`, `RenderUniforms`, `ManifoldUniforms`. `RenderTargets` now holds real depth texture + view. `GpuLayouts` extended with `render_far_bgl` / `render_manifold_bgl` / `stimulate_bgl`. `GpuBindGroups` extended with optional `render_far` / `render_manifold` / `stimulate` (Option, None until `init_render_resources` called). `GpuResources` has `init_render_resources()` (uploads static manifold mesh + creates uniform buffers) and real `resize_render_targets()` (creates Depth32Float texture). `refresh_bind_groups` builds render bind groups when `render_resources` is Some.
+
+- **`src/sim/gpu/pipelines.rs`** (extended): Added `RENDER_FAR_WGSL`, `RENDER_MANIFOLD_WGSL`, `STIMULATE_WGSL` embeds. `GpuPipelines` gains `render_far`, `render_manifold`, `stimulate`. `build_render(device, layouts, color_format)` creates all three. Manifold pipeline: depth write + cull_mode=None. Far-LOD pipeline: additive blend + depth_write_enabled=Some(false) + depth_compare=Some(Always). wgpu 29 API: `multiview_mask: None`, `depth_write_enabled: Some(bool)`, `depth_compare: Some(CompareFunction)`.
+
+- **`src/sim/gpu/mod.rs`** (extended): `GpuBackend` gains `stim_pending: Option<StimUniform>`. `initialize()` calls `init_render_resources()` after `resize_neurons()`. New public methods: `build_render_pipelines(color_format)`, `resize_render_targets(w, h)`, `render(target_view, mvp, camera_right, camera_up, glow_tau, point_radius)`. `render()` encodes manifold mesh pass (clear+depth) then far-LOD glow pass (load). `stimulate()` stores `StimUniform` (fixed-point current = current * S) in `stim_pending`. Tick loop dispatches stimulate compute at first tick of each batch when stim_pending is Some.
+
+- **`web/camera.ts`** (rewritten): Full orbit camera with `azimuth=0.3`, `elevation=0.4`, `distance=3.0` defaults per spec. `onPointerMove(x, y, buttons)` returns bool (orbit=true / hover=false). Wheel zoom with spec clamps (0.5–10.0). Touch: one-finger orbit, pinch zoom. Exposes `mvpMatrix()`, `cameraRight()`, `cameraUp()`, `unproject(x, y, canvasW, canvasH)` (ray for stim). Full 4x4 matrix inverse + perspective + lookAt.
+
+- **`web/renderer.ts`** (rewritten): Thin wrapper. `render(camera, tick, wasmBackend?)` delegates to wasmBackend.render() if available, otherwise clears black. No per-frame pipeline/bind-group allocation.
+
+- **`web/main.ts`** (rewritten): `onPointerMove` routes hover to `handleStimulate()` which unprojects ray, intersects manifold bounding sphere (r=1.4), calls `backend.stimulate()`. Touch events wired. wasmBackend GPU bridge is a browser-only manual TODO.
+
+- **`examples/render_check.rs`** (new): Offscreen render verification harness at 512x512. Builds real GpuBackend, warms up 300 ticks at focused, renders one frame to Rgba8Unorm texture with fixed camera, reads back pixels. Asserts non-black + region colours + stimulate() path.
+
+**Verified (this environment — llvmpipe):**
+- `cargo build` host — clean, 0 warnings.
+- `cargo build --target wasm32-unknown-unknown` — clean. `wasm-pack build --target web` — clean.
+- `cargo test` — **66 pass** (63 unit + 3 integration). New unit tests: `render_shaders_present`, `render_uniform_size_aligned`, updated `destroy_releases_everything`.
+- **`examples/render_check.rs` PASSED:**
+  - Shaders compiled/validated by Naga: zero errors.
+  - Non-black pixels: 127393/262144 = **48.60%** — glow confirmed present.
+  - Max channel values: R=255 G=255 B=255 — all 3 region colours present (additive blend saturates; Input/Association/Output neurons each contribute).
+  - **stimulate() confirmed**: spikes before=616, after=642 (+4.2% over 10 ticks). No crash.
+  - Device: llvmpipe (LLVM 20.1.2, software Vulkan).
+- `tsc --noEmit` (node local) — clean.
+- `vite build` — clean (44.4 kB wasm, 20.0 kB JS).
+
+**Deviations from spec / decisions:**
+- **OD6 — WGSL `active` is a reserved keyword**: Renamed to `is_active` in shader + Rust struct.
+- **OD7 — Render bind groups as Option**: `render_far/render_manifold/stimulate` in `GpuBindGroups` are `Option<...>` (None until `init_render_resources` called). Avoids invalid empty-entry bind groups.
+- **OD8 — GPU stim spatial lookup (bounded brute-force)**: Stimulate shader iterates ~27 grid cells overlapping the sphere bounding box (O(N/150) per dispatch). Existing CSR grid reused — no separate per-neuron cell-id buffer needed.
+- **OD9 — HDR/bloom deferred**: Far LOD default (additive blend to canvas) works without HDR. Hook: pass HDR format to `build_render_pipelines()` and add bloom compose pass. Not implemented; documented.
+- **OD10 — Timestamp queries deferred**: `timestamp_writes: None` in all render passes. Hook is in place.
+- **OD11 — Wasm browser GPU bridge**: The wasm `GpuBackend::acquire_native()` acquires a native device; the browser WebGPU context wiring requires wasm-bindgen JS→Rust bridging (manual TODO). TS renderer/main are ready for it.
+
+**Manual/browser TODOs:**
+1. Wire browser WebGPU context to `GpuBackend::new()` via wasm-bindgen.
+2. Test interactive orbit/zoom/hover in browser with WebGPU; tune `point_radius` and `glow_tau` per visual result.
+3. Confirm natural startup ramp is visible (input-region drive ramping up from silence over ~300 ticks).
+4. HDR/bloom (optional, gated).
+5. Timestamp query wiring (optional, gated).
+
+**For Phase 4 (near LOD) — must know:**
+- **Depth target**: `GpuResources.render_targets.depth_view` is the Depth32Float view written by the manifold pass. Near-LOD spheres should use `LoadOp::Load` on depth attachment to depth-test against manifold.
+- **Render bind-group layouts**: `GpuLayouts.render_far_bgl` is group 0 for far-LOD (uniform + 5 storage). Phase 4 adds its own near-LOD BGL to `GpuLayouts`.
+- **Camera frustum planes**: derive from `camera.mvpMatrix()` (extract 6 planes from MVP rows). Add `FrustumUniforms { planes: array<vec4<f32>, 6> }` to near-LOD resources; upload before frustum-cull compute dispatch.
+- **LOD distance plumbing**: Add `lod_near_distance: f32` to a near-LOD uniform (or extend `RenderUniforms`). Far pass draws ALL N neurons; near pass should draw only neurons within frustum+radius.
+- **`GpuBindGroups.render_far/render_manifold`** are `Option<wgpu::BindGroup>` — always Some after full init. Phase 4 adds `render_near: Option<wgpu::BindGroup>` following the same pattern.
