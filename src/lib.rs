@@ -170,6 +170,223 @@ mod wasm_entry {
         }
     }
 
+    // ── Consolidation: GPU backend browser bridge (OD11 closed) ──────────────
+    //
+    // WasmGpuBackend wraps GpuBackend with browser surface management.
+    // The rAF loop calls:
+    //   app.tick(ticks, excitability)              — advance simulation
+    //   app.set_lod_camera_distance(d)             — LOD blend distance
+    //   app.render_frame(mvp[16], right[3], up[3], — render to canvas surface
+    //                   eye[3], dist, glow_tau, point_radius)
+    //   app.stimulate(x, y, z, radius, current)   — cursor excitation
+    //   app.resize(w, h)                           — on canvas resize
+    //   app.destroy()                              — on backend teardown
+    //
+    // Created via: `const app = await WasmGpuBackend.create(canvas, n, k, seed, i_ext, syn)`
+    // Returns a JS Promise<WasmGpuBackend>.
+
+    use crate::sim::gpu::GpuBackend;
+    use wasm_bindgen_futures::future_to_promise;
+
+    /// Browser GPU backend. Own the wgpu surface; delegates all sim/render to
+    /// the native-tested GpuBackend.  Created by the async `WasmGpuBackend.create()`.
+    #[wasm_bindgen]
+    pub struct WasmGpuBackend {
+        inner:          GpuBackend,
+        surface:        wgpu::Surface<'static>,
+        surface_format: wgpu::TextureFormat,
+        width:          u32,
+        height:         u32,
+    }
+
+    #[wasm_bindgen]
+    impl WasmGpuBackend {
+        /// Async factory. Returns `Promise<WasmGpuBackend>`.
+        ///
+        /// Call from TypeScript:
+        /// ```ts
+        /// const app = await WasmGpuBackend.create(canvas, n, k, seed, iExt, synScale);
+        /// ```
+        pub fn create(
+            canvas:         web_sys::HtmlCanvasElement,
+            n:              usize,
+            k:              usize,
+            seed:           u32,
+            i_ext:          f32,
+            synaptic_scale: f32,
+        ) -> js_sys::Promise {
+            future_to_promise(async move {
+                // Acquire WebGPU device + configure canvas surface.
+                let (ctx, surface, fmt) =
+                    GpuBackend::acquire_web(canvas)
+                        .await
+                        .map_err(|e| JsValue::from_str(&format!("[gpu] acquire_web: {e}")))?;
+
+                // Retrieve surface dimensions from the already-committed config.
+                let surf_config = surface.get_configuration();
+                let (w, h) = surf_config
+                    .map(|c| (c.width, c.height))
+                    .unwrap_or((800, 600));
+
+                let config = SimConfig {
+                    n,
+                    k,
+                    seed: seed as u64,
+                    i_ext,
+                    backend: crate::sim::backend::BackendKind::Gpu,
+                    ..SimConfig::default()
+                };
+
+                // Build GpuBackend (pipelines, layouts) — same path as native.
+                let mut inner = GpuBackend::new(ctx, config.clone());
+                inner.set_i_ext(i_ext);
+                inner.set_synaptic_scale(synaptic_scale);
+
+                // Upload manifold + allocate GPU buffers.
+                inner.initialize(&config);
+
+                // Build render pipelines for the surface format.
+                inner.build_render_pipelines(fmt);
+
+                // Size the depth texture to match the surface.
+                inner.resize_render_targets(w, h);
+
+                web_sys::console::log_1(
+                    &format!("[gpu] WasmGpuBackend ready: N={n} K={k} size={w}×{h}")
+                        .into(),
+                );
+
+                let backend = WasmGpuBackend {
+                    inner,
+                    surface,
+                    surface_format: fmt,
+                    width: w,
+                    height: h,
+                };
+
+                // wasm-bindgen requires JsValue; wrap the struct.
+                Ok(JsValue::from(backend))
+            })
+        }
+
+        // ── Per-frame API ────────────────────────────────────────────────────
+
+        /// Advance `ticks` simulation sub-steps at the given `excitability`.
+        /// Returns spike count for the batch (f64 for JS number compat).
+        pub fn tick(&mut self, ticks: u32, excitability: f32) -> f64 {
+            self.inner.tick(ticks, excitability).spikes as f64
+        }
+
+        /// Set the camera-to-surface distance for LOD blend.
+        pub fn set_lod_camera_distance(&mut self, d: f32) {
+            self.inner.set_lod_camera_distance(d);
+        }
+
+        /// Render one frame to the canvas surface.
+        ///
+        /// `mvp` — column-major 4×4 MVP float array (length 16)
+        /// `right_x/y/z` — camera-right unit vector
+        /// `up_x/y/z`    — camera-up unit vector
+        /// `eye_x/y/z`   — camera eye position (world space)
+        /// `camera_dist` — camera distance from origin
+        /// `glow_tau`    — glow decay (ticks, e.g. 100.0)
+        /// `point_radius`— billboard radius (world units, e.g. 0.012)
+        ///
+        /// No-op if surface texture acquisition fails (e.g. window is minimized).
+        #[allow(clippy::too_many_arguments)]
+        pub fn render_frame(
+            &mut self,
+            mvp:          &[f32],
+            right_x: f32, right_y: f32, right_z: f32,
+            up_x:    f32, up_y:    f32, up_z:    f32,
+            eye_x:   f32, eye_y:   f32, eye_z:   f32,
+            camera_dist:  f32,
+            glow_tau:     f32,
+            point_radius: f32,
+        ) {
+            // Acquire surface texture.
+            let surface_tex = match self.surface.get_current_texture() {
+                wgpu::CurrentSurfaceTexture::Success(t) |
+                wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
+                _ => return, // surface lost / timeout
+            };
+            let view = surface_tex.texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+            // Copy the MVP slice into a fixed-size array.
+            if mvp.len() < 16 { return; }
+            let mut mvp_arr = [0f32; 16];
+            mvp_arr.copy_from_slice(&mvp[..16]);
+
+            self.inner.render_full(
+                &view,
+                &mvp_arr,
+                [right_x, right_y, right_z],
+                [up_x,    up_y,    up_z   ],
+                glow_tau,
+                point_radius,
+                [eye_x, eye_y, eye_z],
+                camera_dist,
+            );
+
+            surface_tex.present();
+        }
+
+        /// Inject cursor excitation near world-space position `(x,y,z)`.
+        pub fn stimulate(&mut self, x: f32, y: f32, z: f32, radius: f32, current: f32) {
+            self.inner.stimulate([x, y, z], radius, current);
+        }
+
+        /// Resize the depth texture + reconfigure the surface on canvas resize.
+        pub fn resize(&mut self, width: u32, height: u32) {
+            let w = width.max(1);
+            let h = height.max(1);
+            if w == self.width && h == self.height { return; }
+            self.width  = w;
+            self.height = h;
+
+            // Reconfigure the surface at the new size.
+            self.surface.configure(
+                self.inner.device(),
+                &wgpu::SurfaceConfiguration {
+                    usage:   wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    format:  self.surface_format,
+                    width:   w,
+                    height:  h,
+                    present_mode: wgpu::PresentMode::Fifo,
+                    alpha_mode:   wgpu::CompositeAlphaMode::Auto,
+                    view_formats: vec![],
+                    desired_maximum_frame_latency: 2,
+                },
+            );
+
+            // Resize depth texture to match.
+            self.inner.resize_render_targets(w, h);
+        }
+
+        /// Reinitialize with a new neuron/connectivity count (adaptive scaler).
+        /// Keeps the same surface; rebuilds all GPU buffers.
+        pub fn reinitialize(&mut self, n: usize, k: usize, seed: u32, i_ext: f32, synaptic_scale: f32) {
+            let config = SimConfig {
+                n,
+                k,
+                seed: seed as u64,
+                i_ext,
+                backend: crate::sim::backend::BackendKind::Gpu,
+                ..SimConfig::default()
+            };
+            self.inner.set_i_ext(i_ext);
+            self.inner.set_synaptic_scale(synaptic_scale);
+            self.inner.initialize(&config);
+            self.inner.build_render_pipelines(self.surface_format);
+            self.inner.resize_render_targets(self.width, self.height);
+        }
+
+        /// Release all GPU resources (BV16 teardown before a backend/tier restart).
+        pub fn destroy(&mut self) {
+            self.inner.destroy();
+        }
+    }
+
     /// Initialize the `wasm-bindgen-rayon` thread pool (threaded wasm build only).
     /// Returns a JS `Promise` the worker awaits before running the sim. Only
     /// available under the `cpu-threads` feature + a threaded wasm build (nightly

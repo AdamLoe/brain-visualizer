@@ -38,6 +38,11 @@ pub struct GpuContext {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub timestamps_supported: bool,
+    /// Keep the `Instance` alive so any surface tied to it is never orphaned.
+    /// On native this stays `None` (native surfaces own themselves or are
+    /// offscreen). On web it holds the single-page Instance.
+    #[allow(dead_code)]
+    pub instance: Option<wgpu::Instance>,
 }
 
 /// Clock-driven, data-parallel GPU simulation backend.
@@ -98,6 +103,118 @@ impl GpuBackend {
         self.synaptic_scale = s;
     }
 
+    /// Acquire a WebGPU adapter+device from the browser, create a wgpu surface
+    /// for the given `<canvas>`, and configure it. Web / wasm32 only.
+    ///
+    /// Returns `(GpuContext, Surface<'static>, TextureFormat, width, height)`.
+    /// The caller owns the surface and configuration; `GpuContext` holds device+queue.
+    ///
+    /// ## Why 'static surface?
+    /// `SurfaceTarget::Canvas` stores no external reference (wgpu copies the JS
+    /// object internally), so the surface does not borrow external memory and
+    /// transmuting to `'static` is sound.  We pass the surface back to the caller
+    /// (WasmGpuBackend) which keeps the `Instance` alive for the same duration.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn acquire_web(
+        canvas: web_sys::HtmlCanvasElement,
+    ) -> Result<(GpuContext, wgpu::Surface<'static>, wgpu::TextureFormat), String> {
+        // 1. Instance with all default backends (includes BROWSER_WEBGPU on wasm).
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+
+        // Read canvas dimensions before consuming it.
+        let width = canvas.width().max(1);
+        let height = canvas.height().max(1);
+
+        // 2. Create surface from the canvas.  SurfaceTarget::Canvas is gated by
+        //    wgpu's cfg(web) = cfg(all(wasm32, not(Emscripten), feature="web"));
+        //    the default wgpu features include "webgpu" → "web", so this variant
+        //    is available. The returned surface is Surface<'_> but holds no
+        //    external borrow (Canvas path sets _handle_source = None), so we
+        //    extend the lifetime to 'static to allow storage in WasmGpuBackend.
+        let raw_surface = instance
+            .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
+            .map_err(|e| format!("create_surface: {e}"))?;
+        // Safety: Canvas surface stores no external reference; lifetime is phantom.
+        let surface: wgpu::Surface<'static> =
+            unsafe { std::mem::transmute::<wgpu::Surface<'_>, wgpu::Surface<'static>>(raw_surface) };
+
+        // 3. Request adapter compatible with the surface.
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
+            })
+            .await
+            .map_err(|e| format!("no wgpu adapter: {e}"))?;
+
+        let timestamps_supported = adapter
+            .features()
+            .contains(wgpu::Features::TIMESTAMP_QUERY);
+        let mut required_features = wgpu::Features::empty();
+        if timestamps_supported {
+            required_features |= wgpu::Features::TIMESTAMP_QUERY;
+        }
+
+        // 4. Request device with generous limits (same pattern as acquire_native).
+        let adapter_limits = adapter.limits();
+        let mut limits = wgpu::Limits::downlevel_webgl2_defaults();
+        // Prefer the higher WebGPU limits if available.
+        limits.max_storage_buffer_binding_size =
+            adapter_limits.max_storage_buffer_binding_size;
+        limits.max_buffer_size = adapter_limits.max_buffer_size;
+        limits.max_compute_workgroups_per_dimension =
+            adapter_limits.max_compute_workgroups_per_dimension;
+        limits.max_storage_buffers_per_shader_stage =
+            adapter_limits.max_storage_buffers_per_shader_stage;
+
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("brain-visualizer-web-gpu"),
+                required_features,
+                required_limits: limits,
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+                memory_hints: wgpu::MemoryHints::Performance,
+                trace: wgpu::Trace::Off,
+            })
+            .await
+            .map_err(|e| format!("request_device: {e}"))?;
+
+        // 5. Configure the surface.
+        let caps = surface.get_capabilities(&adapter);
+        let format = caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| f.is_srgb())
+            .unwrap_or(*caps.formats.first().ok_or("no surface formats")?);
+
+        let surf_config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width,
+            height,
+            present_mode: wgpu::PresentMode::Fifo,
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        surface.configure(&device, &surf_config);
+
+        web_sys::console::log_1(
+            &format!(
+                "[gpu] WebGPU adapter acquired; format={format:?} size={width}×{height} timestamps={timestamps_supported}"
+            )
+            .into(),
+        );
+
+        Ok((
+            GpuContext { device, queue, timestamps_supported, instance: Some(instance) },
+            surface,
+            format,
+        ))
+    }
+
     /// Acquire a native adapter (high-performance, falling back to llvmpipe) and
     /// build a `GpuContext`. Native-only (examples + tests).
     #[cfg(not(target_arch = "wasm32"))]
@@ -154,6 +271,7 @@ impl GpuBackend {
             device,
             queue,
             timestamps_supported,
+            instance: None,
         })
     }
 

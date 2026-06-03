@@ -34,14 +34,15 @@ verification notes. Started 2026-06-03._
 ## Phase status
 | Phase | Status | Commit | Notes |
 |-------|--------|--------|-------|
-| 0 Benchmark | complete | — | GPU=llvmpipe (no real GPU); CPU numbers collected; browser TODO |
-| 1 Foundation | complete | — | scaffold builds (host+wasm), 58 tests pass, BV22 WGSL=Rust gate PASS (llvmpipe); CPU-threads wasm build deferred to phase 6 |
-| 2 GPU sim | complete | — | Real LIF on GPU (llvmpipe verified); indirect scatter, no per-tick readback; 64 tests pass; WGSL target==Rust target gate PASS; rates deep_sleep 0Hz / focused 12.4Hz / seizure 33Hz; browser/real-GPU 100k confirmation = manual TODO |
-| 3 GPU render | complete | — | offscreen render PASS: 48.6% non-black, all 3 region channels, stim confirmed |
-| 4 Near LOD | complete | — | GPU indirect cull+draw PASS; 321 neurons/2565 synapses emitted at close zoom; 0 overflow; 70 tests pass |
-| 5 Controls | complete | — | UI wired (speed/brain-state/backend buttons); excitability lerp; scaler activated; 22 TS tests pass (vitest); 70 cargo tests still pass; GPU bridge = browser TODO |
-| 6 CPU backend | complete | — | Real event-driven CpuBackend (host rayon). CPU≡GPU connectivity bit-identical; CPU 12.42 Hz vs GPU 12.42 Hz at focused (0.0% diff); lazy+render decay ≈0; 73 cargo tests, 22 vitest, default+threaded wasm green; CPU unlocked in UI; browser worker/SAB/WebGL2 = compile-only TODO |
-| 7 Polish | complete | — | Sonification, corner HUD, SOC sweep (i_ext=0.040 confirmed), mobile profile, 10M disclaimer, perf audit; builds green |
+| 0 Benchmark | complete | f501751 | GPU=llvmpipe (no real GPU); CPU numbers collected; browser TODO |
+| 1 Foundation | complete | 7f353e8 | scaffold builds (host+wasm), 58 tests pass, BV22 WGSL=Rust gate PASS (llvmpipe); CPU-threads wasm build deferred to phase 6 |
+| 2 GPU sim | complete | ccba797 | Real LIF on GPU (llvmpipe verified); indirect scatter, no per-tick readback; 64 tests pass; WGSL target==Rust target gate PASS; rates deep_sleep 0Hz / focused 12.4Hz / seizure 33Hz; browser/real-GPU 100k confirmation = manual TODO |
+| 3 GPU render | complete | 42ab496 | offscreen render PASS: 48.6% non-black, all 3 region channels, stim confirmed |
+| 4 Near LOD | complete | db15733 | GPU indirect cull+draw PASS; 321 neurons/2565 synapses emitted at close zoom; 0 overflow; 70 tests pass |
+| 5 Controls | complete | 096b099 | UI wired (speed/brain-state/backend buttons); excitability lerp; scaler activated; 22 TS tests pass (vitest); 70 cargo tests still pass; GPU bridge = browser TODO |
+| 6 CPU backend | complete | fa3672d | Real event-driven CpuBackend (host rayon). CPU≡GPU connectivity bit-identical; CPU 12.42 Hz vs GPU 12.42 Hz at focused (0.0% diff); lazy+render decay ≈0; 73 cargo tests, 22 vitest, default+threaded wasm green; CPU unlocked in UI; browser worker/SAB/WebGL2 = compile-only TODO |
+| 7 Polish | complete | 1246f28 | Sonification, corner HUD, SOC sweep (i_ext=0.040 confirmed), mobile profile, 10M disclaimer, perf audit; builds green |
+| Consolidation | complete | (this) | Browser WebGPU entry wired: wgpu web device+surface init, `WasmGpuBackend` exported, rAF loop calls real tick/render_frame/stimulate/resize. `wasm-pack build --target web` clean. Runtime browser-unverified (no browser here). |
 
 ## Phase closeouts
 _(Each phase appends a short closeout here: what was built, what was verified,
@@ -760,9 +761,76 @@ _Complete record of what was built across Phases 0–7._
 | 7 Polish | Sonification engine (BV11): 3 oscillators + noise + LP filter, 1/sec updates. Corner HUD (BV8): bottom-right monospace, 1/sec. SOC sweep native: i_ext=0.040 confirmed in band. Mobile profile: 0.75×DPR, GPU only, no sound. 10M disclaimer in UI/docs. Perf audit: 6/7 PASS, 1 PARTIAL (timestamps deferred). 73 tests, 22 vitest. |
 
 **Outstanding (all browser-only):**
-- The **GPUDevice→wasm bridge** (Phase 3 OD11) is the single remaining gap
-  blocking a live WebGPU run. All TS orchestration, pipelines, and shader code
-  are ready. The bridge is the only missing piece.
-- Browser audio / HUD / mobile manual testing (Phase 7 above).
+- ~~The **GPUDevice→wasm bridge** (Phase 3 OD11)~~ — **CLOSED (Consolidation, 2026-06-03)**.
+  `WasmGpuBackend` is implemented and wired; see "Consolidation" entry below.
+- Browser audio / HUD / mobile manual testing (Phase 7 above) — still unverified (no browser).
 - Real-GPU benchmark numbers for tier cap finalization.
 - Relaxed preset SOC re-tuning on real hardware (0.00 Hz at llvmpipe/N=30k).
+- CPU live worker path runtime verification (compiles+bundles; needs a browser with SAB/threads).
+
+---
+
+## Consolidation — Browser entry wired (OD11 closed) (2026-06-03)
+
+**What was built:**
+
+- **`src/sim/gpu/mod.rs`** (extended): `GpuContext` gains an `instance: Option<wgpu::Instance>`
+  field (keeps the wgpu Instance alive for the surface lifetime on web; `None` on native).
+  New `acquire_web(canvas: HtmlCanvasElement) -> (GpuContext, Surface<'static>, TextureFormat)`:
+  creates a wgpu `Instance` with `new_without_display_handle()` defaults (includes
+  `BROWSER_WEBGPU` on wasm32), creates a surface via `SurfaceTarget::Canvas(canvas)` (wgpu 29
+  `cfg(web)` variant, available because the default `webgpu` feature enables it), requests a
+  high-perf adapter compatible with the surface, requests a device with lifted storage-buffer
+  limits (matching `acquire_native`), configures the surface (`Fifo`, `Auto` alpha, `Rgba8`/srgb
+  best-available format, canvas dimensions), and returns all three. The surface `lifetime` is
+  transmuted to `'static` soundly (Canvas path stores no external reference in wgpu). The
+  `Instance` is stored in `GpuContext::instance` to keep it alive.
+
+- **`src/lib.rs`** (extended): `WasmGpuBackend` struct + `#[wasm_bindgen]` impl (cfg wasm32):
+  - `WasmGpuBackend::create(canvas, n, k, seed, i_ext, synaptic_scale) → Promise<WasmGpuBackend>`:
+    async factory using `future_to_promise`; calls `acquire_web`, builds `GpuBackend::new`,
+    calls `set_i_ext`/`set_synaptic_scale`, `initialize`, `build_render_pipelines(fmt)`,
+    `resize_render_targets(w,h)`. Queries `surface.get_configuration()` for initial size.
+  - `tick(ticks, excitability) → f64`: delegates to `GpuBackend::tick`.
+  - `set_lod_camera_distance(d)`: delegates.
+  - `render_frame(mvp[16], right, up, eye, dist, glow_tau, point_radius)`: acquires the surface
+    texture via `surface.get_current_texture()`, creates a `TextureView`, calls
+    `GpuBackend::render_full(view, mvp, right, up, glow_tau, point_radius, eye, dist)`, presents.
+    No-ops silently if surface texture acquisition fails (minimized window etc.).
+  - `stimulate(x,y,z,radius,current)`: delegates.
+  - `resize(w,h)`: reconfigures surface + calls `resize_render_targets`.
+  - `reinitialize(n,k,seed,i_ext,syn)`: for adaptive-scaler N changes; keeps surface/pipelines.
+  - `destroy()`: delegates.
+
+- **`web/main.ts`** (extended): Imports `WasmGpuBackend`. All GPU `// TODO (browser)` stubs
+  replaced:
+  - `startGpuBackend()`: async helper; creates `WasmGpuBackend` via `await WasmGpuBackend.create(canvas, ...)`.
+    Called at boot and on GPU backend restart/tier change.
+  - rAF GPU path: calls `gpuBackend.tick`, `.set_lod_camera_distance`, `.render_frame` each frame.
+    Falls back to the `Renderer._clearBlack()` path while `gpuBackend` is still initializing.
+  - Pointer-move stim: passes `gpuBackend` (or `cpu`) to `handleStimulate`; the function
+    signature updated to call `stimulate(x,y,z,r,c)` (flat args, compatible with both backends).
+  - Resize handler: calls `gpuBackend.resize(w,h)` after canvas resize.
+  - Adaptive scaler: calls `gpuBackend.reinitialize(...)` on N change.
+  - `restartWithBackend`: destroys old GPU backend (`gpuBackend.destroy()`), starts new one.
+  - `SIM_I_EXT=0.040 / SIM_SYN_SCALE=0.03` shared between GPU and CPU init to keep dynamics identical.
+
+**Verified (this environment — no browser):**
+- `wasm-pack build --target web` — **clean** (267 kB wasm; `WasmGpuBackend` exported to pkg).
+- `cargo build` (host) — clean, 0 warnings.
+- `cargo test` — **73 pass** (70 unit + 3 integration). No regression.
+- `tsc --noEmit` — clean (0 errors).
+- `vite build` — clean (74 kB JS, 267 kB wasm, 1.86 kB worker).
+- `npx vitest run` — **22 pass** (unchanged).
+
+**Runtime-unverified (no browser in this environment):**
+- Actual WebGPU device acquisition in a real browser (needs Chrome 113+ / Safari 18+ / Firefox 131+).
+- Surface format selection, frame presentation, glow visual quality.
+- Cursor stimulation hit detection via the GPU backend.
+- CPU worker runtime (SAB / threaded rayon) — was already a documented browser TODO.
+
+**Remaining gaps (after OD11 is closed):**
+- Browser audio, HUD, mobile manual testing.
+- Real-GPU benchmark numbers for tier cap finalization.
+- Relaxed preset SOC tuning at higher N on real hardware.
+- CPU live worker path browser runtime verification.

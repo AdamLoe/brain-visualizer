@@ -1,9 +1,10 @@
-// Entry point (Phase 7): WASM load, manifold generation, controls event wiring,
-// rAF + tick loop with excitability lerp, LOD plumbing, adaptive scaler.
-// Phase 7 adds: sonification engine, corner HUD, mobile scaling, 10M disclaimer.
-// Phase 3/4 render and stim paths are preserved; GPU bridge remains browser TODO.
+// Entry point (Consolidation): WASM load, manifold generation, controls event
+// wiring, rAF + tick loop with excitability lerp, LOD plumbing, adaptive scaler.
+// Consolidation closes OD11: WasmGpuBackend wires the wgpu canvas surface so
+// GPU sim + render run from the rAF loop without any JS-side WebGPU objects.
 
 import init, {
+  WasmGpuBackend,
   init_manifold,
   log_cross_origin_isolation,
 } from "../pkg/brain_visualizer.js";
@@ -80,7 +81,9 @@ async function boot(): Promise<void> {
     const isOrbit = camera.onPointerMove(e.clientX, e.clientY, e.buttons);
     // Skip cursor stimulation on mobile (BV10 amendment / Phase 5).
     if (!isOrbit && !mobile) {
-      handleStimulate(e, canvas, camera);
+      // Pass active backend (GPU or CPU) for stimulation.
+      const activeBackend = config.backend === "gpu" ? gpuBackend : cpu;
+      handleStimulate(e, canvas, camera, activeBackend ?? undefined);
     }
   });
 
@@ -104,6 +107,10 @@ async function boot(): Promise<void> {
   window.addEventListener("resize", () => {
     resizeCanvas(canvas, mobile ? 0.75 : 1.0);
     camera.setAspect(canvas.width / canvas.height);
+    // Reconfigure the wgpu surface to match the new canvas dimensions.
+    if (gpuBackend) {
+      gpuBackend.resize(canvas.width, canvas.height);
+    }
   });
 
   // 7. Profiler.
@@ -194,19 +201,61 @@ async function boot(): Promise<void> {
   let rafHandle = 0;
   let duringRestart = false;
 
+  // Render parameters (tuned at focused state; exposed for future visual-tuning).
+  const GLOW_TAU     = 100.0;   // glow decay in ticks (~100 ms biological)
+  const POINT_RADIUS = 0.012;   // billboard radius (world units)
+
+  // Sim tuning constants (Phase 2 locked values, verified by SOC sweep).
+  // Shared by both GPU and CPU backends so the two backends run identical dynamics.
+  const SIM_I_EXT    = 0.040;
+  const SIM_SYN_SCALE = 0.03;
+  // Aliases used by their respective backend startup paths.
+  const GPU_I_EXT    = SIM_I_EXT;
+  const GPU_SYN_SCALE = SIM_SYN_SCALE;
+
+  // GPU backend instance. Created once at boot; recreated on backend switch or
+  // tier change. null during init or when CPU backend is active.
+  let gpuBackend: WasmGpuBackend | null = null;
+
   // Phase 6 CPU backend coordinator (BV24). Owns the worker + the SoA views the
   // WebGL2 CpuRenderer draws. Tuning matches examples/cpu_check.rs / sim_check.rs.
-  const CPU_I_EXT = 0.040;
-  const CPU_SYN_SCALE = 0.03;
-  const cpu = new CpuCoordinator(canvas, CPU_I_EXT, CPU_SYN_SCALE);
+  const cpu = new CpuCoordinator(canvas, SIM_I_EXT, SIM_SYN_SCALE);
+
+  /**
+   * Create (or recreate) the wasm GPU backend for the current config.
+   * The GpuBackend owns the wgpu canvas surface; the Renderer wrapper is no
+   * longer needed for the real GPU path but is kept for the 2D/WebGL2 fallback.
+   */
+  async function startGpuBackend(): Promise<void> {
+    try {
+      // WasmGpuBackend.create() acquires the browser WebGPU device, creates a
+      // wgpu surface from the canvas, configures it, builds all pipelines,
+      // uploads the manifold, and returns a ready-to-use backend.
+      gpuBackend = await WasmGpuBackend.create(
+        canvas,
+        config.n,
+        config.k,
+        config.seed >>> 0,
+        GPU_I_EXT,
+        GPU_SYN_SCALE,
+      ) as WasmGpuBackend;
+      console.log("[main] WasmGpuBackend created");
+    } catch (e) {
+      console.error("[main] GPU backend creation failed:", e);
+      showToast("WebGPU init failed — check browser support");
+      gpuBackend = null;
+    }
+  }
+
+  // Boot the GPU backend immediately (async, runs while rAF is starting).
+  void startGpuBackend();
 
   /**
    * BV16 restart sequence: cancel rAF, tear down the current backend, reinit the
    * other one with the SAME seed (identical network). The black-canvas gap
    * during teardown+reinit is acceptable per the spec.
    *
-   * CPU path is real here (spawns the coordinator worker + WebGL2 renderer); the
-   * GPU wasm bridge remains a browser TODO (Phase 3 OD11).
+   * Both GPU (WasmGpuBackend) and CPU (CpuCoordinator) paths are real.
    */
   async function restartWithBackend(kind: BackendKind): Promise<void> {
     if (duringRestart) return;
@@ -218,9 +267,14 @@ async function boot(): Promise<void> {
     config.backend = kind;
     profiler.setConfig(kind, config.tier, config.n, config.k);
 
+    // Tear down previous backend.
     if (prev === "cpu") cpu.destroy();
-    // TODO (browser): if prev === "gpu", destroy wasm GpuBackend.
+    if (prev === "gpu" && gpuBackend) {
+      gpuBackend.destroy();
+      gpuBackend = null;
+    }
 
+    // Start new backend.
     if (kind === "cpu") {
       try {
         await cpu.start(config);
@@ -229,9 +283,12 @@ async function boot(): Promise<void> {
         showToast("CPU backend failed to start");
         config.backend = "gpu";
         setActiveButton("#backend-toggle", "backend", "gpu");
+        kind = "gpu";
       }
     }
-    // TODO (browser): if kind === "gpu", re-create wasm GpuBackend (same seed).
+    if (kind === "gpu") {
+      await startGpuBackend();
+    }
 
     duringRestart = false;
     rafHandle = requestAnimationFrame(rafLoop);
@@ -261,15 +318,37 @@ async function boot(): Promise<void> {
       stats = cpu.lastStats();
       cpu.render(camera);
     } else {
-      // GPU path: tick + render via the wasm GpuBackend (browser TODO bridge).
-      // TODO (browser): wasmBackend.tick(ticks, excitability)
-      // TODO (browser): wasmBackend.set_lod_camera_distance(camera.cameraDistance())
-      // TODO (browser): wasmBackend.render_full(camera.eye(), camera.cameraDistance(), ...)
-      void ticks;
-      void excitability;
-      void camera.cameraDistance();
-      void camera.eye();
-      renderer.render(camera, tickCount);
+      // GPU path: tick + render via WasmGpuBackend (OD11 closed — bridge wired).
+      if (gpuBackend) {
+        if (ticks > 0) {
+          const spikes = gpuBackend.tick(ticks, excitability);
+          stats = {
+            tickCount: ticks,
+            spikes: spikes,
+            synapticEvents: Math.round(spikes * config.k),
+            tickMs: 0,
+          };
+        }
+        const dist = camera.cameraDistance();
+        gpuBackend.set_lod_camera_distance(dist);
+
+        const mvp   = camera.mvpMatrix();
+        const right = camera.cameraRight();
+        const up    = camera.cameraUp();
+        const eye   = camera.eye();
+        gpuBackend.render_frame(
+          mvp,
+          right[0], right[1], right[2],
+          up[0],    up[1],    up[2],
+          eye[0],   eye[1],   eye[2],
+          dist,
+          GLOW_TAU,
+          POINT_RADIUS,
+        );
+      } else {
+        // gpuBackend not yet ready (still initializing) — clear to black.
+        renderer.render(camera, tickCount);
+      }
     }
 
     profiler.recordFrame(timestamp, timestamp - lastTimestamp, stats);
@@ -288,7 +367,13 @@ async function boot(): Promise<void> {
         scalerReason = action.kind;
         profiler.setConfig(config.backend, config.tier, config.n, config.k);
         console.log(`[scaler] ${action.kind}: n=${config.n} (tier=${config.tier} p95=${p95.toFixed(1)}ms)`);
-        // TODO (browser): wasmBackend.resize(config)
+        // Reinitialize the GPU backend with the new N (keeps surface/pipelines).
+        if (config.backend === "gpu" && gpuBackend) {
+          gpuBackend.reinitialize(
+            config.n, config.k, config.seed >>> 0,
+            GPU_I_EXT, GPU_SYN_SCALE,
+          );
+        }
       }
 
       // Corner HUD — update from profiler snapshot (not per-frame).
@@ -329,7 +414,7 @@ async function boot(): Promise<void> {
 
   rafHandle = requestAnimationFrame(rafLoop);
 
-  console.log("[main] Phase 7 ready — sonification, HUD, mobile profile applied; GPU bridge = browser TODO");
+  console.log("[main] Consolidation ready — OD11 GPU bridge wired (WasmGpuBackend); GPU init is async, rAF started");
 }
 
 /**
@@ -441,6 +526,8 @@ class CpuCoordinator {
  * Cursor stimulation: unproject pointer to world ray, intersect the manifold
  * bounding sphere, call backend.stimulate() at the hit point (BV10).
  * Skipped on mobile (Phase 5 decision: rely on ambient I_ext instead).
+ *
+ * Both WasmGpuBackend and CpuCoordinator expose `stimulate(x,y,z,r,c)`.
  */
 function handleStimulate(
   e: PointerEvent,
@@ -455,9 +542,10 @@ function handleStimulate(
   const { origin, dir } = camera.unproject(cssX, cssY, rect.width, rect.height);
   const hit = raySphereIntersect(origin, dir, [0, 0, 0], MANIFOLD_SPHERE_RADIUS);
   if (!hit) return;
-  const b = backend as { stimulate?: (h: [number,number,number], r: number, c: number) => void } | undefined;
+  // Both WasmGpuBackend and CpuCoordinator expose stimulate(x,y,z,radius,current).
+  const b = backend as { stimulate?: (x: number, y: number, z: number, r: number, c: number) => void } | undefined;
   if (b && typeof b.stimulate === "function") {
-    b.stimulate(hit, STIM_RADIUS, STIM_CURRENT);
+    b.stimulate(hit[0], hit[1], hit[2], STIM_RADIUS, STIM_CURRENT);
   }
 }
 
