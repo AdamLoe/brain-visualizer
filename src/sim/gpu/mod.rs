@@ -16,9 +16,15 @@ pub mod resources;
 use crate::sim::backend::{RenderState, SimBackend, SimConfig, TickStats};
 use pipelines::GpuPipelines;
 use resources::{
-    GpuBindGroups, GpuLayouts, GpuResources, IntegrateUniforms, ManifoldUniforms, RenderUniforms,
-    StimUniform,
+    FrustumCullUniforms, GpuBindGroups, GpuLayouts, GpuResources, IntegrateUniforms,
+    ManifoldUniforms, NearLodStats, NearRenderUniforms, RenderUniforms, StimUniform,
 };
+
+// ─── LOD transition thresholds ───────────────────────────────────────────────
+/// Camera distance above which only far-LOD runs.
+const LOD_FAR_ONLY_DIST: f32 = 1.5;
+/// Camera distance below which only near-LOD runs.
+const LOD_NEAR_ONLY_DIST: f32 = 0.8;
 
 /// LIF parameters (phase-2 spec; locked, adjust only via excitability gain).
 const LEAK_DECAY: f32 = 0.95;
@@ -56,6 +62,10 @@ pub struct GpuBackend {
     synaptic_scale: f32,
     /// Pending stimulation parameters (written via stimulate(), consumed at tick start).
     stim_pending: Option<StimUniform>,
+    /// Phase 4: most recently read near-LOD profiler stats (non-blocking readback).
+    pub near_lod_stats: NearLodStats,
+    /// Phase 4: camera distance from surface (set by caller each frame).
+    lod_camera_distance: f32,
 }
 
 impl GpuBackend {
@@ -78,6 +88,8 @@ impl GpuBackend {
             i_ext,
             synaptic_scale: 1.0,
             stim_pending: None,
+            near_lod_stats: NearLodStats::default(),
+            lod_camera_distance: f32::MAX,
         }
     }
 
@@ -194,18 +206,39 @@ impl GpuBackend {
             config.n as u32,
             manifold.spatial_grid.dim,
         );
+        // Phase 4: near-LOD GPU buffers (allocated once; cleared each frame).
+        self.resources.init_near_lod_resources(
+            &self.ctx.device,
+            &self.ctx.queue,
+            config,
+            &manifold.spatial_grid,
+        );
         self.resources
             .refresh_bind_groups(&self.ctx.device, &self.layouts);
         self.tick = 0;
         self.parity = 0;
         self.max_abs_current_hw = 0;
         self.stim_pending = None;
+        self.near_lod_stats = NearLodStats::default();
     }
 
     /// Build the render pipelines for a given color format.
     /// Called once at startup (or on surface re-creation).
     pub fn build_render_pipelines(&mut self, color_format: wgpu::TextureFormat) {
         self.pipelines.build_render(&self.ctx.device, &self.layouts, color_format);
+        // Phase 4: near-LOD pipelines use the same color format.
+        self.pipelines.build_near_lod(&self.ctx.device, &self.layouts, color_format);
+    }
+
+    /// Set camera distance (from surface/origin) each frame so near-LOD can
+    /// decide whether to run. Phase 5 (controls) will call this.
+    pub fn set_lod_camera_distance(&mut self, d: f32) {
+        self.lod_camera_distance = d;
+    }
+
+    /// Return the most recently read near-LOD profiler stats.
+    pub fn near_lod_stats(&self) -> NearLodStats {
+        self.near_lod_stats
     }
 
     /// Resize the depth texture when the canvas/offscreen dimensions change.
@@ -215,9 +248,13 @@ impl GpuBackend {
 
     /// Render one frame. Encodes:
     ///   1. manifold dark mesh pass (depth write, opaque),
-    ///   2. far-LOD billboard glow pass (additive, no depth write).
-    /// Both passes draw into `target_view`. `mvp`, `camera_right`, `camera_up`
-    /// come from the camera; `tick` is the current sim tick counter.
+    ///   2. far-LOD billboard glow pass (additive, no depth write),
+    ///   3. (when near LOD active) cull_neurons → cull_synapses → write_indirect
+    ///      → sphere render → cylinder render (depth test against pass 1).
+    ///
+    /// `camera_pos` is the eye position in world space (needed for frustum cull).
+    /// `camera_distance` is ||eye - origin||; the caller may pass f32::MAX to
+    /// force far-only mode.
     ///
     /// Upload pattern (per-frame): write render_uniform + manifold_uniform via
     /// queue.write_buffer; the bind groups already reference those buffers so
@@ -230,6 +267,24 @@ impl GpuBackend {
         camera_up: [f32; 3],
         glow_tau: f32,
         point_radius: f32,
+    ) {
+        // Default to far-only: caller did not set camera_distance explicitly.
+        self.render_full(target_view, mvp, camera_right, camera_up, glow_tau, point_radius,
+            [0.0, 0.0, 3.0], self.lod_camera_distance);
+    }
+
+    /// Full render variant accepting camera_pos + camera_distance explicitly
+    /// (used by the near_lod_check harness and future TS bridge).
+    pub fn render_full(
+        &mut self,
+        target_view: &wgpu::TextureView,
+        mvp: &[f32; 16],
+        camera_right: [f32; 3],
+        camera_up: [f32; 3],
+        glow_tau: f32,
+        point_radius: f32,
+        camera_pos: [f32; 3],
+        camera_distance: f32,
     ) {
         let bg = match self.resources.bind_groups.as_ref() {
             Some(b) if b.render_far.is_some() => b,
@@ -256,6 +311,23 @@ impl GpuBackend {
 
         let n = self.config.n as u32;
 
+        // --- LOD transition ---
+        // distance > LOD_FAR_ONLY_DIST  → far only
+        // LOD_NEAR_ONLY_DIST..=LOD_FAR_ONLY_DIST → crossfade
+        // distance < LOD_NEAR_ONLY_DIST → near only
+        let dist = camera_distance;
+        let far_alpha = if dist >= LOD_FAR_ONLY_DIST {
+            1.0f32
+        } else if dist <= LOD_NEAR_ONLY_DIST {
+            0.0f32
+        } else {
+            (dist - LOD_NEAR_ONLY_DIST) / (LOD_FAR_ONLY_DIST - LOD_NEAR_ONLY_DIST)
+        };
+        let near_alpha = 1.0 - far_alpha;
+        let run_near_lod = near_alpha > 0.001
+            && self.resources.near_lod_buffers.is_some()
+            && self.pipelines.is_near_lod_built();
+
         // Upload per-frame render uniforms.
         let ru = RenderUniforms {
             mvp: *mvp,
@@ -272,6 +344,43 @@ impl GpuBackend {
 
         let mu = ManifoldUniforms { mvp: *mvp };
         self.ctx.queue.write_buffer(&rr.manifold_uniform, 0, bytemuck::bytes_of(&mu));
+
+        // Phase 4: upload per-frame near-LOD uniforms and frustum.
+        if run_near_lod {
+            if let Some(nlb) = self.resources.near_lod_buffers.as_ref() {
+                // Near-render uniform.
+                let nru = NearRenderUniforms {
+                    mvp: *mvp,
+                    camera_pos,
+                    sphere_radius: point_radius * 2.5, // larger than billboard radius
+                    lod_alpha: near_alpha,
+                    _pad: [0.0; 3],
+                };
+                self.ctx.queue.write_buffer(&nlb.near_render_uniform, 0, bytemuck::bytes_of(&nru));
+
+                // Extract 6 frustum planes from column-major MVP matrix.
+                // Standard Gribb/Hartmann plane extraction from MVP rows.
+                let planes = extract_frustum_planes(mvp);
+                let fu = FrustumCullUniforms {
+                    planes,
+                    camera_pos,
+                    max_synapse_dist: 2.5,  // cull synapses beyond 2.5 world units
+                    current_tick: self.tick,
+                    n,
+                    _pad: [0; 2],
+                };
+                self.ctx.queue.write_buffer(&nlb.frustum_uniform, 0, bytemuck::bytes_of(&fu));
+
+                // Zero per-frame atomic counters.
+                let zero = [0u32];
+                self.ctx.queue.write_buffer(&nlb.neuron_count,    0, bytemuck::cast_slice(&zero));
+                self.ctx.queue.write_buffer(&nlb.synapse_count,   0, bytemuck::cast_slice(&zero));
+                self.ctx.queue.write_buffer(&nlb.neuron_overflow, 0, bytemuck::cast_slice(&zero));
+                self.ctx.queue.write_buffer(&nlb.synapse_overflow,0, bytemuck::cast_slice(&zero));
+                self.ctx.queue.write_buffer(&nlb.neuron_visible,  0, bytemuck::cast_slice(&zero));
+                self.ctx.queue.write_buffer(&nlb.synapse_visible, 0, bytemuck::cast_slice(&zero));
+            }
+        }
 
         let mut enc = self.ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("render-frame"),
@@ -310,7 +419,8 @@ impl GpuBackend {
         }
 
         // Pass 2: far-LOD billboard glow (additive, reads depth from pass 1).
-        {
+        // Skipped when fully in near-LOD mode (far_alpha ≈ 0).
+        if far_alpha > 0.001 {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("far-glow-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -318,14 +428,14 @@ impl GpuBackend {
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load, // preserve manifold render
+                        load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: depth_view,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Load, // use depth written by manifold pass
+                        load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Discard,
                     }),
                     stencil_ops: None,
@@ -336,11 +446,141 @@ impl GpuBackend {
             });
             pass.set_pipeline(pipe_far);
             pass.set_bind_group(0, bg.render_far.as_ref().unwrap(), &[]);
-            // 6 vertices per billboard instance, N instances.
             pass.draw(0..6, 0..n);
         }
 
+        // ─── Phase 4: Near-LOD passes ─────────────────────────────────────────
+        // Only run when camera is close enough (near_alpha > threshold).
+        // Pass order: cull_neurons → cull_synapses → write_indirect →
+        //             draw_indexed_indirect(spheres) + draw_indexed_indirect(cylinders).
+        if run_near_lod {
+            let nlb = self.resources.near_lod_buffers.as_ref().unwrap();
+            let bg = self.resources.bind_groups.as_ref().unwrap();
+            let pipe_cull_n = self.pipelines.cull_neurons.as_ref().unwrap();
+            let pipe_cull_s = self.pipelines.cull_synapses.as_ref().unwrap();
+            let pipe_indirect = self.pipelines.write_indirect.as_ref().unwrap();
+            let pipe_sphere = self.pipelines.render_sphere.as_ref().unwrap();
+            let pipe_cylinder = self.pipelines.render_cylinder.as_ref().unwrap();
+            let cg0 = bg.cull_group0.as_ref().unwrap();
+            let cg1 = bg.cull_group1.as_ref().unwrap();
+            let dig = bg.draw_indirect.as_ref().unwrap();
+            let srg = bg.render_sphere.as_ref().unwrap();
+            let crg = bg.render_cylinder.as_ref().unwrap();
+
+            let cull_groups = n.div_ceil(256).max(1);
+
+            // Cull neurons compute pass.
+            {
+                let mut cp = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("cull-neurons"),
+                    timestamp_writes: None,
+                });
+                cp.set_pipeline(pipe_cull_n);
+                cp.set_bind_group(0, cg0, &[]);
+                cp.set_bind_group(1, cg1, &[]);
+                cp.dispatch_workgroups(cull_groups, 1, 1);
+            }
+            // Cull synapses compute pass.
+            {
+                let mut cp = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("cull-synapses"),
+                    timestamp_writes: None,
+                });
+                cp.set_pipeline(pipe_cull_s);
+                cp.set_bind_group(0, cg0, &[]);
+                cp.set_bind_group(1, cg1, &[]);
+                cp.dispatch_workgroups(cull_groups, 1, 1);
+            }
+            // Write indirect args.
+            {
+                let mut cp = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("write-indirect"),
+                    timestamp_writes: None,
+                });
+                cp.set_pipeline(pipe_indirect);
+                cp.set_bind_group(0, dig, &[]);
+                cp.dispatch_workgroups(1, 1, 1);
+            }
+            // Sphere render pass (draw_indexed_indirect, depth test Load).
+            {
+                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("near-sphere-pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: target_view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(pipe_sphere);
+                pass.set_bind_group(0, srg, &[]);
+                pass.set_vertex_buffer(0, nlb.sphere_vb.slice(..));
+                pass.set_index_buffer(nlb.sphere_ib.slice(..), wgpu::IndexFormat::Uint16);
+                pass.draw_indexed_indirect(&nlb.neuron_draw_args, 0);
+            }
+            // Cylinder render pass.
+            {
+                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("near-cylinder-pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: target_view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Discard,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(pipe_cylinder);
+                pass.set_bind_group(0, crg, &[]);
+                pass.set_vertex_buffer(0, nlb.cylinder_vb.slice(..));
+                pass.set_index_buffer(nlb.cylinder_ib.slice(..), wgpu::IndexFormat::Uint16);
+                pass.draw_indexed_indirect(&nlb.synapse_draw_args, 0);
+            }
+
+            // Stage profiler counters for async readback (non-blocking; never stalls the loop).
+            enc.copy_buffer_to_buffer(&nlb.neuron_count,    0, &nlb.profiler_staging, 0,  4);
+            enc.copy_buffer_to_buffer(&nlb.neuron_overflow, 0, &nlb.profiler_staging, 4,  4);
+            enc.copy_buffer_to_buffer(&nlb.synapse_count,   0, &nlb.profiler_staging, 8,  4);
+            enc.copy_buffer_to_buffer(&nlb.synapse_overflow,0, &nlb.profiler_staging, 12, 4);
+            enc.copy_buffer_to_buffer(&nlb.neuron_visible,  0, &nlb.profiler_staging, 16, 4);
+            enc.copy_buffer_to_buffer(&nlb.synapse_visible, 0, &nlb.profiler_staging, 20, 4);
+        }
+
         self.ctx.queue.submit([enc.finish()]);
+
+        // Non-blocking profiler readback for near-LOD stats (only when near-LOD ran).
+        if run_near_lod {
+            if let Some(nlb) = self.resources.near_lod_buffers.as_ref() {
+                self.near_lod_stats = read_near_lod_stats(&self.ctx.device, &nlb.profiler_staging);
+            }
+        }
     }
 
     /// Debug-mode correctness check (architecture §"correctness checks"). Reads
@@ -582,6 +822,73 @@ impl SimBackend for GpuBackend {
     fn destroy(&mut self) {
         self.resources.destroy();
     }
+}
+
+/// Extract 6 frustum planes from a column-major MVP matrix (Gribb-Hartmann).
+/// Returns [[a,b,c,d]; 6] where ax+by+cz+d >= 0 is inside. Each plane is
+/// UNNORMALIZED (sufficient for sign tests). Planes: left, right, bottom, top, near, far.
+fn extract_frustum_planes(m: &[f32; 16]) -> [[f32; 4]; 6] {
+    // Column-major: m[col*4 + row]. Row vectors of the matrix for plane extraction.
+    // Row 0: m[0],m[4],m[8],m[12]
+    // Row 1: m[1],m[5],m[9],m[13]
+    // Row 2: m[2],m[6],m[10],m[14]
+    // Row 3: m[3],m[7],m[11],m[15]
+    let row0 = [m[0], m[4], m[8],  m[12]];
+    let row1 = [m[1], m[5], m[9],  m[13]];
+    let row2 = [m[2], m[6], m[10], m[14]];
+    let row3 = [m[3], m[7], m[11], m[15]];
+
+    let add = |a: [f32;4], b: [f32;4]| [a[0]+b[0], a[1]+b[1], a[2]+b[2], a[3]+b[3]];
+    let sub = |a: [f32;4], b: [f32;4]| [a[0]-b[0], a[1]-b[1], a[2]-b[2], a[3]-b[3]];
+
+    // Left:   row3 + row0
+    // Right:  row3 - row0
+    // Bottom: row3 + row1
+    // Top:    row3 - row1
+    // Near:   row3 + row2
+    // Far:    row3 - row2
+    [
+        add(row3, row0),  // left
+        sub(row3, row0),  // right
+        add(row3, row1),  // bottom
+        sub(row3, row1),  // top
+        add(row3, row2),  // near
+        sub(row3, row2),  // far
+    ]
+}
+
+/// Read near-LOD profiler stats from the staging buffer (blocks once per frame).
+fn read_near_lod_stats(device: &wgpu::Device, staging: &wgpu::Buffer) -> NearLodStats {
+    let slice = staging.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |r| {
+        let _ = tx.send(r);
+    });
+    let _ = device.poll(wgpu::PollType::Wait {
+        submission_index: None,
+        timeout: None,
+    });
+    if rx.recv().is_err() {
+        return NearLodStats::default();
+    }
+    let data = slice.get_mapped_range();
+    let words: &[u32] = bytemuck::cast_slice(&*data);
+    if words.len() < 6 {
+        drop(data);
+        staging.unmap();
+        return NearLodStats::default();
+    }
+    let stats = NearLodStats {
+        emitted_neuron_instances: words[0],
+        neuron_overflow: words[1],
+        emitted_synapse_instances: words[2],
+        synapse_overflow: words[3],
+        visible_neuron_candidates: words[4],
+        visible_synapse_candidates: words[5],
+    };
+    drop(data);
+    staging.unmap();
+    stats
 }
 
 /// One-shot stats readback: map the 8-byte staging buffer, return

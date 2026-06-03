@@ -93,6 +93,12 @@ export class Camera {
 
   // --- Matrix + vector outputs (rebuilt each frame) ---
 
+  /** Current camera distance from the target (world units).
+   *  Used by Phase 4 near-LOD to decide which LOD level to activate. */
+  cameraDistance(): number {
+    return this.distance;
+  }
+
   /** Eye position from orbit parameters. */
   eye(): V3 {
     const cp = Math.cos(this.elevation);

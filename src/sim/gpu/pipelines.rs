@@ -36,6 +36,18 @@ pub const RENDER_MANIFOLD_WGSL: &str = include_str!("shaders/render_manifold.wgs
 /// Phase 3: cursor stimulation compute pass.
 pub const STIMULATE_WGSL: &str = include_str!("shaders/stimulate.wgsl");
 
+/// Phase 4: frustum cull compute (cull_neurons + cull_synapses entry points).
+pub const FRUSTUM_CULL_WGSL: &str = include_str!("shaders/frustum_cull.wgsl");
+
+/// Phase 4: draw_indirect writer compute.
+pub const DRAW_INDIRECT_WGSL: &str = include_str!("shaders/draw_indirect.wgsl");
+
+/// Phase 4: icosphere render pipeline.
+pub const RENDER_SPHERE_WGSL: &str = include_str!("shaders/render_sphere.wgsl");
+
+/// Phase 4: cylinder render pipeline.
+pub const RENDER_CYLINDER_WGSL: &str = include_str!("shaders/render_cylinder.wgsl");
+
 /// Holds compiled compute pipelines for the per-tick sim passes.
 pub struct GpuPipelines {
     pub integrate: Option<wgpu::ComputePipeline>,
@@ -47,6 +59,17 @@ pub struct GpuPipelines {
     pub render_manifold: Option<wgpu::RenderPipeline>,
     /// Phase 3: stimulation compute pipeline.
     pub stimulate: Option<wgpu::ComputePipeline>,
+    // ─── Phase 4 ────────────────────────────────────────────────────────────
+    /// Phase 4: frustum cull neurons compute pipeline.
+    pub cull_neurons: Option<wgpu::ComputePipeline>,
+    /// Phase 4: frustum cull synapses compute pipeline.
+    pub cull_synapses: Option<wgpu::ComputePipeline>,
+    /// Phase 4: draw_indirect write compute pipeline.
+    pub write_indirect: Option<wgpu::ComputePipeline>,
+    /// Phase 4: icosphere render pipeline.
+    pub render_sphere: Option<wgpu::RenderPipeline>,
+    /// Phase 4: cylinder render pipeline.
+    pub render_cylinder: Option<wgpu::RenderPipeline>,
 }
 
 impl Default for GpuPipelines {
@@ -64,6 +87,12 @@ impl GpuPipelines {
             render_far: None,
             render_manifold: None,
             stimulate: None,
+            // Phase 4
+            cull_neurons: None,
+            cull_synapses: None,
+            write_indirect: None,
+            render_sphere: None,
+            render_cylinder: None,
         }
     }
 
@@ -297,6 +326,206 @@ impl GpuPipelines {
         }));
     }
 
+    /// Build Phase 4 near-LOD compute + render pipelines.
+    /// `color_format` must match the existing render targets (same as Phase 3).
+    pub fn build_near_lod(
+        &mut self,
+        device: &wgpu::Device,
+        layouts: &GpuLayouts,
+        color_format: wgpu::TextureFormat,
+    ) {
+        // ─── Frustum cull compute (two entry points from one module) ──────────
+        // Prepend HASH_WGSL so target_neuron has access to mix_key/hash32.
+        let cull_src = format!("{HASH_WGSL}\n{FRUSTUM_CULL_WGSL}");
+        let cull_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("frustum_cull.wgsl"),
+            source: wgpu::ShaderSource::Wgsl(cull_src.into()),
+        });
+
+        let cull_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("cull-pl"),
+            bind_group_layouts: &[
+                Some(&layouts.cull_bgl_group0),
+                Some(&layouts.cull_bgl_group1),
+            ],
+            immediate_size: 0,
+        });
+
+        self.cull_neurons = Some(device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("cull_neurons"),
+            layout: Some(&cull_pl),
+            module: &cull_module,
+            entry_point: Some("cull_neurons"),
+            compilation_options: Default::default(),
+            cache: None,
+        }));
+        self.cull_synapses = Some(device.create_compute_pipeline(
+            &wgpu::ComputePipelineDescriptor {
+                label: Some("cull_synapses"),
+                layout: Some(&cull_pl),
+                module: &cull_module,
+                entry_point: Some("cull_synapses"),
+                compilation_options: Default::default(),
+                cache: None,
+            },
+        ));
+
+        // ─── draw_indirect write ──────────────────────────────────────────────
+        let indirect_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("draw_indirect.wgsl"),
+            source: wgpu::ShaderSource::Wgsl(DRAW_INDIRECT_WGSL.into()),
+        });
+        let indirect_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("draw-indirect-pl"),
+            bind_group_layouts: &[Some(&layouts.draw_indirect_bgl)],
+            immediate_size: 0,
+        });
+        self.write_indirect = Some(device.create_compute_pipeline(
+            &wgpu::ComputePipelineDescriptor {
+                label: Some("write_indirect"),
+                layout: Some(&indirect_pl),
+                module: &indirect_module,
+                entry_point: Some("write_indirect"),
+                compilation_options: Default::default(),
+                cache: None,
+            },
+        ));
+
+        // ─── Sphere render pipeline ───────────────────────────────────────────
+        let sphere_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("render_sphere.wgsl"),
+            source: wgpu::ShaderSource::Wgsl(RENDER_SPHERE_WGSL.into()),
+        });
+        let sphere_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("render-sphere-pl"),
+            bind_group_layouts: &[Some(&layouts.render_sphere_bgl)],
+            immediate_size: 0,
+        });
+        // Alpha-blend for near-LOD (src=SrcAlpha, dst=OneMinusSrcAlpha) so
+        // crossfade with far-LOD works via lod_alpha in the uniform.
+        let alpha_blend = wgpu::BlendState::ALPHA_BLENDING;
+        self.render_sphere = Some(device.create_render_pipeline(
+            &wgpu::RenderPipelineDescriptor {
+                label: Some("render_sphere"),
+                layout: Some(&sphere_pl),
+                vertex: wgpu::VertexState {
+                    module: &sphere_module,
+                    entry_point: Some("vs_main"),
+                    // Vertex buffer 0: float32x3 (pos), float32x3 (normal) = 24 B stride.
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: 24,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &[
+                            wgpu::VertexAttribute {
+                                format: wgpu::VertexFormat::Float32x3,
+                                offset: 0,
+                                shader_location: 0, // local_pos
+                            },
+                            wgpu::VertexAttribute {
+                                format: wgpu::VertexFormat::Float32x3,
+                                offset: 12,
+                                shader_location: 1, // local_normal
+                            },
+                        ],
+                    }],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &sphere_module,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: color_format,
+                        blend: Some(alpha_blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: Some(wgpu::Face::Back),
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                // Depth test against manifold pass (LoadOp::Load on depth).
+                // Near-LOD writes depth so spheres occlude each other.
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            },
+        ));
+
+        // ─── Cylinder render pipeline ─────────────────────────────────────────
+        let cyl_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("render_cylinder.wgsl"),
+            source: wgpu::ShaderSource::Wgsl(RENDER_CYLINDER_WGSL.into()),
+        });
+        let cyl_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("render-cylinder-pl"),
+            bind_group_layouts: &[Some(&layouts.render_cylinder_bgl)],
+            immediate_size: 0,
+        });
+        self.render_cylinder = Some(device.create_render_pipeline(
+            &wgpu::RenderPipelineDescriptor {
+                label: Some("render_cylinder"),
+                layout: Some(&cyl_pl),
+                vertex: wgpu::VertexState {
+                    module: &cyl_module,
+                    entry_point: Some("vs_main"),
+                    // Vertex buffer 0: float32x3 = 12 B stride (pos only).
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: 12,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &[wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x3,
+                            offset: 0,
+                            shader_location: 0, // local_pos
+                        }],
+                    }],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &cyl_module,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: color_format,
+                        blend: Some(alpha_blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None, // no culling for thin cylinders
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(false), // additive, no depth write
+                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            },
+        ));
+    }
+
     pub fn is_built(&self) -> bool {
         self.integrate.is_some() && self.write_dispatch.is_some() && self.scatter.is_some()
     }
@@ -305,6 +534,14 @@ impl GpuPipelines {
         self.render_far.is_some()
             && self.render_manifold.is_some()
             && self.stimulate.is_some()
+    }
+
+    pub fn is_near_lod_built(&self) -> bool {
+        self.cull_neurons.is_some()
+            && self.cull_synapses.is_some()
+            && self.write_indirect.is_some()
+            && self.render_sphere.is_some()
+            && self.render_cylinder.is_some()
     }
 }
 
@@ -353,5 +590,25 @@ mod tests {
         assert!(STIMULATE_WGSL.contains("@compute"));
         assert!(STIMULATE_WGSL.contains("fn stimulate"));
         assert!(STIMULATE_WGSL.contains("atomicAdd"));
+    }
+
+    #[test]
+    fn near_lod_shaders_present() {
+        // frustum_cull.wgsl
+        assert!(FRUSTUM_CULL_WGSL.contains("fn cull_neurons"));
+        assert!(FRUSTUM_CULL_WGSL.contains("fn cull_synapses"));
+        assert!(FRUSTUM_CULL_WGSL.contains("fn in_frustum"));
+        assert!(FRUSTUM_CULL_WGSL.contains("atomicAdd"));
+        assert!(FRUSTUM_CULL_WGSL.contains("target_neuron"));
+        // draw_indirect.wgsl
+        assert!(DRAW_INDIRECT_WGSL.contains("fn write_indirect"));
+        assert!(DRAW_INDIRECT_WGSL.contains("neuron_draw_args"));
+        // render_sphere.wgsl
+        assert!(RENDER_SPHERE_WGSL.contains("fn vs_main"));
+        assert!(RENDER_SPHERE_WGSL.contains("fn fs_main"));
+        assert!(RENDER_SPHERE_WGSL.contains("sphere_radius"));
+        // render_cylinder.wgsl
+        assert!(RENDER_CYLINDER_WGSL.contains("fn vs_main"));
+        assert!(RENDER_CYLINDER_WGSL.contains("weight_sign"));
     }
 }

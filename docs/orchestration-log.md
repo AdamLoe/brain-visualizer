@@ -38,7 +38,7 @@ verification notes. Started 2026-06-03._
 | 1 Foundation | complete | — | scaffold builds (host+wasm), 58 tests pass, BV22 WGSL=Rust gate PASS (llvmpipe); CPU-threads wasm build deferred to phase 6 |
 | 2 GPU sim | complete | — | Real LIF on GPU (llvmpipe verified); indirect scatter, no per-tick readback; 64 tests pass; WGSL target==Rust target gate PASS; rates deep_sleep 0Hz / focused 12.4Hz / seizure 33Hz; browser/real-GPU 100k confirmation = manual TODO |
 | 3 GPU render | complete | — | offscreen render PASS: 48.6% non-black, all 3 region channels, stim confirmed |
-| 4 Near LOD | pending | — | |
+| 4 Near LOD | complete | — | GPU indirect cull+draw PASS; 321 neurons/2565 synapses emitted at close zoom; 0 overflow; 70 tests pass |
 | 5 Controls | pending | — | |
 | 6 CPU backend | pending | — | |
 | 7 Polish | pending | — | |
@@ -318,7 +318,63 @@ cell ids in a GPU buffer instead.
 4. HDR/bloom (optional, gated).
 5. Timestamp query wiring (optional, gated).
 
-**For Phase 4 (near LOD) — must know:**
+### Phase 4 — Near LOD (2026-06-03)
+
+**Built:**
+
+- **`src/sim/gpu/shaders/frustum_cull.wgsl`**: `cull_neurons` and `cull_synapses` compute entry points. `FrustumUniforms` (6 planes + camera_pos + max_synapse_dist + tick + n). `NeuronInstance` / `SynapseInstance` structs at 32 B each. `in_frustum` tight (−0.05 tolerance) for neurons; `in_frustum_loose` (−0.5 tolerance) for synapse targets (needed when camera is inside the brain). `target_neuron` identical to scatter.wgsl (reuses BV22 hash prepend). Atomic append with overflow counter. Dispatched as `@workgroup_size(256)`. `NearConnectUniforms` holds k_near=8, max_near_instances, max_synapse_instances.
+
+- **`src/sim/gpu/shaders/draw_indirect.wgsl`**: `write_indirect` (1 thread). Loads atomic counts, clamps to buffer capacity, writes `DrawIndexedIndirectArgs` (5×u32) for both sphere and cylinder draw calls. Writes unclamped counts to profiler visible counters.
+
+- **`src/sim/gpu/shaders/render_sphere.wgsl`**: Icosphere vertex+fragment shader. Vertex layout: float32x3 (pos) + float32x3 (normal). `world_pos = instance_pos + local_pos * radius * (0.5 + glow)`. Blinn-Phong diffuse + emissive glow. Alpha-blend (SrcAlpha, OneMinusSrcAlpha). `lod_alpha` in `NearUniforms` drives crossfade.
+
+- **`src/sim/gpu/shaders/render_cylinder.wgsl`**: 6-sided prism cylinder shader. Instance provides src_pos + tgt_pos; VS builds orthonormal basis from src→tgt direction, scales unit cylinder to span the connection. Excitatory = faint blue-white, inhibitory = faint red. Depth test (Load); no depth write (thin lines).
+
+- **`src/sim/gpu/resources.rs`** (extended): Added `NearRenderUniforms`, `FrustumCullUniforms`, `NearConnectUniforms`, `IndirectWriteUniforms`, `NearLodBuffers`, `NearLodStats`. `GpuLayouts` extended with 5 new near-LOD BGLs (cull_bgl_group0/1, draw_indirect_bgl, render_sphere_bgl, render_cylinder_bgl). `GpuBindGroups` extended with 5 new near-LOD bind groups. `GpuResources` gains `near_lod_buffers: Option<NearLodBuffers>`. `init_near_lod_resources` derives caps from adapter `max_storage_buffer_binding_size`, allocates all 20 near-LOD buffers ONCE, uploads static sphere (12 verts, 20 tris) and cylinder (12 verts, 12 tris) geometry. `refresh_bind_groups` builds near-LOD BGs when `near_lod_buffers` is Some. `destroy` also drops `near_lod_buffers`. Geometry generators `build_icosphere()` and `build_cylinder_prism()` are public and unit-tested.
+
+- **`src/sim/gpu/pipelines.rs`** (extended): Added `FRUSTUM_CULL_WGSL`, `DRAW_INDIRECT_WGSL`, `RENDER_SPHERE_WGSL`, `RENDER_CYLINDER_WGSL` embeds. `GpuPipelines` gains 5 near-LOD pipeline fields. `build_near_lod(device, layouts, color_format)` builds all 5 pipelines; frustum_cull prepends `HASH_WGSL` so `target_neuron` has `mix_key`. `is_near_lod_built()` predicate.
+
+- **`src/sim/gpu/mod.rs`** (extended): `LOD_FAR_ONLY_DIST=1.5`, `LOD_NEAR_ONLY_DIST=0.8` constants. `GpuBackend` gains `near_lod_stats: NearLodStats` and `lod_camera_distance: f32`. `initialize()` calls `init_near_lod_resources`. `build_render_pipelines` also calls `build_near_lod`. New methods: `set_lod_camera_distance(d)`, `near_lod_stats()`, `render_full(…, camera_pos, camera_distance)`. `render()` delegates to `render_full` with stored `lod_camera_distance`. LOD alpha computed each frame: `far_alpha` in [0,1], `near_alpha = 1 − far_alpha`. Near-LOD pass sequence (cull_neurons → cull_synapses → write_indirect → draw_sphere → draw_cylinder) only runs when `near_alpha > 0.001`. Frustum planes extracted via Gribb-Hartmann from column-major MVP. Counters zeroed each frame via `queue.write_buffer`. Profiler staging readback via `read_near_lod_stats` (blocks once per frame, off the render hot path). `extract_frustum_planes` and `read_near_lod_stats` are module-private helpers. `max_synapse_dist = 2.5` (generous to handle camera-inside-brain geometry).
+
+- **`web/camera.ts`** (extended): Added `cameraDistance(): number` getter exposing the orbit distance for Phase 5 near-LOD plumbing.
+
+- **`examples/near_lod_check.rs`** (new): Headless near-LOD verification harness.
+
+**Verified (this environment — llvmpipe):**
+- `cargo build` host — clean, 0 warnings.
+- `cargo build --target wasm32-unknown-unknown` — clean.
+- `cargo test` — **70 pass** (67 unit + 3 integration). New unit tests: `near_lod_uniform_sizes_aligned`, `icosphere_has_correct_geometry`, `cylinder_prism_has_correct_geometry`, `near_lod_shaders_present`. All Phase 1–3 tests still pass.
+- **`examples/near_lod_check.rs` PASSED:**
+  - Device: llvmpipe (LLVM 20.1.2, software Vulkan).
+  - CLOSE (distance=0.3, near-LOD active): emitted_neurons=321, emitted_synapses=2565, neuron_overflow=0, synapse_overflow=0.
+  - Non-black pixels: 65536/65536 (100%) — spheres/cylinders rendered.
+  - FAR (distance=3.0): near-LOD skipped (counts stay at 0 from init, no crash).
+- `tsc --noEmit` — clean.
+- `vite build` — clean (44.4 kB wasm, 20.0 kB JS).
+- `examples/render_check.rs` still PASSES unchanged (48.6% non-black, stimulate confirmed).
+
+**Decisions / deviations:**
+- **OD12 — Loose frustum for synapse targets**: When the camera is inside the brain (distance < brain radius ~1.0), the tight frustum (-0.05 margin) excludes most target neurons even though nearby source neurons pass. Added `in_frustum_loose` (-0.5 margin) for synapse target check only. This is consistent with the spec note that "both ends must be roughly in view."
+- **OD13 — max_synapse_dist = 2.5**: Initial 0.5 would cull all synapses when camera is at 0.3 from origin but neurons are on the surface at ~1.0 (distance from camera to neuron ≈ 0.7–1.3). 2.5 world units covers the whole visible brain volume from near-LOD distances.
+- **OD14 — Full-array frustum cull**: Full N dispatch per frame (N threads, workgroup 256). Cell-query optimization noted as follow-up per the spec.
+- **OD15 — Near-LOD profiler readback blocks once per frame**: `read_near_lod_stats` maps the 24-B staging buffer synchronously after submit. This is acceptable since it's 24 bytes (trivial) and only runs when near-LOD is active. For production, this can be made fully async using the same staging-pool pattern as timestamp queries.
+- **OD16 — Crossfade via lod_alpha**: Alpha-blend near-LOD layers over the far-LOD base. In the 0.8–1.5 distance band, both far-LOD (draw N billboards) and near-LOD (cull + indirect draw) run simultaneously. The `lod_alpha` uniform in `NearRenderUniforms` linearly ramps the near-LOD transparency from 0→1 as distance goes 1.5→0.8. Far-LOD billboard draw is skipped when `far_alpha < 0.001`.
+- **OD17 — `render_full` vs `render`**: Added `render_full(…, camera_pos, camera_distance)` taking explicit eye + distance. The existing `render()` delegates to `render_full` with `lod_camera_distance` (set by `set_lod_camera_distance`). This keeps the Phase 3 API unchanged while giving the harness direct control.
+
+**Manual/browser TODOs:**
+1. Wire `camera.cameraDistance()` → `backend.set_lod_camera_distance()` in `web/main.ts` (Phase 5 controls task).
+2. Pass `camera.eye()` as `camera_pos` to `render_full` in the browser render loop.
+3. Timestamp query wiring for near-LOD cull_ms / render_ms (deferred, same as Phase 3).
+4. Cell-query optimization in `cull_neurons`/`cull_synapses` (spatial hash lookup instead of full-array scan).
+
+**For Phase 5 (controls UI) — must know:**
+- `GpuBackend::set_lod_camera_distance(f32)` must be called each frame from the JS side with `camera.cameraDistance()` before calling `render()`.
+- The LOD mode is fully automatic from the distance; no separate boolean toggle is needed.
+- `GpuBackend::near_lod_stats()` returns `NearLodStats` for the profiler HUD (emitted_neuron_instances, emitted_synapse_instances, overflow counts).
+- The camera's `cameraDistance()` getter (added in Phase 4) is the intended LOD distance source.
+- Speed controls changing `ticks_per_frame` don't affect near-LOD (LOD is render-only, not sim-driven).
+
+**For Phase 5 (controls UI) — must know:**
 - **Depth target**: `GpuResources.render_targets.depth_view` is the Depth32Float view written by the manifold pass. Near-LOD spheres should use `LoadOp::Load` on depth attachment to depth-test against manifold.
 - **Render bind-group layouts**: `GpuLayouts.render_far_bgl` is group 0 for far-LOD (uniform + 5 storage). Phase 4 adds its own near-LOD BGL to `GpuLayouts`.
 - **Camera frustum planes**: derive from `camera.mvpMatrix()` (extract 6 planes from MVP rows). Add `FrustumUniforms { planes: array<vec4<f32>, 6> }` to near-LOD resources; upload before frustum-cull compute dispatch.
