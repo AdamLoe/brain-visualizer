@@ -36,7 +36,7 @@ verification notes. Started 2026-06-03._
 |-------|--------|--------|-------|
 | 0 Benchmark | complete | — | GPU=llvmpipe (no real GPU); CPU numbers collected; browser TODO |
 | 1 Foundation | complete | — | scaffold builds (host+wasm), 58 tests pass, BV22 WGSL=Rust gate PASS (llvmpipe); CPU-threads wasm build deferred to phase 6 |
-| 2 GPU sim | pending | — | |
+| 2 GPU sim | complete | — | Real LIF on GPU (llvmpipe verified); indirect scatter, no per-tick readback; 64 tests pass; WGSL target==Rust target gate PASS; rates deep_sleep 0Hz / focused 12.4Hz / seizure 33Hz; browser/real-GPU 100k confirmation = manual TODO |
 | 3 GPU render | pending | — | |
 | 4 Near LOD | pending | — | |
 | 5 Controls | pending | — | |
@@ -149,3 +149,119 @@ embed via `include_str!` from `src/sim/gpu/shaders/`. `RenderState::Empty` is a
 phase-1 addition for the stub state. `target()`'s per-call cell lookup uses an
 O(n) scan on host (`SpatialGrid::cell_of_index`); phase 2 must store per-neuron
 cell ids in a GPU buffer instead.
+
+### Phase 2 — GPU Simulation Core (2026-06-03)
+
+**Built:** Real GPU LIF simulation on WebGPU/wgpu compute.
+- **Shaders** (`src/sim/gpu/shaders/`): `integrate.wgsl` (wg 256; ambient i_ext
+  to input-region neurons via region bits, excitability gain 0.5+excit*1.5,
+  leak, threshold+5-tick refractory, atomic spike append, BV21 last_spike pack),
+  `scatter.wgsl` (wg 64; production `target_neuron` reimplements the Phase-1
+  spatial rule in WGSL — cell-offset + anterior bias + nearest-occupied spiral +
+  in-cell pick over the CSR grid — NOT modulo-N; `target_neuron_debug` is the
+  labelled modulo-N fallback, never dispatched; fixed-point atomicAdd + BV19
+  high-water `atomicMax`), `write_scatter_dispatch.wgsl` (wg 1; computes
+  `ceil(spike_count*K/64)` into a DispatchIndirect buffer on the GPU). All three
+  reuse the locked BV22 `HASH_WGSL` by prepend; the hash is never re-authored.
+- **Dispatch (per tick, one encoder, GPU-driven):** writeBuffer tick uniform +
+  clear spike_count → integrate → write_scatter_dispatch → scatter via
+  `dispatch_workgroups_indirect(dispatch_args)` → flip I/I_next by bind-group
+  parity (two prebuilt integrate/scatter bind groups; no realloc, no per-frame
+  allocation).
+- **Resources/lifecycle:** `GpuResources::resize_neurons` allocates real
+  `ChunkedBuffer` device buffers (single chunk ≤16M; multi-chunk path compiles),
+  uploads positions from the manifold, packs `last_spike` (HAS_SPIKED=0 silent
+  start + region/E-I type bits), v=0, I=0, and the static CSR grid buffers
+  (`cell_of_neuron` via new O(N) `SpatialGrid::cell_of_neuron_map`, `cell_start`,
+  `cell_neurons`). `refresh_bind_groups` honors `bind_groups_dirty`. E/I:
+  `hash32(id ^ seed_lo) % 5 == 0` → inhibitory (verified ~20%).
+- **Backend:** `GpuBackend` owns a `GpuContext{device,queue}`. Device acquisition
+  factored: `acquire_native()` (cfg(not wasm); high-perf adapter → llvmpipe
+  fallback; lifts `max_storage_buffers_per_shader_stage`/binding-size from
+  adapter — downlevel default of 4 is too few for the 5-/8-binding passes) vs
+  the wasm path which constructs the same platform-agnostic `GpuBackend::new`
+  from a browser-acquired context. **wasm build remains green.**
+- **Stats / no-readback:** the per-tick path NEVER reads spike_count to size the
+  scatter dispatch — the GPU-written indirect buffer does. Stats are staged ONCE
+  per `tick()` batch (8 B: final spike_count + high-water max|I|) and mapped
+  after submit; never inside the loop. `debug_dynamics_snapshot()` (off the hot
+  path) reads v/last_spike and asserts mean(v)∈[-0.5,1.5] + warns >80% fire.
+- **Verification harness:** `examples/sim_check.rs` (`cargo run --release
+  --example sim_check`) drives the real backend on the native device.
+
+**Verified (this environment — llvmpipe software Vulkan):**
+- `cargo build` host — clean, 0 warnings.
+- `cargo build --target wasm32-unknown-unknown` — clean. `wasm-pack build
+  --target web` — clean.
+- `cargo test` — **64 pass** (61 unit + 3 integration). New integration tests:
+  `tests/gpu_sim_dynamics.rs` (real backend excitability sweep + overflow/NaN)
+  and `tests/wgsl_target_determinism.rs` — **WGSL `target_neuron` == Rust
+  `connectivity::target()` for all 128,000 (i,j) pairs on a real manifold**
+  (the GPU scatter wires the identical network to the CPU path). BV22 hash gate
+  still PASS.
+- **Dynamics (N=30k, K=32, llvmpipe, 600-tick measure after 200 warm-up):**
+  | preset | excit | mean rate | spikes/s | syn-events/s |
+  |--------|-------|-----------|----------|--------------|
+  | deep_sleep | 0.10 | 0.00 Hz (silent) | 0 | 0 |
+  | focused | 0.55 | 12.4 Hz (plausible) | 372,560 | 11.9 M |
+  | seizure | 1.00 | 33.3 Hz (elevated) | 999,617 | 32.0 M |
+  Monotone gradient silent→moderate→high. debug snapshot at focused: mean_v=0.19
+  (in range), 1.24% fired/tick (well under 80%).
+- **Overflow (BV19):** seizure 2000 ticks, max|accumulated current| (fixed-point)
+  = **2,674,316** vs i32_max 2,147,483,647 → **803× headroom. Verdict: SAFE**
+  with plain atomicAdd at these tier params; saturating compare-exchange NOT
+  needed yet. No NaN membrane potentials (full v scan).
+
+**Tuning (documented; NO locked BV value changed):**
+- The Phase-1 locked synaptic weights are strong vs threshold=1.0 (≈one input is
+  suprathreshold), which makes the raw network **bistable** — silent below an
+  i_ext cliff (~0.037) and refractory-capped at ~166 Hz above it, with no graded
+  band. Two runtime knobs open a biological 5–20 Hz regime without touching
+  weights, fixed_point_scale (stays 4096), or any BV constant:
+  - `i_ext = 0.040` (just above the input-region firing cliff so input neurons
+    seed activity from silence; config default 0.06 over-saturates). Spec default
+    0.02 leaves the network silent because leak 0.95 gives sub-threshold
+    equilibrium.
+  - **`synaptic_scale = 0.03`** — a NEW integration-side knob (uniform field +
+    `GpuBackend::set_synaptic_scale`) that scales accumulated recurrent current.
+    It sets how many coincident presynaptic spikes are needed to fire
+    (biological realism) and is the lever that produces the graded sweep. Default
+    is 1.0 (neutral). This is an integration-side scaling, explicitly NOT a
+    change to the locked weight rule (GPU still matches Rust `weight()`/`target()`
+    bit-for-bit). Phase 3+/scaler should expose it per-tier or fold it into the
+    excitability mapping.
+- **Tier caps:** the Low 50k/16, Balanced 200k/32, Max 1M/64 table is NOT
+  contradicted by these numbers and stays as-is (caps still pending real browser
+  GPU numbers per Phase 0). N=30k used here only because llvmpipe is slow.
+
+**For Phase 3 (rendering) — must know:**
+- `render_state()` returns `RenderState::Gpu { v_buf, last_spike_buf, pos_x_buf,
+  pos_y_buf, pos_z_buf, neuron_count }` — real `&wgpu::Buffer` handles, all
+  STORAGE | COPY_SRC, GPU-resident, zero readback. They are
+  `neuron_buffers.<field>.chunks[0]` (single chunk for N≤16M).
+- Render shader reads: `v[i]` (f32 membrane), `last_spike[i]` (u32: bit31
+  HAS_SPIKED, bits[30:24] type = (region<<2)|EI with region Input=0/Assoc=1/
+  Output=2 and EI bit0=1→inhibitory, bits[23:0] tick). Reconstruct position as
+  `vec3(pos_x[i], pos_y[i], pos_z[i])` (true SoA, 4-B stride — never vec3 array).
+  Glow must be 0 when `has_spiked==false` (silent start). Recency =
+  `tick_diff(tick, last_spike&0xFFFFFF)` with the shared 24-bit modular helper.
+- **Tick counter** lives on the CPU side: `GpuBackend::tick_count()` (u32,
+  24-bit-wrapping semantics in shaders). The render pass needs the current tick
+  to compute glow recency — pass it in a render uniform each frame.
+- The sim bind-group layouts are independent of render; Phase 3 builds its own
+  layouts/bind groups in `GpuResources` (extend `RenderTargets` /
+  `refresh_bind_groups`), reusing the same buffers as read-only storage.
+- Device/queue: `GpuBackend::device()` / `queue()` accessors exist for render
+  setup. The backend owns one device+queue; the render pass shares them.
+
+**Manual/browser TODOs (cannot verify headless):**
+1. Run the harness on a real GPU / in-browser at N=100k–1M to confirm the
+   `done-when` "non-zero spikes_per_sec at N=100k" and tier throughput; llvmpipe
+   numbers are software emulation (slow), used only for correctness.
+2. Re-tune `i_ext` / `synaptic_scale` on real hardware if the avalanche/critical
+   regime (BV9) needs sharpening; seizure here is elevated (33 Hz) but not a full
+   synchronized burst — the 20% inhibition + refractory keep it stable. Push
+   synaptic_scale up (≈0.12→100 Hz, 0.2→159 Hz observed) for a harder seizure.
+3. Timestamp queries: llvmpipe reports TIMESTAMP_QUERY=true and the feature is
+   requested when present, but per-pass timestamp wiring is deferred to the
+   render frame-graph (Phase 3); current timing is wall-clock `tick_ms`.

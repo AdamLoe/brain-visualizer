@@ -86,6 +86,24 @@ impl SpatialGrid {
         &self.cell_neurons[lo..hi]
     }
 
+    /// Build a per-neuron packed-cell-id map (`cell_of_neuron[i]` = packed cell
+    /// id of neuron `i`). O(N) — inverts the CSR layout in one pass, unlike the
+    /// O(N²) `cell_of_index` scan. Used to upload `cell_of_neuron` to the GPU.
+    pub fn cell_of_neuron_map(&self) -> Vec<u32> {
+        let n = self.cell_neurons.len();
+        let mut out = vec![0u32; n];
+        let cells = self.cell_count() as usize;
+        for cell in 0..cells {
+            let lo = self.cell_start[cell] as usize;
+            let hi = self.cell_start[cell + 1] as usize;
+            for slot in lo..hi {
+                let neuron = self.cell_neurons[slot] as usize;
+                out[neuron] = cell as u32;
+            }
+        }
+        out
+    }
+
     /// Build the grid from neuron positions. `dim` chosen so the grid is dense
     /// enough for local connectivity without exploding cell count.
     pub fn build(positions: &[[f32; 3]], dim: u32) -> Self {
@@ -199,6 +217,20 @@ mod tests {
                 g.neurons_in_cell(cell).contains(&(i as u32)),
                 "neuron {i} missing from its cell {cell}"
             );
+        }
+    }
+
+    #[test]
+    fn cell_of_neuron_map_matches_scan() {
+        let pos = ring();
+        let g = SpatialGrid::build(&pos, 4);
+        let map = g.cell_of_neuron_map();
+        assert_eq!(map.len(), pos.len());
+        // O(N) inverse must agree with the membership scan for every neuron.
+        for i in 0..pos.len() as u32 {
+            assert_eq!(map[i as usize], g.cell_of_index(i));
+            // And the neuron must be resident in the cell the map names.
+            assert!(g.neurons_in_cell(map[i as usize]).contains(&i));
         }
     }
 

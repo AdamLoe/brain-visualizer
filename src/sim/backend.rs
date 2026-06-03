@@ -159,6 +159,35 @@ pub fn tick_diff(now: u32, then: u32) -> u32 {
     (now.wrapping_sub(then)) & TICK_MASK
 }
 
+/// Region code packed into the type byte above the E/I bit. The integrate
+/// shader treats `(type >> 2) == 0` as an input-region neuron, so Input must be
+/// 0. Region occupies bits [3:2] of the 7-bit type field.
+#[inline]
+pub fn region_code(region: crate::manifold::RegionKind) -> u8 {
+    match region {
+        crate::manifold::RegionKind::Input => 0,
+        crate::manifold::RegionKind::Association => 1,
+        crate::manifold::RegionKind::Output => 2,
+    }
+}
+
+/// Build the 7-bit neuron type byte (BV21): `(region_code << 2) | ei_flag`.
+/// E/I assignment is `hash32(neuron_id ^ seed_lo) % 5 == 0` → inhibitory
+/// (bit 0 = 1), i.e. ~20% inhibitory (phase-2 spec / BV5 E/I ratio).
+#[inline]
+pub fn neuron_type_byte(neuron_id: u32, seed_lo: u32, region: crate::manifold::RegionKind) -> u8 {
+    let inhibitory = crate::connectivity::hash::hash32(neuron_id ^ seed_lo) % 5 == 0;
+    let ei = if inhibitory { 1u8 } else { 0u8 };
+    (region_code(region) << 2) | ei
+}
+
+/// Pack an initial silent-start `last_spike` word: `HAS_SPIKED = 0`, type bits
+/// set, tick = 0 (BV21).
+#[inline]
+pub fn initial_last_spike(neuron_id: u32, seed_lo: u32, region: crate::manifold::RegionKind) -> u32 {
+    ((neuron_type_byte(neuron_id, seed_lo, region) as u32) << 24) & TYPE_MASK
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,5 +235,39 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(c.seed_lo(), 0x5678_9ABC);
+    }
+
+    #[test]
+    fn input_region_decodes_to_zero_upper_bits() {
+        use crate::manifold::RegionKind;
+        // The integrate shader treats (type >> 2) == 0 as input region.
+        let t_in = neuron_type_byte(0, 0, RegionKind::Input);
+        let t_assoc = neuron_type_byte(0, 0, RegionKind::Association);
+        let t_out = neuron_type_byte(0, 0, RegionKind::Output);
+        assert_eq!(t_in >> 2, 0, "input region must have upper type bits 0");
+        assert_ne!(t_assoc >> 2, 0);
+        assert_ne!(t_out >> 2, 0);
+    }
+
+    #[test]
+    fn initial_last_spike_is_silent_with_type() {
+        use crate::manifold::RegionKind;
+        let w = initial_last_spike(7, 0x5eed, RegionKind::Output);
+        // Silent start: HAS_SPIKED clear, tick bits 0, type bits set.
+        assert!(!has_spiked(w));
+        assert_eq!(w & TICK_MASK, 0);
+        assert_eq!(neuron_type(w), neuron_type_byte(7, 0x5eed, RegionKind::Output));
+    }
+
+    #[test]
+    fn ei_ratio_about_20_percent_inhibitory() {
+        use crate::manifold::RegionKind;
+        let n = 20_000u32;
+        let inhib = (0..n)
+            .filter(|&i| neuron_type_byte(i, 0xdead, RegionKind::Association) & 1 == 1)
+            .count();
+        let frac = inhib as f32 / n as f32;
+        // hash32(id ^ seed) % 5 == 0 -> ~20% inhibitory (BV5).
+        assert!((frac - 0.20).abs() < 0.02, "E/I ratio off: {frac:.3}");
     }
 }
