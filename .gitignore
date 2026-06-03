@@ -1,0 +1,17 @@
+# Rust
+/target
+**/target
+Cargo.lock
+
+# Node / web
+node_modules
+web/dist
+dist
+*.log
+
+# wasm-pack output
+/pkg
+**/pkg
+
+# misc
+.DS_Store
