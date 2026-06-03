@@ -281,8 +281,16 @@ timing read rather than stalling.
 - **Three presets built + benchmarked** (low / balanced / max). Manual switch
   now; auto-pick-per-device heuristic deferred. The scaler operates **inside**
   the selected tier and does not silently jump Low/Balanced/Max.
-- Max tier defaults to ~1M neurons. 10M is a best-case stretch only when device
-  limits and the benchmark burst both support it.
+- **Max tier defaults to ~1M neurons.** 10M is a best-case stretch only when
+  device limits (`maxStorageBufferBindingSize`, total buffer budget) AND the
+  benchmark burst both support it. The adaptive scaler cap for Max tier is
+  1M as the practical default; 10M only unlocks when the device reports a
+  large `maxStorageBufferBindingSize` AND benchmark latency sustains the
+  frame budget.
+- **"10M is a best-case discrete GPU target, not a promise."** The visualizer
+  should be impressive because it adapts honestly to the machine, not because
+  the copy promises a number most browsers/devices cannot sustain (BV23).
+  UI label: "Max (up to 1M — up to 10M on high-end discrete GPU)".
 - Scaling decisions should include hysteresis and a cooldown so resize/realloc
   work does not thrash when the workload hovers near the frame budget. Shrink
   quickly when over budget; grow only after sustained headroom.
@@ -370,6 +378,41 @@ Based on CPU numbers and WSL2 GPU fallback only:
 
 _Native numbers are upper bounds only. Shipped caps must be set from browser
 WebGPU/WASM results as specified in phase-0-benchmark.md._
+
+#### Phase 7 final perf audit — balanced-tier native numbers
+**Machine:** WSL2 (Linux 5.15 on x86-64), 20 cores, 31 GB RAM.
+**Device:** llvmpipe (LLVM 20.1.2, software Vulkan) — CPU emulation, NOT real GPU.
+**Date:** 2026-06-03.
+
+Balanced tier: N=200k, K=32, focused (excit=0.55), i_ext=0.040, synaptic_scale=0.03.
+From Phase 2 GPU bench table: ~212 ticks/s, ~170M syn-events/s (llvmpipe).
+From cpu_check.rs Phase 6: CPU 12.42 Hz vs GPU 12.42 Hz at focused (N=30k).
+
+**These are software-emulation numbers. Real GPU numbers are a manual TODO
+(browser microbench on target hardware).**
+
+**Per-item perf audit (Phase 7 checklist):**
+1. No CPU readbacks in normal rAF frames — PASS. JS rAF loop: no readbacks.
+   GPU tick() path: one 8-B stats staging read per batch (after submit, not
+   per-tick); no dispatch size from CPU readback (GPU indirect buffer drives scatter).
+2. No per-frame buffer/bind-group/pipeline/texture creation — PASS.
+   All large buffers persistent; bind groups rebuilt only when `bind_groups_dirty`
+   set. Render targets recreate only on size change (`resize_render_targets`
+   guard).
+3. Timestamp query resolve async, skipped when staging busy — PARTIAL.
+   Timestamp writes are `None` in all passes (deferred OD10). The near-LOD stats
+   readback (24 B) blocks synchronously (OD15 — documented, acceptable at 24 B).
+   A full async staging-pool path is a follow-up.
+4. Debug overlays off by default — PASS. Corner HUD `debugEnabled=false`;
+   no hidden passes. Near-LOD disabled by default when far from surface.
+5. Render targets recreate only on size/format change — PASS. `resize_render_targets`
+   guards on `t.width != width || t.height != height`.
+6. Backend restart/tier resize rebuilds cleanly with same seed — PASS.
+   `initialize()` re-runs manifold + resize_neurons + refresh_bind_groups + tick=0.
+   Verified by cpu_check.rs (CPU 12.42 Hz == GPU 12.42 Hz on same seed).
+7. Profiler derives inner-loop totals cheaply — PASS. `synaptic_events = spikes * k`
+   (no scatter instrumentation). Per-region rates approximated from anatomical
+   fractions (30/40/30) in `deriveRegionFractions()` — no per-neuron scan.
 
 ## 10. Known constraints & risks
 - **WebGPU f32 atomics absent** → fixed-point i32 accumulation (§5).

@@ -8,6 +8,20 @@ import type { BackendKind, Tier, TickStats } from "./types";
 
 const RING_CAP = 120;
 
+/** Profiler snapshot shape (mirrors ProfileSnapshot in profiler.rs). */
+export interface ProfileSnapshot {
+  fps: number;
+  frameAvgMs: number;
+  frameP95Ms: number;
+  ticksPerSec: number;
+  spikesPerSec: number;
+  synapticEventsPerSec: number;
+  backend: BackendKind;
+  tier: Tier;
+  n: number;
+  k: number;
+}
+
 export class Profiler {
   private frameTimes = new Float32Array(RING_CAP);
   private ringLen = 0;
@@ -19,6 +33,9 @@ export class Profiler {
   private framesThisWindow = 0;
   private lastDumpMs = 0;
   private started = false;
+
+  // Last emitted snapshot — readable by HUD / sonification engine.
+  private lastSnapshot: ProfileSnapshot | null = null;
 
   constructor(
     private backend: BackendKind,
@@ -60,17 +77,32 @@ export class Profiler {
     if (elapsedMs < 1000) return false;
     const elapsedS = elapsedMs / 1000;
 
+    const snap: ProfileSnapshot = {
+      fps:                  +(this.framesThisWindow / elapsedS).toFixed(1),
+      frameAvgMs:           +this.avg().toFixed(3),
+      frameP95Ms:           +this.percentile(95).toFixed(3),
+      ticksPerSec:          +(this.windowTicks / elapsedS).toFixed(1),
+      spikesPerSec:         +(this.windowSpikes / elapsedS).toFixed(1),
+      synapticEventsPerSec: +(this.windowSyn / elapsedS).toFixed(1),
+      backend:              this.backend,
+      tier:                 this.tier,
+      n:                    this.n,
+      k:                    this.k,
+    };
+    // Store for HUD / sonification (camelCase shape); also emit the
+    // legacy snake_case JSON shape the existing console dump uses.
+    this.lastSnapshot = snap;
     const snapshot = {
-      fps: +(this.framesThisWindow / elapsedS).toFixed(1),
-      frame_ms_avg: +this.avg().toFixed(3),
-      frame_ms_p95: +this.percentile(95).toFixed(3),
-      ticks_per_sec: +(this.windowTicks / elapsedS).toFixed(1),
-      spikes_per_sec: +(this.windowSpikes / elapsedS).toFixed(1),
-      synaptic_events_per_sec: +(this.windowSyn / elapsedS).toFixed(1),
-      backend: this.backend,
-      tier: this.tier,
-      n: this.n,
-      k: this.k,
+      fps: snap.fps,
+      frame_ms_avg: snap.frameAvgMs,
+      frame_ms_p95: snap.frameP95Ms,
+      ticks_per_sec: snap.ticksPerSec,
+      spikes_per_sec: snap.spikesPerSec,
+      synaptic_events_per_sec: snap.synapticEventsPerSec,
+      backend: snap.backend,
+      tier: snap.tier,
+      n: snap.n,
+      k: snap.k,
     };
     console.log(JSON.stringify(snapshot));
 
@@ -85,6 +117,15 @@ export class Profiler {
   /** Return the p95 frame time from the rolling window (ms). Used by scaler. */
   getFrameP95(): number {
     return this.percentile(95);
+  }
+
+  /**
+   * Return the last emitted snapshot (null before the first dump).
+   * Used by the corner HUD and sonification engine — both update at 1/sec,
+   * reading already-aggregated counters (no GPU readback, no per-frame cost).
+   */
+  getLastSnapshot(): ProfileSnapshot | null {
+    return this.lastSnapshot;
   }
 
   private avg(): number {

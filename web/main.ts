@@ -1,5 +1,6 @@
-// Entry point (Phase 5): WASM load, manifold generation, controls event wiring,
+// Entry point (Phase 7): WASM load, manifold generation, controls event wiring,
 // rAF + tick loop with excitability lerp, LOD plumbing, adaptive scaler.
+// Phase 7 adds: sonification engine, corner HUD, mobile scaling, 10M disclaimer.
 // Phase 3/4 render and stim paths are preserved; GPU bridge remains browser TODO.
 
 import init, {
@@ -20,8 +21,10 @@ import {
   ticksThisFrame,
 } from "./controls";
 import { CpuRenderer } from "./cpu-renderer";
+import { CornerHud } from "./hud";
 import { Profiler } from "./profiler";
 import { Renderer } from "./renderer";
+import { SonificationEngine, deriveRegionFractions } from "./sonification";
 import { DEFAULT_CONFIG, ZERO_STATS, type AppConfig, type BackendKind, type BrainState, type SpeedPreset } from "./types";
 
 // Cursor stimulation constants (BV10 / phase-3 spec).
@@ -41,12 +44,16 @@ async function boot(): Promise<void> {
     .crossOriginIsolated === true;
   log_cross_origin_isolation(isolated);
 
-  // 3. Mobile detection — default Low tier on mobile (Phase 5 / BV).
+  // 3. Mobile detection — apply full mobile profile (Phase 7 / BV spec):
+  //    Low tier, GPU only, 0.75×DPR render res, no near-LOD, no sound, no stim.
   const mobile = isMobile();
   const config: AppConfig = { ...DEFAULT_CONFIG };
   if (mobile) {
     config.tier = "low";
-    console.log("[main] mobile detected → Low tier default");
+    config.n    = 50_000;  // Low tier N (N≈50k / K=16 per spec)
+    config.k    = 16;
+    config.backend = "gpu"; // GPU only on mobile (no rayon workers overhead)
+    console.log("[main] mobile detected → Low tier (N=50k K=16, GPU only, 0.75×DPR, no sound)");
   }
 
   // 4. Generate manifold.
@@ -55,7 +62,8 @@ async function boot(): Promise<void> {
 
   // 5. Canvas + renderer.
   const canvas = document.getElementById("brain-canvas") as HTMLCanvasElement;
-  resizeCanvas(canvas);
+  // Mobile: render at 0.75× DPR (Phase 7 mobile profile).
+  resizeCanvas(canvas, mobile ? 0.75 : 1.0);
   const renderer = new Renderer(canvas);
   await renderer.init();
 
@@ -94,12 +102,20 @@ async function boot(): Promise<void> {
   canvas.addEventListener("touchend", () => camera.onPointerUp());
 
   window.addEventListener("resize", () => {
-    resizeCanvas(canvas);
+    resizeCanvas(canvas, mobile ? 0.75 : 1.0);
     camera.setAspect(canvas.width / canvas.height);
   });
 
   // 7. Profiler.
   const profiler = new Profiler(config.backend, config.tier, config.n, config.k);
+
+  // 7b. Corner HUD (BV8 amendment — Phase 7). Bottom-right, updated 1/sec.
+  //     Hidden on mobile (no debug overlays per spec).
+  const hud = new CornerHud(false /* debug fields off by default */);
+  if (mobile) hud.hide();
+
+  // 7c. Sonification engine (BV11 — Phase 7). Disabled on mobile.
+  const sonification = new SonificationEngine();
 
   // 8. Controls (facade kept for console access).
   const controls = new Controls(config, (cfg) => {
@@ -140,6 +156,39 @@ async function boot(): Promise<void> {
       }
     });
   });
+
+  // Tier selector (BV3 / BV23 — Phase 7). Manual switch; auto-pick deferred.
+  document.querySelectorAll("#tier-group button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const tier = (btn as HTMLElement).dataset.tier as import("./types").Tier;
+      if (tier !== config.tier) {
+        config.tier = tier;
+        setActiveButton("#tier-group", "tier", tier);
+        console.log(`[controls] tier = ${tier} → restart`);
+        void restartWithBackend(config.backend);
+      }
+    });
+  });
+
+  // Sound toggle (BV11 — Phase 7). Button is in the top bar.
+  // Disabled on mobile (audio context is flaky on mobile per spec).
+  const soundBtn = document.getElementById("sound-toggle");
+  if (soundBtn && !mobile) {
+    soundBtn.addEventListener("click", () => {
+      if (sonification.enabled) {
+        sonification.disable();
+        soundBtn.textContent = "🔇";
+        soundBtn.title = "Enable sound";
+      } else {
+        sonification.enable();
+        soundBtn.textContent = "🔊";
+        soundBtn.title = "Disable sound";
+      }
+    });
+  } else if (soundBtn && mobile) {
+    // Hide sound toggle on mobile.
+    (soundBtn as HTMLElement).style.display = "none";
+  }
 
   // 10. Restart sequence state.
   let rafHandle = 0;
@@ -226,18 +275,50 @@ async function boot(): Promise<void> {
     profiler.recordFrame(timestamp, timestamp - lastTimestamp, stats);
     const dumped = profiler.maybeDump(timestamp);
 
-    // Adaptive scaler: runs once per second (after each profiler dump).
+    // Adaptive scaler + HUD + sonification — all run once per second.
     if (dumped) {
       const p95 = profiler.getFrameP95();
       const timeSinceResize = timestamp - lastResizeMs;
       const action = scalerDecide(p95, config.n, config.tier, timeSinceResize, duringRestart);
+      let scalerReason: string | undefined;
 
       if (action.kind === "shrink_n" || action.kind === "grow_n") {
         config.n = action.newN;
         lastResizeMs = timestamp;
+        scalerReason = action.kind;
         profiler.setConfig(config.backend, config.tier, config.n, config.k);
         console.log(`[scaler] ${action.kind}: n=${config.n} (tier=${config.tier} p95=${p95.toFixed(1)}ms)`);
         // TODO (browser): wasmBackend.resize(config)
+      }
+
+      // Corner HUD — update from profiler snapshot (not per-frame).
+      // Mobile: HUD is hidden (spec: no debug overlays on mobile).
+      if (!mobile) {
+        const snap = profiler.getLastSnapshot();
+        if (snap) {
+          hud.update({
+            fps:                  snap.fps,
+            n:                    config.n,
+            backend:              config.backend,
+            synapticEventsPerSec: snap.synapticEventsPerSec,
+            scalerReason,
+          });
+        }
+      }
+
+      // Sonification — update at 1/sec from profiler stats, off the hot path.
+      // Disabled on mobile (spec).
+      if (!mobile && sonification.enabled) {
+        const snap = profiler.getLastSnapshot();
+        if (snap && snap.ticksPerSec > 0) {
+          const fractions = deriveRegionFractions(
+            snap.spikesPerSec,
+            config.n,
+            snap.ticksPerSec,
+          );
+          const total = snap.spikesPerSec / (config.n * snap.ticksPerSec);
+          sonification.update(fractions, total);
+        }
       }
     }
 
@@ -248,7 +329,7 @@ async function boot(): Promise<void> {
 
   rafHandle = requestAnimationFrame(rafLoop);
 
-  console.log("[main] Phase 6 ready — CPU backend selectable; GPU bridge = browser TODO");
+  console.log("[main] Phase 7 ready — sonification, HUD, mobile profile applied; GPU bridge = browser TODO");
 }
 
 /**
@@ -398,8 +479,13 @@ function raySphereIntersect(
   return [origin[0]+dir[0]*t, origin[1]+dir[1]*t, origin[2]+dir[2]*t];
 }
 
-function resizeCanvas(canvas: HTMLCanvasElement): void {
-  const dpr = window.devicePixelRatio || 1;
+/**
+ * Set canvas resolution from CSS size × DPR × scale.
+ * Mobile profile uses scale=0.75 to reduce pixel fill cost (Phase 7 spec).
+ * Desktop uses scale=1.0 (full DPR).
+ */
+function resizeCanvas(canvas: HTMLCanvasElement, dprScale = 1.0): void {
+  const dpr = (window.devicePixelRatio || 1) * dprScale;
   canvas.width  = Math.floor(canvas.clientWidth  * dpr) || 800;
   canvas.height = Math.floor(canvas.clientHeight * dpr) || 600;
 }

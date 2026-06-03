@@ -27,7 +27,7 @@
     </style>
   </head>
   <body>
-    <!-- Top-left: speed controls (BV14). Top-right: backend toggle (BV12). -->
+    <!-- Top-left: speed controls (BV14). Top-right: backend toggle (BV12) + sound toggle (BV11). -->
     <div id="controls-top">
       <div id="speed-group" class="btn-group">
         <button data-speed="quarter">¼×</button>
@@ -35,18 +35,28 @@
         <button data-speed="normal" class="active">1×</button>
         <button data-speed="double">2×</button>
       </div>
-      <div id="backend-toggle" class="btn-group">
-        <button data-backend="gpu" class="active">GPU</button>
-        <!-- Phase 6: CPU backend (event-driven rayon worker) is selectable. -->
-        <button data-backend="cpu" title="CPU backend (event-driven, rayon)">CPU</button>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <!-- Sound toggle (BV11 — Phase 7): muted by default, opt-in. Hidden on mobile. -->
+        <button id="sound-toggle" title="Enable sound" style="background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.2);border-radius:6px;color:#fff;cursor:pointer;font-size:16px;padding:6px 10px;min-width:44px;min-height:44px;">🔇</button>
+        <div id="backend-toggle" class="btn-group">
+          <button data-backend="gpu" class="active">GPU</button>
+          <!-- Phase 6: CPU backend (event-driven rayon worker) is selectable. -->
+          <button data-backend="cpu" title="CPU backend (event-driven, rayon)">CPU</button>
+        </div>
       </div>
     </div>
 
     <!-- Full-bleed brain canvas — everything else overlaid via position:fixed -->
     <canvas id="brain-canvas"></canvas>
 
-    <!-- Bottom-center: brain-state presets (BV15). -->
+    <!-- Bottom-center: brain-state presets (BV15) + tier selector (BV3, BV23). -->
     <div id="controls-bottom">
+      <!-- Tier selector (BV3). Max label clarifies 10M is a best-case stretch (BV23). -->
+      <div id="tier-group" class="btn-group" style="margin-bottom:6px;">
+        <button data-tier="low"      title="Low — ~50k neurons (mobile/slow hardware)">Low</button>
+        <button data-tier="balanced" class="active" title="Balanced — ~200k neurons (typical desktop)">Balanced</button>
+        <button data-tier="max"      title="Max (up to 1M — up to 10M on high-end discrete GPU). 10M is a best-case discrete GPU target, not a promise.">Max</button>
+      </div>
       <div id="brain-state-group" class="btn-group">
         <button data-state="deep_sleep">deep sleep</button>
         <button data-state="relaxed">relaxed</button>
