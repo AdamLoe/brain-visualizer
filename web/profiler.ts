@@ -49,10 +49,15 @@ export class Profiler {
     this.framesThisWindow++;
   }
 
-  maybeDump(nowMs: number): void {
-    if (!this.started) return;
+  /**
+   * Dump one profiler snapshot per second to the console.
+   * Returns true when a dump was emitted (so the rAF loop can trigger the
+   * adaptive scaler exactly once per second).
+   */
+  maybeDump(nowMs: number): boolean {
+    if (!this.started) return false;
     const elapsedMs = nowMs - this.lastDumpMs;
-    if (elapsedMs < 1000) return;
+    if (elapsedMs < 1000) return false;
     const elapsedS = elapsedMs / 1000;
 
     const snapshot = {
@@ -74,6 +79,12 @@ export class Profiler {
     this.windowSyn = 0;
     this.framesThisWindow = 0;
     this.lastDumpMs = nowMs;
+    return true;
+  }
+
+  /** Return the p95 frame time from the rolling window (ms). Used by scaler. */
+  getFrameP95(): number {
+    return this.percentile(95);
   }
 
   private avg(): number {

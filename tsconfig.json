@@ -14,6 +14,6 @@
     "types": ["@webgpu/types"],
     "noEmit": true
   },
-  "include": ["web", "vite.config.ts"],
+  "include": ["web", "vite.config.ts", "vitest.config.ts"],
   "exclude": ["node_modules", "bench", "target", "pkg"]
 }

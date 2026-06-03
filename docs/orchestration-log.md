@@ -39,7 +39,7 @@ verification notes. Started 2026-06-03._
 | 2 GPU sim | complete | — | Real LIF on GPU (llvmpipe verified); indirect scatter, no per-tick readback; 64 tests pass; WGSL target==Rust target gate PASS; rates deep_sleep 0Hz / focused 12.4Hz / seizure 33Hz; browser/real-GPU 100k confirmation = manual TODO |
 | 3 GPU render | complete | — | offscreen render PASS: 48.6% non-black, all 3 region channels, stim confirmed |
 | 4 Near LOD | complete | — | GPU indirect cull+draw PASS; 321 neurons/2565 synapses emitted at close zoom; 0 overflow; 70 tests pass |
-| 5 Controls | pending | — | |
+| 5 Controls | complete | — | UI wired (speed/brain-state/backend buttons); excitability lerp; scaler activated; 22 TS tests pass (vitest); 70 cargo tests still pass; GPU bridge = browser TODO |
 | 6 CPU backend | pending | — | |
 | 7 Polish | pending | — | |
 
@@ -380,3 +380,89 @@ cell ids in a GPU buffer instead.
 - **Camera frustum planes**: derive from `camera.mvpMatrix()` (extract 6 planes from MVP rows). Add `FrustumUniforms { planes: array<vec4<f32>, 6> }` to near-LOD resources; upload before frustum-cull compute dispatch.
 - **LOD distance plumbing**: Add `lod_near_distance: f32` to a near-LOD uniform (or extend `RenderUniforms`). Far pass draws ALL N neurons; near pass should draw only neurons within frustum+radius.
 - **`GpuBindGroups.render_far/render_manifold`** are `Option<wgpu::BindGroup>` — always Some after full init. Phase 4 adds `render_near: Option<wgpu::BindGroup>` following the same pattern.
+
+### Phase 5 — Controls & Brain States UI (2026-06-03)
+
+**Built:**
+
+- **`web/controls.css`** (new): Fixed-position overlay CSS. `#controls-top` (top bar, flex space-between), `#controls-bottom` (bottom bar, flex center). `.btn-group` pill shape, `rgba(0,0,0,0.4)` dark background, `backdrop-filter: blur(4px)`. Active button: teal `rgba(80,200,220,0.35)` accent with inner glow border. Min 44×44 CSS px touch targets (iOS HIG). Brain-state buttons wrap via `flex-wrap: wrap` on narrow screens. Toast `#toast` element with fade-in/out via CSS transition. Narrow-screen media query at 480px tightens padding.
+
+- **`index.html`** (updated): Full control layout per spec. `#controls-top` contains `#speed-group` (¼×/½×/1×/2×; 1× default active) and `#backend-toggle` (GPU active; CPU has `disabled` attribute + `title="CPU backend lands in phase 6"`). `#brain-canvas` full-bleed canvas. `#controls-bottom` contains `#brain-state-group` (deep sleep/relaxed/focused/hyper/seizure; focused default active). `<div id="toast">` for transient messages. Viewport meta tag added. CSS linked via `<link rel="stylesheet">`.
+
+- **`web/controls.ts`** (rewritten from phase-1 stubs):
+  - `BRAIN_STATES` map (locked values per spec).
+  - `tickExcitability()` / `setExcitabilityForTest()` / `getCurrentExcitability()` — module-level lerp state (EXCITABILITY_LERP=0.08), callable and unit-testable without DOM.
+  - `ticksThisFrame()` — pure speed→ticks mapping (unchanged from Phase 1, now re-exported).
+  - `setBrainState(state)` — sets target excitability + DOM active-class.
+  - `setSpeed(preset, config)` — updates config + DOM.
+  - `setBackend(kind, config, restartFn)` — checks `backendAvailable()` (CPU returns false); shows toast + returns if unavailable; otherwise calls restartFn.
+  - `showToast(msg, durationMs)` — DOM toast helper.
+  - `scalerDecide(p95, currentN, tier, timeSinceResizeMs, duringRestart)` — **pure, testable** scaler decision function. Returns `{ kind: "none" | "shrink_n" | "grow_n", newN? }`. Never changes tier; clamps to `N_MIN[tier]` / `N_MAX[tier]`.
+  - `N_MIN` / `N_MAX` — per-tier bounds (exported, used by scalerDecide and tests).
+  - `isMobile()` — `/Mobi|Android/i` or `innerWidth < 768`.
+  - `Controls` class — backwards-compatible facade from Phase 1 preserved.
+
+- **`web/main.ts`** (updated):
+  - Mobile detection on boot; defaults `config.tier = "low"` on mobile.
+  - DOM click handlers wired for all three button groups (`#brain-state-group`, `#speed-group`, `#backend-toggle`). Disabled CPU button: belt-and-suspenders check + toast.
+  - `restartWithBackend(kind)` — full BV16 sequence: cancel rAF, `duringRestart=true`, log restart intent, update config + profiler, restart rAF loop. Wasm GPU backend destroy/reinit is a browser TODO (annotated).
+  - `tickExcitability()` called each frame in rAF loop; result ready to pass to `backend.tick(ticks, excitability)` (TODO when bridge lands).
+  - Phase 4 LOD plumbing preserved: `camera.cameraDistance()` and `camera.eye()` read each frame; `void`-annotated until wasm bridge wires them to `set_lod_camera_distance` and `render_full`.
+  - Cursor stimulation skipped on mobile (Phase 5 decision per spec).
+  - Adaptive scaler: runs once per `profiler.maybeDump()` (1/sec). Calls `scalerDecide()`, applies `config.n`, logs action, calls `backend.resize(config)` (TODO bridge).
+  - `SCALER_COOLDOWN` const declared before first use.
+
+- **`web/profiler.ts`** (updated):
+  - `maybeDump()` now returns `boolean` (true = dump emitted) so the rAF loop can trigger the scaler exactly once per second.
+  - `getFrameP95()` added — exposes the rolling p95 frame time for the scaler.
+
+- **`web/controls.test.ts`** (new): Vitest unit tests for pure logic — no DOM required:
+  - `ticksThisFrame`: 8 assertions covering all 4 speed presets and edge cases.
+  - `tickExcitability`: 5 tests — stays at target, per-frame lerp amount, convergence within 200 frames (deep_sleep↔seizure), never overshoots.
+  - `scalerDecide`: 12 tests — during restart, cooldown, shrink over budget, grow under budget, no-op in hysteresis band, clamp to N_MIN/N_MAX per tier, floor/ceiling no-op, tier bounds respected for low/max.
+
+- **`vitest.config.ts`** (new): Minimal vitest config. `environment: "node"`, `include: ["web/**/*.test.ts"]`.
+
+- **`tsconfig.json`** (updated): Added `vitest.config.ts` to `include` so it type-checks.
+
+- **`package.json`** (updated): Added `"test": "vitest run"` script; `vitest` in devDependencies.
+
+**Verified:**
+- `tsc --noEmit` — clean (0 errors, 0 warnings).
+- `vite build` — clean. Output: `dist/assets/index-*.css` 1.59 kB, `index-*.js` 22.81 kB, wasm 44.43 kB.
+- `npx vitest run` — **22 tests pass** (0 fail). Tests: 8 ticksThisFrame + 5 tickExcitability + 12 scalerDecide + 2 BRAIN_STATE/N bounds checks.
+- `cargo build` (host) — clean, 0 warnings.
+- `cargo build --target wasm32-unknown-unknown` — clean.
+- `cargo test` — **70 pass** (67 unit + 3 integration). All Phase 1–4 tests still pass.
+
+**Control behavior validation (no browser):**
+The DOM-touching paths (`setBrainState`, `setSpeed`, `showToast`) call `document.querySelector*` which is absent in Node; these were intentionally NOT called from unit tests. Validation approach:
+1. `tsc --noEmit` confirms all imported types are correct and all call-sites match their signatures.
+2. Unit tests call `setExcitabilityForTest` + `tickExcitability` + `scalerDecide` directly (no DOM) and verify results. This exercises the core state machine.
+3. DOM wiring is straightforward `addEventListener("click", ...)` + `classList.toggle("active", ...)` — no logic beyond routing to the pure functions. Correctness is checked by reading the TypeScript and confirmed clean by `tsc`.
+
+**Adaptive scaler — location and behaviour:**
+- Decision logic: `scalerDecide()` in `web/controls.ts` — a pure function, no side effects, fully unit-tested.
+- Adjustment order (doc priority): currently only `N` is adjusted (near-LOD disable and render-resolution reduction are Phase 7 optional cost centres not yet wired). The shrink action is labelled `shrink_n` to preserve slot for higher-priority actions.
+- Operates within tier bounds (`N_MIN[tier]` to `N_MAX[tier]`) with 3-second cooldown and `duringRestart` guard. Never changes tier.
+- Applied in `rafLoop` after each profiler dump (≈1/sec). Calls `backend.resize(config)` — annotated as browser TODO until wasm bridge is wired.
+
+**Deviations from spec:**
+- **OD18 — Scaler priority order deferred**: The spec says "disable near-LOD → reduce render resolution → reduce N". In Phase 5 only `N` adjustment is exposed without a restart (near-LOD toggle and canvas DPR scaling require additional plumbing). The `scalerDecide` return type uses a `ScalerAction` discriminated union so Phase 7 can add `disable_near_lod` and `reduce_resolution` actions as higher-priority steps before `shrink_n`.
+- **OD19 — `setBackend` is sync+async dual**: The module-level `setBackend()` is `async` (takes a restartFn). The `Controls` class facade keeps its sync API for backwards compat. Main.ts calls the DOM handler directly with an inline `void restartWithBackend(kind)`.
+- **OD20 — CSS in `web/` folder**: `controls.css` lives at `web/controls.css` (not at root). Vite picks it up via `<link href="/web/controls.css">` in index.html.
+
+**Manual / browser TODOs (cannot verify headless):**
+1. Wire browser WebGPU context to wasm GpuBackend (Phase 3 OD11) — controls are ready; `setBackend` / `restartWithBackend` will call `wasmBackend.destroy()` + reinit once the bridge lands.
+2. Call `wasmBackend.tick(ticks, excitability)` in rafLoop (currently voided).
+3. Call `wasmBackend.set_lod_camera_distance(camera.cameraDistance())` and `wasmBackend.render_full(camera.eye(), ...)` in rafLoop (Phase 4 plumbing — voided until bridge lands).
+4. Call `wasmBackend.resize(config)` in the adaptive scaler action handler.
+5. Confirm button click → active-class visual change → brain state/speed visible change in browser (interaction feel = manual TODO).
+6. Mobile device testing: touch orbit/pinch, Low-tier default, no cursor stimulation.
+7. Tune `point_radius` and `glow_tau` visually on real hardware.
+
+**For Phase 6 (CPU backend) — must know:**
+- `backendAvailable("cpu")` in `web/controls.ts` currently returns `false`. Phase 6 must change this to `true` (or make it a runtime capability check via the wasm module export).
+- The CPU button in `index.html` has `disabled` attribute — Phase 6 must remove it (or toggle it dynamically when `backendAvailable("cpu")` becomes true).
+- `restartWithBackend(kind)` in `main.ts` is a full teardown + reinit loop (BV16). When the CPU backend is real, it will call `wasmBackend.destroy()` (releases GPU buffers) then `WasmCpuBackend.create(config)` with the same `config.seed`. The `profiler.setConfig(kind, ...)` call is already in the restart path.
+- The `Controls.setBackend(kind)` facade and the DOM handler both route through `backendAvailable` — Phase 6 only needs to update that one function (plus remove the `disabled` attribute) to unlock the CPU path end-to-end.

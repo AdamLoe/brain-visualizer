@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Brain Visualizer</title>
     <!--
       coi-serviceworker MUST be registered before any other script so it can
@@ -10,6 +10,7 @@
       hosts that can't set headers, e.g. GitHub Pages). gzuidhof shim.
     -->
     <script src="/coi-serviceworker.js"></script>
+    <link rel="stylesheet" href="/web/controls.css" />
     <style>
       html,
       body {
@@ -26,7 +27,38 @@
     </style>
   </head>
   <body>
+    <!-- Top-left: speed controls (BV14). Top-right: backend toggle (BV12). -->
+    <div id="controls-top">
+      <div id="speed-group" class="btn-group">
+        <button data-speed="quarter">¼×</button>
+        <button data-speed="half">½×</button>
+        <button data-speed="normal" class="active">1×</button>
+        <button data-speed="double">2×</button>
+      </div>
+      <div id="backend-toggle" class="btn-group">
+        <button data-backend="gpu" class="active">GPU</button>
+        <!-- CPU disabled until Phase 6; tooltip explains why -->
+        <button data-backend="cpu" disabled title="CPU backend lands in phase 6">CPU</button>
+      </div>
+    </div>
+
+    <!-- Full-bleed brain canvas — everything else overlaid via position:fixed -->
     <canvas id="brain-canvas"></canvas>
+
+    <!-- Bottom-center: brain-state presets (BV15). -->
+    <div id="controls-bottom">
+      <div id="brain-state-group" class="btn-group">
+        <button data-state="deep_sleep">deep sleep</button>
+        <button data-state="relaxed">relaxed</button>
+        <button data-state="focused" class="active">focused</button>
+        <button data-state="hyperstimulated">hyper</button>
+        <button data-state="seizure">seizure</button>
+      </div>
+    </div>
+
+    <!-- Toast notification (used by controls.ts showToast) -->
+    <div id="toast"></div>
+
     <script type="module" src="/web/main.ts"></script>
   </body>
 </html>
