@@ -5,9 +5,12 @@ Cargo.lock
 
 # Node / web
 node_modules
-web/dist
 dist
 *.log
+
+# Playwright e2e output
+test-results
+**/e2e/results.json
 
 # wasm-pack output
 /pkg

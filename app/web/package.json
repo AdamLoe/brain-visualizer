@@ -1,0 +1,28 @@
+{
+  "name": "brain-visualizer",
+  "version": "0.1.2",
+  "private": true,
+  "type": "module",
+  "description": "Hardware-adaptive spiking-neural-network cortical visualizer",
+  "scripts": {
+    "wasm": "wasm-pack build ../crates/brain-visualizer --target web",
+    "wasm:dev": "wasm-pack build ../crates/brain-visualizer --target web --dev",
+    "build": "npm run wasm && tsc --noEmit && vite build",
+    "dev": "npm run wasm:dev && vite",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "test:e2e:server": "USE_WEBSERVER=1 playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "@types/node": "^25.9.1",
+    "@webgpu/types": "^0.1.40",
+    "typescript": "^5.9.3",
+    "vite": "^5.4.0",
+    "vite-plugin-top-level-await": "^1.4.4",
+    "vite-plugin-wasm": "^3.4.0",
+    "vitest": "^3.2.6"
+  }
+}

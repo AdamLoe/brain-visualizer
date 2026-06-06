@@ -1,0 +1,156 @@
+{
+  "agent_docs_version": "v1",
+  "note": "Ownership map as structured data. concept -> owner doc (+ allowed referencers). Holds NO code anchors (those live in the docs themselves). Owner/reference paths are relative to docs/. The prose rule ('edit the owner; link, don't redefine') is generic and lives in the global authoring-rules.",
+  "concepts": [
+    {
+      "id": "manifold",
+      "summary": "procedural cortical surface (icosphere subdivision, gyrification noise, neuron placement), region assignment (input/assoc/output, uniform over volume), per-neuron morphology geometry generation",
+      "owner": "architecture/manifold.md",
+      "references": ["architecture/data-model.md", "architecture/simulation.md", "architecture/gpu-rendering.md"]
+    },
+    {
+      "id": "data-model",
+      "summary": "SoA GPU buffer layout (pos_x/y/z, v, I, last_spike), packed last_spike word (HAS_SPIKED bit + 7-bit type + 24-bit tick), shared mask/tick_diff helpers, fixed-point i32 current accumulator (S=4096)",
+      "owner": "architecture/data-model.md",
+      "references": ["architecture/simulation.md", "architecture/connectivity.md", "architecture/gpu-backend.md", "architecture/cpu-backend.md"]
+    },
+    {
+      "id": "connectivity",
+      "summary": "procedural/implicit connectivity (no edge list), target/weight pure functions, integer spatial grid, per-tier K, anterior feed-forward bias, the 32-bit hash primitive + golden-vector gate",
+      "owner": "architecture/connectivity.md",
+      "references": ["architecture/simulation.md", "architecture/manifold.md", "architecture/active-edges.md"]
+    },
+    {
+      "id": "simulation",
+      "summary": "LIF dynamics (integrate/threshold/refractory/scatter), E/I balance, ambient I_ext drive, excitability/SOC, per-neuron heterogeneity, weight normalization, input modes, cursor stimulation; the SimBackend/SimConfig/TickStats/VisualSettings boundary contract",
+      "owner": "architecture/simulation.md",
+      "references": ["architecture/gpu-backend.md", "architecture/cpu-backend.md", "architecture/connectivity.md", "architecture/data-model.md", "architecture/profiling.md"]
+    },
+    {
+      "id": "gpu-backend",
+      "summary": "GpuBackend per-tick compute frame graph + render-pass ordering, GpuResources/GpuPipelines lifecycle (persistent buffers, bind_groups_dirty, resize guards), GPU-driven indirect scatter dispatch, async Idle/Pending staging readback",
+      "owner": "architecture/gpu-backend.md",
+      "references": ["architecture/simulation.md", "architecture/gpu-rendering.md", "architecture/active-edges.md", "architecture/profiling.md"]
+    },
+    {
+      "id": "gpu-rendering",
+      "summary": "render LOD scheme (far additive glow billboards, live per-neuron morphology pass, retired near-sphere/cylinder behind DRAW_LEGACY_*), frustum-cull→indirect-draw, manifold surface render, HDR/bloom, visual mode enums (color_by/neuron_visibility/signal_source/surface)",
+      "owner": "architecture/gpu-rendering.md",
+      "references": ["architecture/gpu-backend.md", "architecture/active-edges.md", "architecture/manifold.md", "architecture/simulation.md"]
+    },
+    {
+      "id": "active-edges",
+      "summary": "the retired active-edge ribbon subsystem (EdgeEvent emit-on-spike, ring buffer + budget, GPU-side Bezier ribbon geometry); kept but guarded off by DRAW_LEGACY_RIBBONS — morphology superseded it",
+      "owner": "architecture/active-edges.md",
+      "references": ["architecture/gpu-rendering.md", "architecture/gpu-backend.md", "architecture/connectivity.md"]
+    },
+    {
+      "id": "cpu-backend",
+      "summary": "the parked CPU/WebGL2 backend: event-driven active-list rayon LIF (cpu/core.rs), CpuBackend, coordinator Web Worker + SharedArrayBuffer, WebGL2 instanced render, cpu-threads feature; code kept but unwired in V2",
+      "owner": "architecture/cpu-backend.md",
+      "references": ["architecture/simulation.md", "architecture/data-model.md", "architecture/build-and-deploy.md"]
+    },
+    {
+      "id": "web-frontend",
+      "summary": "the TS app shell: main.ts orchestrator + rAF loop + wasm call boundary, camera (orbit/zoom MVP), controls (brain-state presets, speed, stimulation), renderer.ts (device/canvas/render target), types.ts (AppConfig/DEFAULT_CONFIG), sonification, public HUD shell, natural silent-start",
+      "owner": "architecture/web-frontend.md",
+      "references": ["architecture/simulation.md", "architecture/scaling.md", "architecture/dev-panel.md", "architecture/profiling.md"]
+    },
+    {
+      "id": "wasm-boundary",
+      "summary": "the wasm_bindgen entry surface (lib.rs): WasmGpuBackend.create lifecycle, the JS-facing tick/render/settings API, the rAF &mut reentrancy discipline, what crosses wasm↔JS (bridge mechanics, not the data-layout contracts)",
+      "owner": "architecture/web-frontend.md",
+      "references": ["architecture/simulation.md", "architecture/gpu-backend.md", "architecture/dev-panel.md"]
+    },
+    {
+      "id": "dev-panel",
+      "summary": "the hidden dev panel (open triggers, tabs, impact-dot system from SETTING_IMPACT), settings persistence contract (versioned bv2_settings_v1 localStorage, public/dev split, merge-over-defaults, no preset manager), the VisualSettings Float32Array index contract",
+      "owner": "architecture/dev-panel.md",
+      "references": ["architecture/profiling.md", "architecture/web-frontend.md", "architecture/simulation.md"]
+    },
+    {
+      "id": "profiling",
+      "summary": "perf instrumentation: profiler.rs ring + per-second JSON, web/profiler.ts + corner HUD, the GPU metrics.wgsl reduction pass + non-blocking Idle/Pending readback, parseMetrics layout, CPU-side branching ratio; headline = synaptic events/sec",
+      "owner": "architecture/profiling.md",
+      "references": ["architecture/dev-panel.md", "architecture/gpu-backend.md", "architecture/web-frontend.md"]
+    },
+    {
+      "id": "scaling",
+      "summary": "adaptive scaler (within-tier N/K/resolution feedback, hysteresis, adaptiveScalerEnabled gate), difficulty tiers, gpu_limits.rs adapter-limit→caps, the 1M-default/10M-gated cap policy",
+      "owner": "architecture/scaling.md",
+      "references": ["architecture/web-frontend.md", "architecture/gpu-backend.md", "architecture/connectivity.md"]
+    },
+    {
+      "id": "build-and-deploy",
+      "summary": "build pipeline (wasm-pack→tsc→vite), cpu-threads feature + threaded-wasm recipe, COOP/COEP (coi-serviceworker shim), the examples as offline verification surface, the test gates, llvmpipe offline validation",
+      "owner": "architecture/build-and-deploy.md",
+      "references": ["agent-context/testing-how-to.md", "agent-context/dev-loop.md", "architecture/cpu-backend.md"]
+    },
+    {
+      "id": "dec-scope",
+      "summary": "from-scratch point-LIF, no graphics engine, SNN engine choice, beauty-first ~10k scale",
+      "owner": "decisions/scope.md",
+      "references": []
+    },
+    {
+      "id": "dec-backends",
+      "summary": "two interchangeable backends, toggle UX, full-restart-same-seed, CPU coordinator worker, CPU parked for V2",
+      "owner": "decisions/backends.md",
+      "references": []
+    },
+    {
+      "id": "dec-data-layout",
+      "summary": "packed last_spike word, fixed-point scale S=2^12 + overflow policy, CPU scatter atomics",
+      "owner": "decisions/data-layout.md",
+      "references": []
+    },
+    {
+      "id": "dec-connectivity",
+      "summary": "procedural no-edge-list, per-tier K, 32-bit hash with golden vectors",
+      "owner": "decisions/connectivity.md",
+      "references": []
+    },
+    {
+      "id": "dec-dynamics",
+      "summary": "SOC/avalanche target, region topology + ambient drive, heterogeneity determinism, weight norm default sqrt_k, input modes",
+      "owner": "decisions/dynamics.md",
+      "references": []
+    },
+    {
+      "id": "dec-manifold",
+      "summary": "procedurally folded brain surface, region assignment approach, per-neuron morphology geometry",
+      "owner": "decisions/manifold.md",
+      "references": []
+    },
+    {
+      "id": "dec-rendering",
+      "summary": "LOD glow→bodies, active-connections-only-by-default, morphology supersedes ribbons/cylinders",
+      "owner": "decisions/rendering.md",
+      "references": []
+    },
+    {
+      "id": "dec-scaling",
+      "summary": "three tiers built+benchmarked, K as a per-tier scaler axis, 1M-default/10M-gated honest adaptation",
+      "owner": "decisions/scaling.md",
+      "references": []
+    },
+    {
+      "id": "dec-interaction",
+      "summary": "pretty-toy interaction model, natural start (no scripted intro), sonification opt-in, speed presets, brain-state presets",
+      "owner": "decisions/interaction.md",
+      "references": []
+    },
+    {
+      "id": "dec-profiling",
+      "summary": "first-class profiling + corner HUD, periodic GPU reduction + async readback, cheap hot-loop counters",
+      "owner": "decisions/profiling.md",
+      "references": []
+    },
+    {
+      "id": "dec-dev-tooling",
+      "summary": "hidden dev panel + impact-dot metadata, versioned localStorage, no preset manager",
+      "owner": "decisions/dev-tooling.md",
+      "references": []
+    }
+  ]
+}

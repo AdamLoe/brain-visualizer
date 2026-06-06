@@ -1,0 +1,10 @@
+# Workspace root. The repo root holds only docs/, app/, README, and dotfiles;
+# all Rust code lives under crates/. Run cargo from here (app/).
+[workspace]
+resolver = "2"
+members = ["crates/brain-visualizer"]
+
+# Cargo only honours profiles defined at the workspace root; a [profile.*] in a
+# member crate is ignored (with a warning). Keep the release profile here.
+[profile.release]
+opt-level = 3

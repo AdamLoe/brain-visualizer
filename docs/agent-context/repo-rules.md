@@ -1,0 +1,28 @@
+# Repo rules
+
+## When does this apply
+
+You're committing, staging, or about to do something hard to reverse. The
+generic repo discipline is in the global kit
+([`~/.claude/agent-docs/v1/rules/repo-rules.md`](~/.claude/agent-docs/v1/rules/repo-rules.md));
+below is what's specific to this repo.
+
+## App-specific
+
+- **Run the gates before committing.** `cargo test`, `npm run typecheck`,
+  `npm test` — see [`testing-how-to.md`](testing-how-to.md).
+- **Commit code + docs together.** A change to an owned surface updates its
+  architecture doc in the same PR ([`maintaining-docs.md`](maintaining-docs.md)).
+- **Keep the project extractable.** The visualizer is developed inside the
+  `adamloe.com` repo for now and will be extracted as a folder move — all
+  visualizer source, docs, build files, and the COOP/COEP shim stay
+  self-contained under the project root. Don't reach into site-level files.
+- **Don't lock llvmpipe perf numbers into docs** as if they were GPU benchmarks
+  ([`testing-how-to.md`](testing-how-to.md)).
+- Generated artifacts (`pkg/`, `dist/`, `target/`, `node_modules/`,
+  `test-results/`) are not committed.
+
+## See also
+
+- [`~/.claude/agent-docs/v1/rules/repo-rules.md`](~/.claude/agent-docs/v1/rules/repo-rules.md) — generic rules.
+- [`testing-how-to.md`](testing-how-to.md), [`maintaining-docs.md`](maintaining-docs.md), [`index.md`](index.md).
