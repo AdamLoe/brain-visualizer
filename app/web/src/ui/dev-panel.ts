@@ -383,9 +383,6 @@ export class DevPanel {
 
     f.sparkline.textContent = voltageSparkline(m.voltageHistogram);
 
-    // V2 Phase C: also refresh Dynamics tab fields (cheap text writes).
-    this._updateDynamicsFields(m);
-
     // UX overhaul: update System section if sys provided.
     if (sys !== undefined) {
       if (f.sysNeurons)     f.sysNeurons.textContent     = fmtInt(sys.n);
@@ -1221,8 +1218,8 @@ export class DevPanel {
       decimals: 2,
     }, s.inactiveNeuronOpacity, "live");
 
-    // ── Connections (procedural neuron morphology) — Morphology controls ──────
-    root.appendChild(this._sep("Connections"));
+    // ── Morphology (procedural neuron connectivity) ─────────────────────────
+    root.appendChild(this._sep("Morphology"));
 
     // connection_layer: Off / On. On = resting structure (at resting opacity) +
     // live signal flow racing outward from each firing neuron's soma.
@@ -1282,7 +1279,7 @@ export class DevPanel {
       min: 0, max: 0.5, step: 0.01,
       decimals: 2,
       changeOnly: true,
-    }, s.connectionCurveLift, "live");
+    }, s.connectionCurveLift, "renderer-rebuild");
 
     // ── Post (bloom on by default; morphology glow blooms out of the box) ──────
     root.appendChild(this._sep("Post"));

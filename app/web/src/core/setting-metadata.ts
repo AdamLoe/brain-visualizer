@@ -32,7 +32,7 @@ export const SETTING_IMPACT: Record<keyof VisualizerSettings, SettingImpact> = {
   inactiveNeuronOpacity:    "live",
   voltageGlowStrength:      "live",
   connectionVisualWidth:    "live", // Morphology: branch-width multiplier (live)
-  connectionCurveLift:      "live", // Morphology: live, but regenerates geometry (applies on release)
+  connectionCurveLift:      "renderer-rebuild", // Morphology: regenerates geometry on apply/release
   connectionLightNext:      "live",
   connectionLightPast:      "live",
   bloomStrength:            "live",

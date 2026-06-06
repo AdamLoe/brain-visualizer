@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-04
+last_updated:  2026-06-06
 ---
 
 # Cortical Manifold
@@ -85,39 +85,61 @@ for ambient drive. **Do not reorder the `RegionKind` variants** without updating
 
 ## Neuron morphology geometry
 
-`crates/brain-visualizer/src/sim/morphology.rs → generate` builds a flat list of `MorphSegment` records,
-one per line segment, at `initialize()` time. Each neuron gets:
+`crates/brain-visualizer/src/sim/morphology.rs → generate` builds a flat list of
+`MorphSegment` records, one per line segment, at `initialize()` time. The
+generator is driven by `MorphologyParams::locked_default()` and emits a
+matching `MorphologyStats` profile so review artifacts can read facts without
+scraping logs.
 
-- **Dendrites** (kind 0): 3–5 primary branches, each bifurcating once, radiating
-  outward from the soma. Reach is randomized per branch in the
-  `DENDRITE_REACH_LO..DENDRITE_REACH_HI` band.
-- **Axon arbor** (kind 1): one branch per **all K** outgoing connections (not a
-  5-branch subset), each routing toward a real synaptic target drawn from the
-  same connectivity rule the sim uses — so the drawn axons match the actual
-  synapses the renderer lights. Each branch is a curved poly-line of
-  `AXON_SEGS_PER_BRANCH` (6) segments; arc height scales with the live
-  `connection_curve_lift` setting and is amplified by a `BOW_GAIN` so the bow
-  reads at the default lift (and straightens fully at lift 0). Each axon segment
-  records its `target_id`; dendrites record `target_id = neuron_id` (self).
+Each neuron now gets a deterministic shared arbor, not K independent sin-bow
+curves:
 
-`MorphSegment` is 48 bytes, std430, 16-aligned. The field order is a hard
-contract between Rust and WGSL — see `crates/brain-visualizer/src/sim/morphology.rs → MorphSegment`
-and the matching WGSL struct in `render_morphology.wgsl`. The final 16-byte row
-is `neuron_id, path_len, kind, target_id` (the trailing `_pad` slot was
-repurposed to `target_id`).
+- **Dendrites** (kind 0): a stable local tree of primary branches and twigs
+  around the soma, used as visible landing context for sockets. Reach, count,
+  and taper come from named morphology budgets rather than hidden constants.
+- **Shared root / cluster branches** (kind 1): a source-driven trunk and 2-5
+  deterministic cluster branches fan out from the soma before the terminal
+  twigs. These shared segments use the source neuron id as their `target_id` so
+  upstream lighting stays source-only on shared paths.
+- **Terminal twigs** (kind 1): one terminal twig per unique non-self target,
+  routed to deterministic sockets near visible dendrite anchors. Terminal twigs
+  carry the real target neuron id in `target_id`, so the renderer can light the
+  actual synaptic endpoint.
 
-`path_len` is the cumulative path length from the soma to endpoint `a`, retained
-in the struct but no longer driving render timing (the connection-lighting model
-keys off spikes, not path position — see [`gpu-rendering.md`](gpu-rendering.md)).
-A test in `crates/brain-visualizer/src/sim/morphology.rs → segment_layout_is_48_bytes` guards the size.
-All hash inputs use `crates/brain-visualizer/src/connectivity/hash.rs → mix_key, hash32` with salts
-defined in `crates/brain-visualizer/src/sim/morphology.rs → salt` — disjoint from connectivity salts so
-morphology draws never collide with target/weight draws.
+v0.2.1 narrows the locked defaults without changing the arbor grammar: dendrite
+primaries are now 3..4 with 0.035-0.058 reach, the axon root radius fraction is
+0.66, trunk/cluster/twig radius fractions are 0.62/0.44/0.16, trunk and
+cluster split fractions are 0.32 and 0.62, terminal twigs sample with 3
+segments, and taper steepens to 2.1. The result is the same contract with less
+bright lattice clutter and better far-view directionality.
+
+Source-type bytes are built from the same region+seed contract used for
+production connectivity, so morphology target resolution matches the sim's real
+`target_with_cell` rule. Duplicate and self targets are filtered before
+generation, unique-target coverage is the acceptance target, and the shared
+arbor is budgeted with named segment classes plus slack rather than an opaque
+fixed cap.
+
+`MorphSegment` remains 48 bytes, std430, 16-aligned. The field order is still a
+hard contract between Rust and WGSL — see
+`crates/brain-visualizer/src/sim/morphology.rs → MorphSegment` and the matching
+WGSL struct in `render_morphology.wgsl`. The final 16-byte row is
+`neuron_id, path_len, kind, target_id`, and no layout change shipped for v0.2.0.
+
+`path_len` is the cumulative path length from the soma to endpoint `a`,
+retained in the struct but no longer driving render timing. The
+connection-lighting model keys off spikes, not path position — see
+[`gpu-rendering.md`](gpu-rendering.md). A test in
+`crates/brain-visualizer/src/sim/morphology.rs → segment_layout_is_48_bytes`
+guards the size. All hash inputs use
+`crates/brain-visualizer/src/connectivity/hash.rs → mix_key, hash32` with salts
+defined in `crates/brain-visualizer/src/sim/morphology.rs → salt` so morphology
+draws stay disjoint from connectivity target/weight draws.
 
 The buffer cap is `n * max_segs_per_neuron(k)`, where the per-neuron cap is
-derived from K (`crates/brain-visualizer/src/sim/morphology.rs → max_segs_per_neuron`:
-`DENDRITE_MAX + k * AXON_SEGS_PER_BRANCH + slack`) rather than a fixed constant,
-since coverage now scales with K. If the cap is hit, the excess is counted in
+derived from named dendrite/trunk/cluster/twig budgets plus slack
+(`crates/brain-visualizer/src/sim/morphology.rs → max_segs_per_neuron`) rather
+than a fixed constant. If the cap is hit, the excess is counted in
 `Morphology::dropped` and printed; no silent truncation.
 
 ## Rendering
@@ -128,17 +150,18 @@ shape reads through the glow layer. Gated by the `surface` setting
 (0=off, 1=dim, 2=normal); when off the pass is skipped entirely on the CPU side.
 Controlled by `surface_opacity` and `surface_mode` uniforms.
 
-**Neuron morphology** (`crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl`): instanced
-draw, one instance per `MorphSegment`, 6 vertices per instance forming a
-camera-facing tapered quad. The `last_spike` storage buffer is read per instance
-to drive whole-connection spike lighting (no traveling pulse): when a neuron
-fires its connections light instantly and fade with the same
-`exp(-tick_diff/glow_tau)` curve as the far-glow dot. Resting structure is drawn
-at `base_brightness` (the `morph_resting_opacity` setting); setting it to zero
-hides resting structure and shows only lit connections. Axon color is E/I-tinted
-by default or region-tinted when `color_by == 0`. Additive blending, no depth
-write, bloom-friendly. The lighting model (downstream/upstream toggles, τ fade)
-is owned by [`gpu-rendering.md`](gpu-rendering.md).
+**Neuron morphology** (`crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl`):
+instanced draw, one instance per `MorphSegment`, 6 vertices per instance
+forming a camera-facing tapered quad. The `last_spike` storage buffer is read
+per instance to drive whole-connection spike lighting for source-driven shared
+segments: when a neuron fires, its structure and downstream twigs light
+instantly and fade with the same `exp(-tick_diff/glow_tau)` curve as the
+far-glow dot. Resting structure is drawn at `base_brightness` (the
+`morph_resting_opacity` setting); setting it to zero hides resting structure and
+shows only lit connections. Axon color is E/I-tinted by default or region-tinted
+when `color_by == 0`. Additive blending, no depth write, bloom-friendly. The
+lighting model (downstream/source lighting and terminal-only upstream semantics
+for shared paths) is owned by [`gpu-rendering.md`](gpu-rendering.md).
 
 The `crates/brain-visualizer/examples/morph_view.rs` harness exercises the full pipeline: N=1200/K=16,
 250 warm-up ticks, three camera distances, plus a `morph_resting_opacity=0` frame
@@ -150,10 +173,13 @@ to verify the lit-connections-only look.
   currently describes volumetric placement — the code wins).
 - `assign_regions` is changed to use the anterior–posterior axis for spatial
   blocking instead of the current hash-shuffle.
+- `MorphologyParams`, `MorphologyStats`, or the source-type bytes contract
+  change.
 - `MorphSegment` field order or size changes (update the layout table above and
   cross-check `render_morphology.wgsl`).
 - `GyrifyParams` defaults change (the gyri/sulci frequencies and amplitudes).
-- `max_segs_per_neuron` or the segment-cap policy changes, or axon coverage stops being all-K.
+- `max_segs_per_neuron` or the segment-cap policy changes, or unique-target
+  terminal coverage stops being the rendered contract.
 - The `surface` or `connection_layer` setting semantics change.
 
 ## See also

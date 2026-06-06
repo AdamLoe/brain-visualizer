@@ -1,8 +1,8 @@
 ---
-status:        draft
+status:        shipped
 owner:         adamg
 last_updated:  2026-06-06
-okay_to_delete: false
+okay_to_delete: true
 long_lived:    false
 owning_docs:
   - architecture/manifold.md
@@ -305,6 +305,21 @@ Route durable content into:
   paths.
 - `decisions/dev-tooling.md` / `decisions/profiling.md` - only if the shipped
   settings/profiling shape creates new durable rationale.
+
+## Ship-time notes
+
+v0.2.0 shipped with the accepted morphology shape:
+
+- `MorphologyParams::locked_default()` drives generation.
+- `MorphologyStats` / artifact JSON capture review facts outside the always-on
+  profiler.
+- Source-type bytes come from the region+seed production contract.
+- The shared arbor uses deterministic sockets, shared root/cluster branches,
+  and terminal twigs for unique non-self targets.
+- `MorphSegment` stays 48 bytes and the WGSL layout does not change.
+- Hidden dev-panel Rendering consolidates the live Morphology controls only; no
+  structural generator params were promoted into settings.
+- Package/crate versions are `0.2.0`.
 
 ## See also
 

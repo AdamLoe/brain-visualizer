@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-04
+last_updated:  2026-06-06
 ---
 
 # Profiling
@@ -10,7 +10,9 @@ First-class performance instrumentation that feeds both a small public corner
 HUD and the dev panel's Monitor/Dynamics tabs. The design principle is:
 **zero-cost in the hot loop** — only cheap counters accumulate per tick; all
 heavier work (GPU reduction, CPU aggregation, JSON dump) is deferred and
-amortised.
+amortised. The morphology review harness (`morph_view`) stays outside that
+always-on runtime profiler: it records build/review stats and artifact metadata,
+not live per-frame metrics.
 
 ## What it owns
 
@@ -22,6 +24,7 @@ amortised.
 - Async staging readback state machine — `crates/brain-visualizer/src/sim/gpu/mod.rs → MetricsReadState`
 - `parseMetrics` layout mapping — `web/src/core/settings.ts → parseMetrics, METRICS_LAYOUT`
 - Branching-ratio rolling history — `crates/brain-visualizer/src/sim/gpu/mod.rs` (`METRICS_HISTORY_LEN = 64`)
+- Morphology build/review stats and artifact JSON — `crates/brain-visualizer/examples/morph_view.rs`
 
 ## What it does NOT own
 
@@ -134,6 +137,19 @@ successive spike-count samples averaged over the window, approximating the
 avalanche branching parameter σ. The dev panel's Dynamics tab classifies σ
 into subcritical (< 0.9) / critical (0.9–1.1) / supercritical (> 1.1) bands.
 
+## Morphology review stats
+
+`crates/brain-visualizer/examples/morph_view.rs` writes artifact-only
+statistics for review runs, including the morphology config snapshot, visual
+settings snapshot, build timings, segment budget usage, unique-target coverage,
+socket/terminal distance bands, and render-artifact paths. These stats are not
+part of the always-on profiler and do not feed the HUD.
+
+On native targets the harness can time morphology generation with `Instant`.
+Under browser WASM that timing path reads as zero because native `Instant` is
+not available there; the artifact still records the run and its output paths,
+but the timing field is not comparable to native runs.
+
 ## Update when
 
 - `METRICS_SLOT_COUNT` changes or the slot layout in `metrics.wgsl` changes
@@ -144,6 +160,7 @@ into subcritical (< 0.9) / critical (0.9–1.1) / supercritical (> 1.1) bands.
   `parseMetrics`, and the `Metrics` interface).
 - The profiler dump JSON schema changes (`crates/brain-visualizer/src/profiler.rs → ProfileSnapshot`
   and `web/src/render/profiler.ts → ProfileSnapshot` must stay in sync).
+- Morphology review artifact contents or timing sources change.
 
 ## See also
 

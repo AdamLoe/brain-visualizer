@@ -1,8 +1,8 @@
 ---
-status:        draft
+status:        shipped
 owner:         adamg
 last_updated:  2026-06-06
-okay_to_delete: false
+okay_to_delete: true
 long_lived:    false
 owning_docs:
   - architecture/manifold.md
@@ -33,30 +33,50 @@ and human review decisions in
 [`procedural-cell-rework-orchestration.md`](procedural-cell-rework-orchestration.md)
 so this roadmap stays short enough to route a fresh chat.
 
-Current package version is **0.1.2**. This rework starts at **0.2.0** because it
-changes the homepage centerpiece visual, not just a patch-level setting.
+Current package version is **0.2.1**. v0.2.0 shipped the morphology shape
+change, and v0.2.1 shipped the narrow readability/tuning patch from that
+baseline.
 
 ## Version Order
 
 1. **v0.2.0 - Axon arbor foundation.**
-   Ship the meaningful visual change through a settings/profiling-first path:
-   morphology parameter surface and artifact stats first, real source-type
-   target resolution, deterministic branch grammar, shared trunks/cluster
-   branches, terminal twigs for unique non-self targets, dendrite landing
-   sockets, a hard segment budget, and one consolidated hidden dev-panel
-   Morphology settings group at the end. See
+   Shipped. The release delivered the settings/profiling-first path:
+   morphology parameter surface and artifact stats, real source-type target
+   resolution, deterministic branch grammar, shared trunks/cluster branches,
+   terminal twigs for unique non-self targets, dendrite landing sockets, a hard
+   segment budget, and one consolidated hidden dev-panel Morphology settings
+   group. See
    [`procedural-cell-rework-0.2.0-axon-arbor.md`](procedural-cell-rework-0.2.0-axon-arbor.md).
 
 2. **v0.2.1 - Dendrite readability and tuning patch.**
-   Only after v0.2.0 screenshots prove the arbor model, tune the remaining
-   close-up dendrite shape, landing continuity, width/brightness/taper, and
-   review artifacts. This is not a second chance to change the source-target
-   contract, and its issue list must come from accepted v0.2.0 artifacts. See
+   Shipped. The release tuned the remaining close-up readability,
+   width/brightness/taper, and review artifacts without changing the
+   source-target, socket, branch-topology, or shader-layout contracts. See
    [`procedural-cell-rework-0.2.1-dendrite-tuning.md`](procedural-cell-rework-0.2.1-dendrite-tuning.md).
 
 Deferred cell-identity polish, morph-pass soma work, whole-path upstream
 lighting, inspect/select UX, and incoming-direction dendrite bias live in
 [`future_roadmap.md`](future_roadmap.md), not in the active release chain.
+
+## Migration notes
+
+The durable v0.2.0 facts now live in the owning docs:
+
+- `architecture/manifold.md` - locked morphology preset, source-type bytes,
+  deterministic sockets, shared root/cluster branches, terminal twigs, and the
+  48-byte contract.
+- `architecture/gpu-rendering.md` - shared-segment `target_id` semantics and
+  terminal-only upstream lighting for shared paths.
+- `architecture/dev-panel.md` - Morphology UI grouping of the live render
+  controls, with no schema/index drift.
+- `architecture/profiling.md` - `morph_view` build/review stats and browser
+  WASM timing behavior.
+- `decisions/manifold.md` - shared arbor plus sockets over independent
+  splines.
+- `decisions/rendering.md` - terminal-only upstream lighting for the shared
+  arbor.
+- `decisions/profiling.md` - morphology review stats stay out of the always-on
+  profiler.
 
 ## Cuts From The Old Plan
 

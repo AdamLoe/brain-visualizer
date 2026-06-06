@@ -20,8 +20,41 @@
 //! struct). Host-testable; no GPU dependency.
 
 use crate::connectivity::hash::{hash32, mix_key};
-use crate::connectivity::{self};
 use crate::connectivity::spatial::SpatialGrid;
+use crate::connectivity::{self};
+use crate::manifold::RegionKind;
+use crate::sim::backend::neuron_type_byte;
+use std::collections::HashSet;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+
+#[cfg(not(target_arch = "wasm32"))]
+struct MorphTimer(Instant);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl MorphTimer {
+    fn start() -> Self {
+        Self(Instant::now())
+    }
+
+    fn elapsed_ms(&self) -> f32 {
+        self.0.elapsed().as_secs_f32() * 1000.0
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+struct MorphTimer;
+
+#[cfg(target_arch = "wasm32")]
+impl MorphTimer {
+    fn start() -> Self {
+        Self
+    }
+
+    fn elapsed_ms(&self) -> f32 {
+        0.0
+    }
+}
 
 // ─── Salts (decorrelate the different morphology hash uses) ───────────────────
 // Distinct from connectivity::salt values (those go up to 4); pick a high,
@@ -41,15 +74,237 @@ pub mod params {
     pub const R0: f32 = 0.006;
     /// Dendrites: minimum primary count (D = MIN + hash % SPAN).
     pub const DENDRITE_MIN: u32 = 3;
-    pub const DENDRITE_SPAN: u32 = 3; // → 3..=5 primary dendrites
+    pub const DENDRITE_SPAN: u32 = 2; // → 3..=4 primary dendrites
     /// Dendrite total reach (soma → tip), randomized per dendrite in this band.
-    pub const DENDRITE_REACH_LO: f32 = 0.04;
-    pub const DENDRITE_REACH_HI: f32 = 0.07;
+    pub const DENDRITE_REACH_LO: f32 = 0.035;
+    pub const DENDRITE_REACH_HI: f32 = 0.058;
     /// Axon stops short of the target so boutons cluster near the target's
     /// dendrites rather than inside its soma.
     pub const AXON_STOP_FRACTION: f32 = 0.85;
     /// Axon trunk radius at the soma (fraction of R0).
-    pub const AXON_R0_FRACTION: f32 = 0.7;
+    pub const AXON_R0_FRACTION: f32 = 0.66;
+}
+
+/// Locked morphology parameter preset used by the generator.
+///
+/// Classification notes for the current stream:
+/// - generator-default: base radius, dendrite reach/count tuning, axon stop/radius
+/// - review-override: axon curve lift (mirrors the live visual curve setting)
+/// - protected: allocation slack and branch-segment count
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MorphologyParams {
+    pub base_radius: f32,
+    pub dendrite_primary_min: u32,
+    pub dendrite_primary_span: u32,
+    pub dendrite_reach_lo: f32,
+    pub dendrite_reach_hi: f32,
+    pub axon_stop_fraction: f32,
+    pub axon_root_radius_fraction: f32,
+    pub axon_curve_lift: f32,
+    pub socket_count_min: usize,
+    pub socket_count_max: usize,
+    pub socket_radius_lo: f32,
+    pub socket_radius_hi: f32,
+    pub socket_tip_preference: f32,
+    pub cluster_min: usize,
+    pub cluster_max: usize,
+    pub trunk_root_samples: usize,
+    pub cluster_branch_samples: usize,
+    pub terminal_twig_samples: usize,
+    pub trunk_length_fraction: f32,
+    pub cluster_split_fraction: f32,
+    pub root_radius_fraction: f32,
+    pub cluster_radius_fraction: f32,
+    pub twig_radius_fraction: f32,
+    pub taper_curve: f32,
+    /// Dendrite mid-point radius as a fraction of base_radius (soma → bifurcation).
+    pub dendrite_mid_radius_fraction: f32,
+    /// Dendrite tip radius as a fraction of base_radius (bifurcation → tip).
+    pub dendrite_tip_radius_fraction: f32,
+    pub dendrite_budget: usize,
+    pub trunk_cluster_budget: usize,
+    pub terminal_twig_budget: usize,
+    pub cap_slack: usize,
+}
+
+impl MorphologyParams {
+    /// Locked default preset that preserves the current visual shape.
+    pub const fn locked_default() -> Self {
+        Self {
+            base_radius: params::R0,
+            dendrite_primary_min: params::DENDRITE_MIN,
+            dendrite_primary_span: params::DENDRITE_SPAN,
+            dendrite_reach_lo: params::DENDRITE_REACH_LO,
+            dendrite_reach_hi: params::DENDRITE_REACH_HI,
+            axon_stop_fraction: params::AXON_STOP_FRACTION,
+            axon_root_radius_fraction: 0.66,
+            axon_curve_lift: 0.15,
+            socket_count_min: 2,
+            socket_count_max: 4,
+            socket_radius_lo: 0.008,
+            socket_radius_hi: 0.018,
+            socket_tip_preference: 0.78,
+            cluster_min: 2,
+            cluster_max: 5,
+            trunk_root_samples: 2,
+            cluster_branch_samples: 2,
+            terminal_twig_samples: 3,
+            trunk_length_fraction: 0.32,
+            cluster_split_fraction: 0.62,
+            root_radius_fraction: 0.62,
+            cluster_radius_fraction: 0.44,
+            twig_radius_fraction: 0.16,
+            taper_curve: 2.1,
+            dendrite_mid_radius_fraction: 0.6,
+            dendrite_tip_radius_fraction: 0.3,
+            dendrite_budget: DENDRITE_MAX,
+            trunk_cluster_budget: 14,
+            terminal_twig_budget: 4,
+            cap_slack: 4,
+        }
+    }
+
+    /// Convenience alias for the locked default preset.
+    pub const fn default_preset() -> Self {
+        Self::locked_default()
+    }
+
+    /// Override the live review curve while keeping the rest of the preset
+    /// locked to the current default.
+    pub const fn with_curve_lift(mut self, curve_lift: f32) -> Self {
+        self.axon_curve_lift = curve_lift;
+        self
+    }
+
+    /// Hard segment cap per neuron for the current all-K branch grammar.
+    pub fn segment_cap(&self, k: usize) -> usize {
+        self.dendrite_budget
+            + self.trunk_cluster_budget
+            + k * self.terminal_twig_budget
+            + self.cap_slack
+    }
+
+    /// Segment cap in bytes for `n` neurons at out-degree `k`.
+    pub fn segment_cap_bytes(&self, n: usize, k: usize) -> usize {
+        n * self.segment_cap(k) * std::mem::size_of::<MorphSegment>()
+    }
+
+    /// Compact JSON snapshot used by review artifacts.
+    pub fn to_json(&self) -> String {
+        format!(
+            "{{\"base_radius\":{:.6},\"dendrite_primary_min\":{},\"dendrite_primary_span\":{},\"dendrite_reach_lo\":{:.6},\"dendrite_reach_hi\":{:.6},\"axon_stop_fraction\":{:.6},\"axon_root_radius_fraction\":{:.6},\"axon_curve_lift\":{:.6},\"socket_count_min\":{},\"socket_count_max\":{},\"socket_radius_lo\":{:.6},\"socket_radius_hi\":{:.6},\"socket_tip_preference\":{:.6},\"cluster_min\":{},\"cluster_max\":{},\"trunk_root_samples\":{},\"cluster_branch_samples\":{},\"terminal_twig_samples\":{},\"trunk_length_fraction\":{:.6},\"cluster_split_fraction\":{:.6},\"root_radius_fraction\":{:.6},\"cluster_radius_fraction\":{:.6},\"twig_radius_fraction\":{:.6},\"taper_curve\":{:.6},\"dendrite_budget\":{},\"trunk_cluster_budget\":{},\"terminal_twig_budget\":{},\"cap_slack\":{}}}",
+            self.base_radius,
+            self.dendrite_primary_min,
+            self.dendrite_primary_span,
+            self.dendrite_reach_lo,
+            self.dendrite_reach_hi,
+            self.axon_stop_fraction,
+            self.axon_root_radius_fraction,
+            self.axon_curve_lift,
+            self.socket_count_min,
+            self.socket_count_max,
+            self.socket_radius_lo,
+            self.socket_radius_hi,
+            self.socket_tip_preference,
+            self.cluster_min,
+            self.cluster_max,
+            self.trunk_root_samples,
+            self.cluster_branch_samples,
+            self.terminal_twig_samples,
+            self.trunk_length_fraction,
+            self.cluster_split_fraction,
+            self.root_radius_fraction,
+            self.cluster_radius_fraction,
+            self.twig_radius_fraction,
+            self.taper_curve,
+            self.dendrite_budget,
+            self.trunk_cluster_budget,
+            self.terminal_twig_budget,
+            self.cap_slack,
+        )
+    }
+}
+
+impl Default for MorphologyParams {
+    fn default() -> Self {
+        Self::locked_default()
+    }
+}
+
+/// Coarse build-profile timings for the morphology generator.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MorphologyTimings {
+    pub setup_ms: f32,
+    pub dendrite_ms: f32,
+    pub axon_ms: f32,
+    pub finalize_ms: f32,
+    pub total_ms: f32,
+}
+
+/// Structured build/profile facts for the current morphology generation pass.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MorphologyStats {
+    pub segment_count: usize,
+    pub dropped_count: usize,
+    pub segment_cap: usize,
+    pub segment_cap_bytes: usize,
+    pub segment_buffer_bytes: usize,
+    pub cap_utilization: f32,
+    pub duplicate_targets: usize,
+    pub self_targets: usize,
+    pub source_type_bytes: usize,
+    pub source_type_excitatory: usize,
+    pub source_type_inhibitory: usize,
+    pub cluster_count_histogram: [u32; 6],
+    pub terminal_socket_distance_bands: [u32; 4],
+    pub socket_reuse_bands: [u32; 4],
+    pub unique_targets_expected: usize,
+    pub unique_targets_emitted: usize,
+    pub unique_target_coverage: f32,
+    pub all_k_coverage: bool,
+    pub timings: MorphologyTimings,
+}
+
+impl MorphologyStats {
+    pub fn to_json(&self) -> String {
+        format!(
+            "{{\"segment_count\":{},\"dropped_count\":{},\"segment_cap\":{},\"segment_cap_bytes\":{},\"segment_buffer_bytes\":{},\"cap_utilization\":{:.6},\"duplicate_targets\":{},\"self_targets\":{},\"source_type_bytes\":{},\"source_type_excitatory\":{},\"source_type_inhibitory\":{},\"cluster_count_histogram\":[{},{},{},{},{},{}],\"terminal_socket_distance_bands\":[{},{},{},{}],\"socket_reuse_bands\":[{},{},{},{}],\"unique_targets_expected\":{},\"unique_targets_emitted\":{},\"unique_target_coverage\":{:.6},\"all_k_coverage\":{},\"timings\":{{\"setup_ms\":{:.3},\"dendrite_ms\":{:.3},\"axon_ms\":{:.3},\"finalize_ms\":{:.3},\"total_ms\":{:.3}}}}}",
+            self.segment_count,
+            self.dropped_count,
+            self.segment_cap,
+            self.segment_cap_bytes,
+            self.segment_buffer_bytes,
+            self.cap_utilization,
+            self.duplicate_targets,
+            self.self_targets,
+            self.source_type_bytes,
+            self.source_type_excitatory,
+            self.source_type_inhibitory,
+            self.cluster_count_histogram[0],
+            self.cluster_count_histogram[1],
+            self.cluster_count_histogram[2],
+            self.cluster_count_histogram[3],
+            self.cluster_count_histogram[4],
+            self.cluster_count_histogram[5],
+            self.terminal_socket_distance_bands[0],
+            self.terminal_socket_distance_bands[1],
+            self.terminal_socket_distance_bands[2],
+            self.terminal_socket_distance_bands[3],
+            self.socket_reuse_bands[0],
+            self.socket_reuse_bands[1],
+            self.socket_reuse_bands[2],
+            self.socket_reuse_bands[3],
+            self.unique_targets_expected,
+            self.unique_targets_emitted,
+            self.unique_target_coverage,
+            self.all_k_coverage,
+            self.timings.setup_ms,
+            self.timings.dendrite_ms,
+            self.timings.axon_ms,
+            self.timings.finalize_ms,
+            self.timings.total_ms,
+        )
+    }
 }
 
 /// One morphology line segment. 48 bytes, std430, 16-aligned.
@@ -86,24 +341,200 @@ pub struct Morphology {
     /// Upper bound used for the allocation cap; segments past this were dropped
     /// (logged — "no silent caps").
     pub dropped: usize,
+    /// Structured build/profile facts for tests and review artifacts.
+    pub stats: MorphologyStats,
 }
 
 /// Worst-case dendrite segments per neuron: up to 5 primaries × (1 stem + 2
 /// children) = 15.
 pub const DENDRITE_MAX: usize = 15;
 
-/// Axon segments emitted per branch (the curved poly-line resolution). MUST stay
-/// in sync with `SEGS` inside `generate()`.
-pub const AXON_SEGS_PER_BRANCH: usize = 6;
+/// Build the production type-byte slice from the manifold region assignment and
+/// seed, matching `initial_last_spike()` / the integrate-shader path.
+pub fn build_source_types(seed_lo: u32, regions: &[RegionKind]) -> Vec<u8> {
+    regions
+        .iter()
+        .enumerate()
+        .map(|(i, &region)| neuron_type_byte(i as u32, seed_lo, region))
+        .collect()
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TargetPlan {
+    target_id: u32,
+    source_pos: [f32; 3],
+    target_pos: [f32; 3],
+    direction: [f32; 3],
+    distance: f32,
+    socket_idx: usize,
+    socket_pos: [f32; 3],
+    socket_distance: f32,
+}
+
+#[inline]
+fn lerp(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t
+}
+
+#[inline]
+fn clamp01(v: f32) -> f32 {
+    v.clamp(0.0, 1.0)
+}
+
+#[inline]
+fn cubic_bezier(p0: [f32; 3], p1: [f32; 3], p2: [f32; 3], p3: [f32; 3], t: f32) -> [f32; 3] {
+    let u = 1.0 - t;
+    let uu = u * u;
+    let tt = t * t;
+    let uuu = uu * u;
+    let ttt = tt * t;
+    [
+        uuu * p0[0] + 3.0 * uu * t * p1[0] + 3.0 * u * tt * p2[0] + ttt * p3[0],
+        uuu * p0[1] + 3.0 * uu * t * p1[1] + 3.0 * u * tt * p2[1] + ttt * p3[1],
+        uuu * p0[2] + 3.0 * uu * t * p1[2] + 3.0 * u * tt * p2[2] + ttt * p3[2],
+    ]
+}
+
+fn bezier_basis(dir: [f32; 3], seed: u32) -> ([f32; 3], [f32; 3]) {
+    let right = perp(dir, seed);
+    let up = norm(cross(dir, right));
+    (right, up)
+}
+
+fn bend_vector(dir: [f32; 3], seed: u32, magnitude: f32) -> [f32; 3] {
+    let (right, up) = bezier_basis(dir, seed);
+    let j0 = unit(hash32(seed ^ 0x3141_5926));
+    let j1 = unit(hash32(seed ^ 0x2718_2818));
+    scale(
+        add(scale(right, j0 * 2.0 - 1.0), scale(up, j1 * 2.0 - 1.0)),
+        magnitude,
+    )
+}
+
+fn emit_bezier_path(
+    segments: &mut Vec<MorphSegment>,
+    cap: usize,
+    dropped: &mut usize,
+    source_id: u32,
+    target_id: u32,
+    kind: u32,
+    p0: [f32; 3],
+    p1: [f32; 3],
+    p2: [f32; 3],
+    p3: [f32; 3],
+    r0: f32,
+    r3: f32,
+    samples: usize,
+    path_len_start: f32,
+    taper_curve: f32,
+) -> (f32, bool, f32) {
+    let mut prev = p0;
+    let mut prev_r = r0;
+    let mut prev_path = path_len_start;
+    let mut emitted_all = true;
+    let mut total_len = 0.0f32;
+    for s in 1..=samples.max(1) {
+        let t = s as f32 / samples.max(1) as f32;
+        let pt = cubic_bezier(p0, p1, p2, p3, t);
+        let rr = lerp(r0, r3, clamp01(t).powf(taper_curve.max(0.01)));
+        let next_len = len(sub(pt, prev));
+        if segments.len() < cap {
+            segments.push(MorphSegment {
+                a: prev,
+                radius_a: prev_r,
+                b: pt,
+                radius_b: rr,
+                neuron_id: source_id,
+                path_len: prev_path,
+                kind,
+                target_id,
+            });
+        } else {
+            *dropped += 1;
+            emitted_all = false;
+        }
+        prev_path += next_len;
+        total_len += next_len;
+        prev = pt;
+        prev_r = rr;
+    }
+    (prev_path, emitted_all, total_len)
+}
+
+fn target_socket(
+    seed_lo: u32,
+    source_id: u32,
+    target: &TargetPlan,
+    params: &MorphologyParams,
+) -> ([f32; 3], usize, f32) {
+    let socket_span = params
+        .socket_count_max
+        .saturating_sub(params.socket_count_min);
+    let socket_count = (params.socket_count_min
+        + if socket_span == 0 {
+            0
+        } else {
+            mix_key(seed_lo, source_id, target.target_id, salt::AXON_BOW) as usize
+                % (socket_span + 1)
+        })
+    .max(1);
+    let socket_idx = if socket_count == 1 {
+        0
+    } else {
+        mix_key(seed_lo, source_id, target.target_id, salt::DENDRITE_COUNT) as usize % socket_count
+    };
+    let source_dir = norm(sub(target.source_pos, target.target_pos));
+    let dendrite_hint = dir_from_hashes(
+        mix_key(
+            seed_lo,
+            target.target_id,
+            socket_idx as u32,
+            salt::DENDRITE_DIR,
+        ),
+        mix_key(
+            seed_lo,
+            target.target_id,
+            socket_idx as u32,
+            salt::DENDRITE_CURL,
+        ),
+    );
+    let facing = norm(add(
+        scale(source_dir, params.socket_tip_preference),
+        scale(dendrite_hint, 1.0 - params.socket_tip_preference),
+    ));
+    let radius = lerp(
+        params.socket_radius_lo,
+        params.socket_radius_hi,
+        unit(mix_key(
+            seed_lo,
+            source_id,
+            target.target_id,
+            salt::AXON_BOW ^ 0x55aa_55aa,
+        )),
+    ) * params.axon_stop_fraction.max(0.05);
+    let socket_pos = add(target.target_pos, scale(facing, radius));
+    let socket_distance = len(sub(socket_pos, target.target_pos));
+    (socket_pos, socket_idx, socket_distance)
+}
+
+fn cluster_sort_key(seed_lo: u32, source_id: u32, direction: [f32; 3]) -> f32 {
+    let axis = dir_from_hashes(
+        mix_key(seed_lo, source_id, 0, salt::AXON_BOW),
+        mix_key(seed_lo, source_id, 1, salt::DENDRITE_DIR),
+    );
+    let (right, up) = bezier_basis(axis, mix_key(seed_lo, source_id, 2, salt::DENDRITE_CURL));
+    let x = direction[0] * right[0] + direction[1] * right[1] + direction[2] * right[2];
+    let y = direction[0] * up[0] + direction[1] * up[1] + direction[2] * up[2];
+    y.atan2(x)
+}
 
 /// Worst-case segments per neuron for a given fan-out `k`, used to size the GPU
-/// buffer cap. Now that we draw ALL K axon branches (not a 5-branch subset), the
-/// per-neuron cap scales with K: dendrites (≤ DENDRITE_MAX) + k branches ×
-/// AXON_SEGS_PER_BRANCH, plus a little slack. No silent caps — the generator
-/// logs if it is ever hit.
+/// buffer cap. The named `MorphologyParams` budgets now own the actual formula;
+/// this helper keeps the default preset path available for callers that only
+/// know `k`.
 #[inline]
 pub fn max_segs_per_neuron(k: usize) -> usize {
-    DENDRITE_MAX + k * AXON_SEGS_PER_BRANCH + 4
+    MorphologyParams::locked_default().segment_cap(k)
 }
 
 /// Decode a hash value into a float in [0,1).
@@ -171,20 +602,34 @@ fn perp(dir: [f32; 3], seed: u32) -> [f32; 3] {
 /// Generate the full morphology for all `n` neurons. Deterministic in
 /// `(seed_lo, positions, grid, k)`. Caps the total at `n * max_segs_per_neuron(k)`
 /// (never hit in practice; logged if it is — no silent truncation).
-/// `curve_lift` scales the axon arc height (bow) — wired live from the
-/// `connection_curve_lift` setting so the morphology can be regenerated with a
-/// different curl. 0 → straight axons, larger → more pronounced arcs.
 pub fn generate(
     positions: &[[f32; 3]],
     grid: &SpatialGrid,
     k: usize,
     seed_lo: u32,
-    curve_lift: f32,
+    params: &MorphologyParams,
+    source_types: &[u8],
 ) -> Morphology {
     let n = positions.len();
-    let cap = n * max_segs_per_neuron(k);
+    let setup_start = MorphTimer::start();
+    assert_eq!(
+        source_types.len(),
+        n,
+        "source type slice must cover every neuron"
+    );
+    let cap = n * params.segment_cap(k);
     let mut segments: Vec<MorphSegment> = Vec::with_capacity(cap.min(n * (DENDRITE_MAX + k * 4)));
     let mut dropped = 0usize;
+    let mut duplicate_targets = 0usize;
+    let mut self_targets = 0usize;
+    let mut unique_targets_expected = 0usize;
+    let mut unique_targets_emitted = 0usize;
+    let mut all_k_coverage = true;
+    let mut source_type_excitatory = 0usize;
+    let mut source_type_inhibitory = 0usize;
+    let mut cluster_count_histogram = [0u32; 6];
+    let mut terminal_socket_distance_bands = [0u32; 4];
+    let mut socket_reuse_bands = [0u32; 4];
 
     // Precompute each neuron's grid cell once (O(N)) so the axon-arbor loop below
     // can use the hot-path `target_with_cell` entry. The uncached
@@ -197,39 +642,49 @@ pub fn generate(
     let push = |segments: &mut Vec<MorphSegment>, seg: MorphSegment, dropped: &mut usize| {
         if segments.len() < cap {
             segments.push(seg);
+            true
         } else {
             *dropped += 1;
+            false
         }
     };
+
+    let setup_ms = setup_start.elapsed_ms();
+    let mut dendrite_ms = 0.0f32;
+    let mut axon_ms = 0.0f32;
 
     for i in 0..n {
         let soma = positions[i];
         let id = i as u32;
 
         // ── Dendrites (kind 0): bushy local tree, decorative. ────────────────
-        let dcount = params::DENDRITE_MIN
-            + (mix_key(seed_lo, id, 0, salt::DENDRITE_COUNT) % params::DENDRITE_SPAN);
+        let dendrite_start = MorphTimer::start();
+        let src_type = source_types[i];
+        if src_type & 0x01 == 0 {
+            source_type_excitatory += 1;
+        } else {
+            source_type_inhibitory += 1;
+        }
+        let dcount = params.dendrite_primary_min
+            + (mix_key(seed_lo, id, 0, salt::DENDRITE_COUNT) % params.dendrite_primary_span);
         for d in 0..dcount {
             // Primary direction (roughly uniform).
             let dir = dir_from_hashes(
                 mix_key(seed_lo, id, d, salt::DENDRITE_DIR),
                 mix_key(seed_lo, id, d.wrapping_add(64), salt::DENDRITE_DIR),
             );
-            let reach = params::DENDRITE_REACH_LO
+            let reach = params.dendrite_reach_lo
                 + unit(mix_key(seed_lo, id, d, salt::DENDRITE_CURL))
-                    * (params::DENDRITE_REACH_HI - params::DENDRITE_REACH_LO);
+                    * (params.dendrite_reach_hi - params.dendrite_reach_lo);
 
             // Segment 1: soma → mid (half the reach), then bifurcate into 2.
             let half = reach * 0.5;
             // A small per-segment curl so dendrites aren't dead straight.
             let curl1 = perp(dir, mix_key(seed_lo, id, d, salt::DENDRITE_CURL));
-            let mid = add(
-                add(soma, scale(dir, half)),
-                scale(curl1, half * 0.25),
-            );
+            let mid = add(add(soma, scale(dir, half)), scale(curl1, half * 0.25));
             // Soma path_len starts at 0; accumulate along the branch.
-            let r_soma = params::R0;
-            let r_mid = params::R0 * 0.6;
+            let r_soma = params.base_radius;
+            let r_mid = params.base_radius * params.dendrite_mid_radius_fraction;
             push(
                 &mut segments,
                 MorphSegment {
@@ -253,7 +708,7 @@ pub fn generate(
                 let sign = if c == 0 { 1.0 } else { -1.0 };
                 let child_dir = norm(add(scale(dir, 1.0), scale(spread, 0.7 * sign)));
                 let tip = add(mid, scale(child_dir, half));
-                let r_tip = params::R0 * 0.3; // ~0.3·r0 at the tips
+                let r_tip = params.base_radius * params.dendrite_tip_radius_fraction;
                 push(
                     &mut segments,
                     MorphSegment {
@@ -270,78 +725,321 @@ pub fn generate(
                 );
             }
         }
+        dendrite_ms += dendrite_start.elapsed_ms();
 
-        // ── Axon arbor (kind 1): projecting branches toward real targets. ────
-        // Draw ALL K outgoing connections (one axon arbor per synaptic target),
-        // not a 5-branch subset, so the lit connections match real synapses.
-        let branches = k;
-        for j in 0..branches as u32 {
-            let src_type = 0u8; // E/I only changes target dz bias; for arbor shape
-                                // a fixed type keeps the look stable. Targets still
-                                // come from the real spatial rule.
-            let src_cell = grid.unpack(cell_of_neuron[i]);
-            let tgt_id = connectivity::target_with_cell(id, j, grid, k, seed_lo, src_type, src_cell);
-            let t = positions[tgt_id as usize];
+        // ── Axon arbor (kind 1): shared root -> clusters -> terminal twigs. ───
+        let axon_start = MorphTimer::start();
+        let src_cell = grid.unpack(cell_of_neuron[i]);
+        let mut unique_targets = Vec::<u32>::new();
+        let mut seen_targets = HashSet::new();
+        for j in 0..k as u32 {
+            let tgt_id =
+                connectivity::target_with_cell(id, j, grid, k, seed_lo, src_type, src_cell);
             if tgt_id == id {
-                continue; // degenerate self-target: skip (no segment)
-            }
-            let full = sub(t, soma);
-            let dist = len(full);
-            if dist < 1e-6 {
+                self_targets += 1;
                 continue;
             }
-            let dir = norm(full);
-            // Stop short of the target so boutons sit near its dendrites.
-            let end = add(soma, scale(full, params::AXON_STOP_FRACTION));
-            // Seeded perpendicular bow so the axon arcs (connection_curve_lift-style).
-            let bow_dir = perp(dir, mix_key(seed_lo, id, j, salt::AXON_BOW));
-            // Morphology controls: arc height scales with curve_lift (live
-            // setting). The bow is amplified (×2.5) and the arc resolved with more
-            // segments so the curve is clearly visible at the default lift 0.15
-            // and straightens fully at lift 0.
-            const BOW_GAIN: f32 = 2.5;
-            let bow = dist * curve_lift.max(0.0) * BOW_GAIN;
+            if !seen_targets.insert(tgt_id) {
+                duplicate_targets += 1;
+                continue;
+            }
+            unique_targets.push(tgt_id);
+        }
+        unique_targets.sort_unstable();
+        let unique_count = unique_targets.len();
+        unique_targets_expected += unique_count;
+        if unique_count == 0 {
+            cluster_count_histogram[0] += 1;
+            axon_ms += axon_start.elapsed_ms();
+            continue;
+        }
 
-            // Curved poly-line of SEGS segments through bowed control points.
-            // Parametric points along the straight soma→end line, lifted by a
-            // sin bow so the midpoint bulges out and the ends meet soma/target.
-            // SEGS must match morphology::AXON_SEGS_PER_BRANCH for the cap.
-            let r_soma = params::R0 * params::AXON_R0_FRACTION;
-            const SEGS: usize = AXON_SEGS_PER_BRANCH;
-            let mut prev = soma;
-            let mut prev_path = 0.0f32;
-            let mut prev_r = r_soma;
-            for s in 1..=SEGS {
-                let tt = s as f32 / SEGS as f32;
-                let base = add(soma, scale(sub(end, soma), tt));
-                let lift = (std::f32::consts::PI * tt).sin() * bow;
-                let pnt = add(base, scale(bow_dir, lift));
-                // Taper toward the terminal bouton (tiny at the tip).
-                let r_here = if s == SEGS {
-                    params::R0 * 0.2 // terminal bouton: small
+        let mut plans: Vec<TargetPlan> = unique_targets
+            .iter()
+            .map(|&tgt_id| {
+                let target_pos = positions[tgt_id as usize];
+                let full = sub(target_pos, soma);
+                let distance = len(full).max(1e-6);
+                let direction = norm(full);
+                TargetPlan {
+                    target_id: tgt_id,
+                    source_pos: soma,
+                    target_pos,
+                    direction,
+                    distance,
+                    socket_idx: 0,
+                    socket_pos: target_pos,
+                    socket_distance: 0.0,
+                }
+            })
+            .collect();
+
+        let cluster_count = if unique_count == 1 {
+            1
+        } else {
+            let min_c = params.cluster_min.max(1).min(unique_count);
+            let max_c = params.cluster_max.max(min_c).min(unique_count);
+            let span = max_c.saturating_sub(min_c) + 1;
+            let draw = if span == 1 {
+                0
+            } else {
+                mix_key(seed_lo, id, unique_count as u32, salt::DENDRITE_COUNT) as usize % span
+            };
+            (min_c + draw).clamp(1, unique_count)
+        };
+        cluster_count_histogram[cluster_count.min(5)] += 1;
+
+        let mut axis = [0.0f32; 3];
+        for p in &plans {
+            axis = add(axis, p.direction);
+        }
+        axis = norm(add(
+            axis,
+            dir_from_hashes(
+                mix_key(seed_lo, id, unique_count as u32, salt::AXON_BOW),
+                mix_key(seed_lo, id, unique_count as u32, salt::DENDRITE_DIR),
+            ),
+        ));
+
+        plans.sort_by(|a, b| {
+            let ka = cluster_sort_key(seed_lo, id, a.direction);
+            let kb = cluster_sort_key(seed_lo, id, b.direction);
+            ka.partial_cmp(&kb)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.target_id.cmp(&b.target_id))
+        });
+
+        let base = unique_count / cluster_count;
+        let extra = unique_count % cluster_count;
+        let mut clusters: Vec<Vec<usize>> = Vec::with_capacity(cluster_count);
+        let mut cursor = 0usize;
+        for cidx in 0..cluster_count {
+            let size = base + usize::from(cidx < extra);
+            let mut cluster = Vec::with_capacity(size);
+            for _ in 0..size {
+                cluster.push(cursor);
+                cursor += 1;
+            }
+            clusters.push(cluster);
+        }
+
+        let root_radius = params.base_radius * params.axon_root_radius_fraction;
+        let shared_root_radius = root_radius * params.root_radius_fraction;
+        let cluster_start_radius = root_radius * params.cluster_radius_fraction;
+        let twig_start_radius = root_radius * params.cluster_radius_fraction;
+        let twig_end_radius = root_radius * params.twig_radius_fraction;
+
+        if unique_count == 1 {
+            let plan = &mut plans[0];
+            let (socket_pos, socket_idx, socket_distance) =
+                target_socket(seed_lo, id, plan, params);
+            plan.socket_pos = socket_pos;
+            plan.socket_idx = socket_idx;
+            plan.socket_distance = socket_distance;
+            terminal_socket_distance_bands[if socket_distance < params.socket_radius_lo * 0.5 {
+                0
+            } else if socket_distance < params.socket_radius_lo * 0.9 {
+                1
+            } else if socket_distance < params.socket_radius_hi * 1.1 {
+                2
+            } else {
+                3
+            }] += 1;
+            socket_reuse_bands[socket_idx.min(3)] += 1;
+            let path_dir = norm(sub(socket_pos, soma));
+            let path_len = len(sub(socket_pos, soma)).max(0.03);
+            let bend = bend_vector(
+                path_dir,
+                mix_key(seed_lo, id, plan.target_id, salt::AXON_BOW),
+                path_len * params.axon_curve_lift.max(0.0),
+            );
+            let p1 = add(
+                add(soma, scale(path_dir, path_len * 0.33)),
+                scale(bend, 0.28),
+            );
+            let p2 = add(
+                add(socket_pos, scale(path_dir, -path_len * 0.27)),
+                scale(bend, -0.16),
+            );
+            let (next_path, complete, _) = emit_bezier_path(
+                &mut segments,
+                cap,
+                &mut dropped,
+                id,
+                plan.target_id,
+                1,
+                soma,
+                p1,
+                p2,
+                socket_pos,
+                root_radius,
+                twig_end_radius,
+                params.terminal_twig_samples.max(1),
+                0.0,
+                params.taper_curve,
+            );
+            if !complete {
+                all_k_coverage = false;
+            } else {
+                unique_targets_emitted += 1;
+            }
+            let _ = next_path;
+            axon_ms += axon_start.elapsed_ms();
+            continue;
+        }
+
+        let avg_distance = plans.iter().map(|p| p.distance).sum::<f32>() / unique_count as f32;
+        let root_len = (avg_distance * params.trunk_length_fraction.max(0.05)).max(0.03);
+        let root_dir = axis;
+        let root_anchor = add(soma, scale(root_dir, root_len));
+        let root_bend = bend_vector(
+            root_dir,
+            mix_key(seed_lo, id, unique_count as u32, salt::AXON_BOW),
+            root_len * params.axon_curve_lift.max(0.0),
+        );
+        let mut path_cursor = 0.0f32;
+        let root_p1 = add(
+            add(soma, scale(root_dir, root_len * 0.33)),
+            scale(root_bend, 0.35),
+        );
+        let root_p2 = add(
+            add(root_anchor, scale(root_dir, -root_len * 0.27)),
+            scale(root_bend, -0.18),
+        );
+        let (next_path, root_complete, _) = emit_bezier_path(
+            &mut segments,
+            cap,
+            &mut dropped,
+            id,
+            id,
+            1,
+            soma,
+            root_p1,
+            root_p2,
+            root_anchor,
+            shared_root_radius,
+            cluster_start_radius,
+            params.trunk_root_samples.max(1),
+            path_cursor,
+            params.taper_curve,
+        );
+        if !root_complete {
+            all_k_coverage = false;
+        }
+        path_cursor = next_path;
+
+        for (cluster_idx, cluster) in clusters.iter().enumerate() {
+            let mut cluster_dir = [0.0f32; 3];
+            let mut cluster_avg = 0.0f32;
+            for &plan_idx in cluster {
+                cluster_dir = add(cluster_dir, plans[plan_idx].direction);
+                cluster_avg += plans[plan_idx].distance;
+            }
+            if len(cluster_dir) < 1e-6 {
+                cluster_dir = root_dir;
+            } else {
+                cluster_dir = norm(cluster_dir);
+            }
+            cluster_avg /= cluster.len().max(1) as f32;
+            let cluster_len = (cluster_avg * params.cluster_split_fraction.max(0.05)).max(0.02);
+            let cluster_anchor = add(root_anchor, scale(cluster_dir, cluster_len));
+            let cluster_bend = bend_vector(
+                cluster_dir,
+                mix_key(seed_lo, id, cluster_idx as u32, salt::DENDRITE_CURL),
+                cluster_len * params.axon_curve_lift.max(0.0),
+            );
+            let cluster_p1 = add(
+                add(root_anchor, scale(cluster_dir, cluster_len * 0.35)),
+                scale(cluster_bend, 0.30),
+            );
+            let cluster_p2 = add(
+                add(cluster_anchor, scale(cluster_dir, -cluster_len * 0.28)),
+                scale(cluster_bend, -0.15),
+            );
+            let (next_path, cluster_complete, _) = emit_bezier_path(
+                &mut segments,
+                cap,
+                &mut dropped,
+                id,
+                id,
+                1,
+                root_anchor,
+                cluster_p1,
+                cluster_p2,
+                cluster_anchor,
+                cluster_start_radius,
+                twig_start_radius,
+                params.cluster_branch_samples.max(1),
+                path_cursor,
+                params.taper_curve,
+            );
+            if !cluster_complete {
+                all_k_coverage = false;
+            }
+            path_cursor = next_path;
+
+            for &plan_idx in cluster {
+                let plan = &mut plans[plan_idx];
+                let (socket_pos, socket_idx, socket_distance) =
+                    target_socket(seed_lo, id, plan, params);
+                plan.socket_pos = socket_pos;
+                plan.socket_idx = socket_idx;
+                plan.socket_distance = socket_distance;
+                terminal_socket_distance_bands[if socket_distance < params.socket_radius_lo * 0.5 {
+                    0
+                } else if socket_distance < params.socket_radius_lo * 0.9 {
+                    1
+                } else if socket_distance < params.socket_radius_hi * 1.1 {
+                    2
                 } else {
-                    r_soma * (1.0 - 0.6 * tt)
-                };
-                push(
-                    &mut segments,
-                    MorphSegment {
-                        a: prev,
-                        radius_a: prev_r,
-                        b: pnt,
-                        radius_b: r_here,
-                        neuron_id: id,
-                        path_len: prev_path,
-                        kind: 1,
-                        target_id: tgt_id, // axon: destination neuron (drives "past" lighting)
-                    },
-                    &mut dropped,
+                    3
+                }] += 1;
+                socket_reuse_bands[socket_idx.min(3)] += 1;
+
+                let twig_dir = norm(sub(socket_pos, cluster_anchor));
+                let twig_len = len(sub(socket_pos, cluster_anchor)).max(1e-4);
+                let twig_bend = bend_vector(
+                    twig_dir,
+                    mix_key(seed_lo, id, plan.target_id, salt::AXON_BOW),
+                    twig_len * params.axon_curve_lift.max(0.0),
                 );
-                prev_path += len(sub(pnt, prev));
-                prev = pnt;
-                prev_r = r_here;
+                let twig_p1 = add(
+                    add(cluster_anchor, scale(twig_dir, twig_len * 0.32)),
+                    scale(twig_bend, 0.30),
+                );
+                let twig_p2 = add(
+                    add(socket_pos, scale(twig_dir, -twig_len * 0.24)),
+                    scale(twig_bend, -0.15),
+                );
+                let (next_path, twig_complete, _) = emit_bezier_path(
+                    &mut segments,
+                    cap,
+                    &mut dropped,
+                    id,
+                    plan.target_id,
+                    1,
+                    cluster_anchor,
+                    twig_p1,
+                    twig_p2,
+                    socket_pos,
+                    twig_start_radius,
+                    twig_end_radius,
+                    params.terminal_twig_samples.max(1),
+                    path_cursor,
+                    params.taper_curve,
+                );
+                if !twig_complete {
+                    all_k_coverage = false;
+                } else {
+                    unique_targets_emitted += 1;
+                }
+                path_cursor = next_path;
             }
         }
+        axon_ms += axon_start.elapsed_ms();
     }
+
+    let finalize_start = MorphTimer::start();
 
     if dropped > 0 {
         eprintln!(
@@ -349,7 +1047,52 @@ pub fn generate(
         );
     }
 
-    Morphology { segments, dropped }
+    let finalize_ms = finalize_start.elapsed_ms();
+    let total_ms = setup_ms + dendrite_ms + axon_ms + finalize_ms;
+    let segment_count = segments.len();
+    let segment_cap_bytes = cap * std::mem::size_of::<MorphSegment>();
+    let segment_buffer_bytes = segment_count * std::mem::size_of::<MorphSegment>();
+    let cap_utilization = if cap == 0 {
+        0.0
+    } else {
+        segment_count as f32 / cap as f32
+    };
+    let unique_target_coverage = if unique_targets_expected == 0 {
+        1.0
+    } else {
+        unique_targets_emitted as f32 / unique_targets_expected as f32
+    };
+    Morphology {
+        segments,
+        dropped,
+        stats: MorphologyStats {
+            segment_count,
+            dropped_count: dropped,
+            segment_cap: cap,
+            segment_cap_bytes,
+            segment_buffer_bytes,
+            cap_utilization,
+            duplicate_targets,
+            self_targets,
+            unique_targets_expected,
+            unique_targets_emitted,
+            unique_target_coverage,
+            all_k_coverage,
+            timings: MorphologyTimings {
+                setup_ms,
+                dendrite_ms,
+                axon_ms,
+                finalize_ms,
+                total_ms,
+            },
+            source_type_bytes: source_types.len(),
+            source_type_excitatory,
+            source_type_inhibitory,
+            cluster_count_histogram,
+            terminal_socket_distance_bands,
+            socket_reuse_bands,
+        },
+    }
 }
 
 #[cfg(test)]
@@ -363,16 +1106,43 @@ mod tests {
         for z in 0..side {
             for y in 0..side {
                 for x in 0..side {
-                    pos.push([
-                        x as f32 * 0.15,
-                        y as f32 * 0.15,
-                        z as f32 * 0.15,
-                    ]);
+                    pos.push([x as f32 * 0.15, y as f32 * 0.15, z as f32 * 0.15]);
                 }
             }
         }
         let g = SpatialGrid::build(&pos, side as u32);
         (pos, g)
+    }
+
+    fn small_regions(len: usize) -> Vec<RegionKind> {
+        (0..len)
+            .map(|i| match i % 3 {
+                0 => RegionKind::Input,
+                1 => RegionKind::Association,
+                _ => RegionKind::Output,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn locked_default_matches_current_constants() {
+        let p = MorphologyParams::locked_default();
+        assert_eq!(p.base_radius, params::R0);
+        assert_eq!(p.dendrite_primary_min, params::DENDRITE_MIN);
+        assert_eq!(p.dendrite_primary_span, params::DENDRITE_SPAN);
+        assert_eq!(p.axon_stop_fraction, params::AXON_STOP_FRACTION);
+        assert_eq!(p.axon_root_radius_fraction, params::AXON_R0_FRACTION);
+        assert_eq!(p.axon_curve_lift, 0.15);
+        assert_eq!(p.socket_count_min, 2);
+        assert_eq!(p.socket_count_max, 4);
+        assert_eq!(p.cluster_min, 2);
+        assert_eq!(p.cluster_max, 5);
+        assert_eq!(p.trunk_root_samples, 2);
+        assert_eq!(p.cluster_branch_samples, 2);
+        assert_eq!(p.terminal_twig_samples, 3);
+        assert_eq!(p.dendrite_budget, DENDRITE_MAX);
+        assert_eq!(p.terminal_twig_budget, 4);
+        assert_eq!(p.cap_slack, 4);
     }
 
     #[test]
@@ -384,10 +1154,28 @@ mod tests {
     #[test]
     fn generates_segments_for_every_neuron() {
         let (pos, g) = small_grid();
-        let m = generate(&pos, &g, 16, 1234, 0.15);
+        let regions = small_regions(pos.len());
+        let source_types = build_source_types(1234, &regions);
+        let params = MorphologyParams::locked_default();
+        let m = generate(&pos, &g, 16, 1234, &params, &source_types);
         // Every neuron contributes at least one dendrite + (usually) axon segment.
         assert!(!m.segments.is_empty());
         assert_eq!(m.dropped, 0, "should not hit the cap at this size");
+        assert_eq!(m.stats.segment_count, m.segments.len());
+        assert!(m.stats.all_k_coverage, "expected current all-K coverage");
+        assert_eq!(m.stats.unique_target_coverage, 1.0);
+        assert_eq!(m.stats.source_type_bytes, pos.len());
+        assert_eq!(
+            m.stats.source_type_excitatory + m.stats.source_type_inhibitory,
+            pos.len()
+        );
+        assert_eq!(
+            m.stats.cluster_count_histogram.iter().sum::<u32>() as usize,
+            pos.len()
+        );
+        assert!(m.stats.terminal_socket_distance_bands.iter().sum::<u32>() > 0);
+        assert!(m.stats.socket_reuse_bands.iter().sum::<u32>() > 0);
+        assert!(m.stats.cap_utilization > 0.0 && m.stats.cap_utilization <= 1.0);
         // All segment neuron_ids and target_ids are in range.
         for s in &m.segments {
             assert!((s.neuron_id as usize) < pos.len());
@@ -412,21 +1200,34 @@ mod tests {
     }
 
     #[test]
-    fn draws_all_k_axon_branches() {
-        // With all-K coverage, the morphology emits one axon arbor per real
-        // synaptic target (j in 0..k) instead of the old min(5, k) subset. Verify
-        // the per-neuron distinct axon targets match exactly the distinct,
-        // non-self targets connectivity::target resolves for j in 0..k — i.e. we
-        // draw ALL K, not a 5-branch cap.
+    fn emits_one_terminal_per_unique_target_under_real_source_types() {
         let (pos, g) = small_grid();
         let k = 8usize;
         let seed = 4242u32;
-        let m = generate(&pos, &g, k, seed, 0.15);
-        let probe = (pos.len() / 2) as u32;
+        let regions = small_regions(pos.len());
+        let source_types = build_source_types(seed, &regions);
+        let params = MorphologyParams::locked_default();
+        let m = generate(&pos, &g, k, seed, &params, &source_types);
+        let probe = (0..pos.len() as u32)
+            .find(|&nid| {
+                let src_type = source_types[nid as usize];
+                let src_cell = g.unpack(g.cell_of_index(nid));
+                let mut expected: Vec<u32> = (0..k as u32)
+                    .map(|j| {
+                        connectivity::target_with_cell(nid, j, &g, k, seed, src_type, src_cell)
+                    })
+                    .filter(|&t| t != nid)
+                    .collect();
+                expected.sort_unstable();
+                expected.dedup();
+                expected.len() > 1
+            })
+            .expect("need a probe with >1 unique targets");
 
-        // Expected distinct, non-self targets from the connectivity rule.
+        let probe_type = source_types[probe as usize];
+        let probe_cell = g.unpack(g.cell_of_index(probe));
         let mut expected: Vec<u32> = (0..k as u32)
-            .map(|j| connectivity::target(probe, j, &g, k, seed, 0u8))
+            .map(|j| connectivity::target_with_cell(probe, j, &g, k, seed, probe_type, probe_cell))
             .filter(|&t| t != probe)
             .collect();
         expected.sort_unstable();
@@ -435,38 +1236,141 @@ mod tests {
         let mut got: Vec<u32> = m
             .segments
             .iter()
-            .filter(|s| s.kind == 1 && s.neuron_id == probe)
+            .filter(|s| s.kind == 1 && s.neuron_id == probe && s.target_id != probe)
             .map(|s| s.target_id)
             .collect();
         got.sort_unstable();
         got.dedup();
 
-        assert_eq!(got, expected, "axon targets must cover all K connectivity targets");
-        // And it must exceed the old 5-branch cap somewhere in the network.
-        let max_axons_for_a_neuron = (0..pos.len() as u32)
-            .map(|nid| {
-                m.segments
-                    .iter()
-                    .filter(|s| s.kind == 1 && s.neuron_id == nid)
-                    .map(|s| s.target_id)
-                    .collect::<std::collections::HashSet<_>>()
-                    .len()
-            })
-            .max()
-            .unwrap_or(0);
+        assert_eq!(
+            got, expected,
+            "terminal twigs must cover all unique non-self targets"
+        );
         assert!(
-            max_axons_for_a_neuron > 5,
-            "all-K coverage should exceed the old 5-branch cap (got max {max_axons_for_a_neuron})"
+            m.segments
+                .iter()
+                .any(|s| s.kind == 1 && s.neuron_id == probe && s.target_id == probe),
+            "shared root/cluster segments should carry source target_id"
         );
         assert_eq!(m.dropped, 0, "all-K cap should not drop at this size");
     }
 
     #[test]
+    fn single_target_path_emits_direct_twig_without_shared_root() {
+        let (pos, g) = small_grid();
+        let seed = 2468u32;
+        let k = 1usize;
+        let regions = small_regions(pos.len());
+        let source_types = build_source_types(seed, &regions);
+        let params = MorphologyParams::locked_default();
+        let m = generate(&pos, &g, k, seed, &params, &source_types);
+        let probe = (0..pos.len() as u32)
+            .find(|&nid| {
+                let src_type = source_types[nid as usize];
+                let src_cell = g.unpack(g.cell_of_index(nid));
+                connectivity::target_with_cell(nid, 0, &g, k, seed, src_type, src_cell) != nid
+            })
+            .expect("need a single-target probe");
+        let src_type = source_types[probe as usize];
+        let src_cell = g.unpack(g.cell_of_index(probe));
+        let expected = connectivity::target_with_cell(probe, 0, &g, k, seed, src_type, src_cell);
+        assert_ne!(expected, probe);
+        let got: Vec<u32> = m
+            .segments
+            .iter()
+            .filter(|s| s.kind == 1 && s.neuron_id == probe)
+            .map(|s| s.target_id)
+            .collect();
+        assert!(
+            !got.is_empty(),
+            "single-target probe should still emit axon segments"
+        );
+        assert!(
+            got.iter().all(|&t| t == expected),
+            "direct twig should point only at the unique target"
+        );
+        assert!(
+            !m.segments
+                .iter()
+                .any(|s| s.kind == 1 && s.neuron_id == probe && s.target_id == probe),
+            "single-target path should not emit shared-root segments"
+        );
+    }
+
+    #[test]
+    fn mixed_ei_source_types_match_target_with_cell() {
+        let (pos, g) = small_grid();
+        let seed = 5150u32;
+        let k = 8usize;
+        let regions = small_regions(pos.len());
+        let source_types = build_source_types(seed, &regions);
+        let params = MorphologyParams::locked_default();
+        let m = generate(&pos, &g, k, seed, &params, &source_types);
+
+        let mut exc_probe = None;
+        let mut inh_probe = None;
+        for (i, &t) in source_types.iter().enumerate() {
+            if t & 0x01 == 0 && exc_probe.is_none() {
+                exc_probe = Some(i as u32);
+            }
+            if t & 0x01 == 1 && inh_probe.is_none() {
+                inh_probe = Some(i as u32);
+            }
+            if exc_probe.is_some() && inh_probe.is_some() {
+                break;
+            }
+        }
+        let exc_probe = exc_probe.expect("need an excitatory probe");
+        let inh_probe = inh_probe.expect("need an inhibitory probe");
+        assert_ne!(
+            source_types[exc_probe as usize] & 0x01,
+            source_types[inh_probe as usize] & 0x01
+        );
+
+        for &probe in [exc_probe, inh_probe].iter() {
+            let src_type = source_types[probe as usize];
+            let src_cell = g.unpack(g.cell_of_index(probe));
+            let mut expected: Vec<u32> = (0..k as u32)
+                .map(|j| connectivity::target_with_cell(probe, j, &g, k, seed, src_type, src_cell))
+                .filter(|&t| t != probe)
+                .collect();
+            expected.sort_unstable();
+            expected.dedup();
+
+            let mut got: Vec<u32> = m
+                .segments
+                .iter()
+                .filter(|s| s.kind == 1 && s.neuron_id == probe && s.target_id != probe)
+                .map(|s| s.target_id)
+                .collect();
+            got.sort_unstable();
+            got.dedup();
+
+            assert_eq!(
+                got, expected,
+                "morphology target bytes must match target_with_cell for probe {probe}"
+            );
+        }
+    }
+
+    #[test]
     fn deterministic_for_same_seed() {
         let (pos, g) = small_grid();
-        let a = generate(&pos, &g, 16, 99, 0.15);
-        let b = generate(&pos, &g, 16, 99, 0.15);
+        let regions = small_regions(pos.len());
+        let source_types = build_source_types(99, &regions);
+        let params = MorphologyParams::locked_default();
+        let a = generate(&pos, &g, 16, 99, &params, &source_types);
+        let b = generate(&pos, &g, 16, 99, &params, &source_types);
         assert_eq!(a.segments.len(), b.segments.len());
+        assert_eq!(
+            a.stats.cluster_count_histogram,
+            b.stats.cluster_count_histogram
+        );
+        assert_eq!(
+            a.stats.terminal_socket_distance_bands,
+            b.stats.terminal_socket_distance_bands
+        );
+        assert_eq!(a.stats.socket_reuse_bands, b.stats.socket_reuse_bands);
         for (x, y) in a.segments.iter().zip(b.segments.iter()) {
             assert_eq!(x.a, y.a);
             assert_eq!(x.b, y.b);
@@ -477,8 +1381,12 @@ mod tests {
     #[test]
     fn seed_changes_morphology() {
         let (pos, g) = small_grid();
-        let a = generate(&pos, &g, 16, 1, 0.15);
-        let b = generate(&pos, &g, 16, 2, 0.15);
+        let regions = small_regions(pos.len());
+        let source_types = build_source_types(1, &regions);
+        let source_types_b = build_source_types(2, &regions);
+        let params = MorphologyParams::locked_default();
+        let a = generate(&pos, &g, 16, 1, &params, &source_types);
+        let b = generate(&pos, &g, 16, 2, &params, &source_types_b);
         let differ = a
             .segments
             .iter()
@@ -491,9 +1399,109 @@ mod tests {
     #[test]
     fn soma_segments_start_at_path_zero() {
         let (pos, g) = small_grid();
-        let m = generate(&pos, &g, 16, 7, 0.15);
+        let regions = small_regions(pos.len());
+        let source_types = build_source_types(7, &regions);
+        let params = MorphologyParams::locked_default();
+        let m = generate(&pos, &g, 16, 7, &params, &source_types);
         // The first segment of each branch (touching the soma) has path_len 0.
         let zero_count = m.segments.iter().filter(|s| s.path_len == 0.0).count();
-        assert!(zero_count >= pos.len(), "expected ≥1 root segment per neuron");
+        assert!(
+            zero_count >= pos.len(),
+            "expected ≥1 root segment per neuron"
+        );
+    }
+
+    #[test]
+    fn socket_landing_distance_is_bounded() {
+        let (pos, g) = small_grid();
+        let seed = 9001u32;
+        let k = 8usize;
+        let regions = small_regions(pos.len());
+        let source_types = build_source_types(seed, &regions);
+        let params = MorphologyParams::locked_default();
+        let _m = generate(&pos, &g, k, seed, &params, &source_types);
+        let probe = (0..pos.len() as u32)
+            .find(|&nid| {
+                let src_type = source_types[nid as usize];
+                let src_cell = g.unpack(g.cell_of_index(nid));
+                let mut expected: Vec<u32> = (0..k as u32)
+                    .map(|j| {
+                        connectivity::target_with_cell(nid, j, &g, k, seed, src_type, src_cell)
+                    })
+                    .filter(|&t| t != nid)
+                    .collect();
+                expected.sort_unstable();
+                expected.dedup();
+                expected.len() > 1
+            })
+            .expect("need a probe with terminals");
+        let src_type = source_types[probe as usize];
+        let src_cell = g.unpack(g.cell_of_index(probe));
+        let target_id = (0..k as u32)
+            .map(|j| connectivity::target_with_cell(probe, j, &g, k, seed, src_type, src_cell))
+            .find(|&t| t != probe)
+            .expect("need a non-self target");
+        let plan = TargetPlan {
+            target_id,
+            source_pos: pos[probe as usize],
+            target_pos: pos[target_id as usize],
+            direction: norm(sub(pos[target_id as usize], pos[probe as usize])),
+            distance: len(sub(pos[target_id as usize], pos[probe as usize])),
+            socket_idx: 0,
+            socket_pos: pos[target_id as usize],
+            socket_distance: 0.0,
+        };
+        let (socket_pos, socket_idx, socket_distance) = target_socket(seed, probe, &plan, &params);
+        assert!(socket_idx < params.socket_count_max);
+        assert!(socket_distance >= params.socket_radius_lo * params.axon_stop_fraction * 0.99);
+        assert!(socket_distance <= params.socket_radius_hi * params.axon_stop_fraction * 1.01);
+        let expected_socket_gap = len(sub(socket_pos, pos[target_id as usize]));
+        assert!((expected_socket_gap - socket_distance).abs() < 1e-6);
+    }
+
+    #[test]
+    fn stats_json_contains_core_fields() {
+        let stats = MorphologyStats {
+            segment_count: 10,
+            dropped_count: 1,
+            segment_cap: 12,
+            segment_cap_bytes: 576,
+            segment_buffer_bytes: 480,
+            cap_utilization: 0.8333333,
+            duplicate_targets: 2,
+            self_targets: 3,
+            source_type_bytes: 4,
+            source_type_excitatory: 3,
+            source_type_inhibitory: 1,
+            cluster_count_histogram: [0, 1, 2, 3, 4, 5],
+            terminal_socket_distance_bands: [1, 2, 3, 4],
+            socket_reuse_bands: [5, 6, 7, 8],
+            unique_targets_expected: 7,
+            unique_targets_emitted: 7,
+            unique_target_coverage: 1.0,
+            all_k_coverage: true,
+            timings: MorphologyTimings {
+                setup_ms: 0.1,
+                dendrite_ms: 0.2,
+                axon_ms: 0.3,
+                finalize_ms: 0.0,
+                total_ms: 0.6,
+            },
+        };
+        let json = stats.to_json();
+        for field in [
+            "\"segment_count\":10",
+            "\"dropped_count\":1",
+            "\"segment_cap\":12",
+            "\"segment_buffer_bytes\":480",
+            "\"cluster_count_histogram\":[0,1,2,3,4,5]",
+            "\"terminal_socket_distance_bands\":[1,2,3,4]",
+            "\"socket_reuse_bands\":[5,6,7,8]",
+            "\"all_k_coverage\":true",
+            "\"setup_ms\":0.100",
+            "\"total_ms\":0.600",
+        ] {
+            assert!(json.contains(field), "missing {field} in {json}");
+        }
     }
 }

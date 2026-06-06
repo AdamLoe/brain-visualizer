@@ -5,7 +5,7 @@
 // MUST match the VisualSettings struct in src/sim/gpu/mod.rs index-for-index.
 //
 // Persistence: versioned localStorage key "bv2_settings_v1".
-// Schema: { version:3, public:{…}, dev:{…} }
+// Schema: { version:4, public:{…}, dev:{…} }
 // (version bumped 1→2: morphology controls changed defaults/semantics — width is
 //  now a 1.0 multiplier, index 15 repurposed to morphRestingOpacity,
 //  connectionLayer default 1, bloom default 0.5; old v1 data is ignored.)
@@ -14,6 +14,9 @@
 //  to the two whole-connection lighting toggles connectionLightNext (downstream,
 //  default 1) and connectionLightPast (upstream, default 0). Old v2 data is
 //  discarded — no migration; defaults are applied.)
+// (version bumped 3→4: morphology readability tuning — defaults for connection
+//  width, bloom, and resting opacity were narrowed to reduce lattice clutter;
+//  old v3 data is ignored and defaults are applied.)
 // On version mismatch → ignore saved data, use defaults (no migration for now).
 // Never persist runtime counters (there are none in this struct).
 
@@ -65,16 +68,16 @@ export const DEFAULT_SETTINGS: VisualizerSettings = {
   activeNeuronRadiusBoost:  2.0,
   inactiveNeuronOpacity:    1.0,
   voltageGlowStrength:      0.0,
-  connectionVisualWidth:    1.0,   // Morphology: width multiplier (1.0 = raw radii)
+  connectionVisualWidth:    0.80,  // Morphology: width multiplier (1.0 = raw radii)
   connectionCurveLift:      0.15,
   connectionLightNext:      1,     // Morphology: downstream lighting on by default
   connectionLightPast:      0,     // Morphology: upstream lighting off by default
-  bloomStrength:            0.5,   // Morphology: bloom on by default so glow blooms
+  bloomStrength:            0.40,  // Morphology: bloom on by default so glow blooms
   surfaceOpacity:           1.0,
   iExt:                     0.055,
   synapticScale:            0.03,
   heterogeneity:            0.0,
-  morphRestingOpacity:      0.25,  // Morphology: resting structure opacity (0=only pulses)
+  morphRestingOpacity:      0.20,  // Morphology: resting structure opacity (0=only pulses)
   signalSource:             0,
   // Morphology: default 1 = on (resting structure + signal flow). 0 = off.
   connectionLayer:          1,
@@ -124,7 +127,7 @@ interface SavedDev {
 
 /** Versioned localStorage schema.  version !== 3 → ignored (no migration). */
 interface SavedVisualizerSettings {
-  version: 3;
+  version: 4;
   public: SavedPublic;
   dev: SavedDev;
 }
@@ -136,7 +139,7 @@ const LS_KEY = "bv2_settings_v1";
 
 function settingsToSaved(s: VisualizerSettings): SavedVisualizerSettings {
   return {
-    version: 3,
+    version: 4,
     public: {
       glowTau:           s.glowTau,
       bloomStrength:     s.bloomStrength,
@@ -210,7 +213,7 @@ export function loadSettings(): VisualizerSettings {
     const raw = localStorage.getItem(LS_KEY);
     if (!raw) return { ...DEFAULT_SETTINGS };
     const parsed = JSON.parse(raw) as { version?: number };
-    if (parsed.version !== 3) return { ...DEFAULT_SETTINGS };
+    if (parsed.version !== 4) return { ...DEFAULT_SETTINGS };
     return mergeOver({ ...DEFAULT_SETTINGS }, parsed as SavedVisualizerSettings);
   } catch {
     return { ...DEFAULT_SETTINGS };

@@ -24,18 +24,46 @@
 
 ## Morphology pass supersedes ribbon and cylinder as the connection visual
 
-- **Decision.** Procedural neuron morphology (soma + dendrite tree + axon arbor) is the live connection visual. The near-LOD straight-cylinder synapse pass (`render_cylinder.wgsl`, driven by `cull_synapses`) and the earlier curved-arc ribbon pass (`render_ribbon.wgsl`) are both guarded off and never run by default.
-- **Why.** The morphology pass gives each neuron a distinct anatomical tree and makes connectivity visible as physically motivated arbors rather than arcs between abstracted points. Both legacy passes are kept (not deleted) so their geometry can be revived for debugging by flipping `DRAW_LEGACY_CYLINDERS` or `DRAW_LEGACY_RIBBONS` to `true`.
+- **Decision.** Procedural neuron morphology (soma + dendrite tree + shared
+  arbor + terminal twigs) is the live connection visual. The near-LOD
+  straight-cylinder synapse pass (`render_cylinder.wgsl`, driven by
+  `cull_synapses`) and the earlier curved-arc ribbon pass (`render_ribbon.wgsl`)
+  are both guarded off and never run by default.
+- **Why.** The morphology pass gives each neuron a distinct anatomical tree and
+  makes connectivity visible as physically motivated arbors rather than arcs
+  between abstracted points. Both legacy passes are kept (not deleted) so their
+  geometry can be revived for debugging by flipping
+  `DRAW_LEGACY_CYLINDERS` or `DRAW_LEGACY_RIBBONS` to `true`.
 - **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md)
-- **Code anchors.** `crates/brain-visualizer/src/sim/gpu/mod.rs → DRAW_LEGACY_CYLINDERS / DRAW_LEGACY_RIBBONS`; `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl`; `crates/brain-visualizer/src/sim/morphology.rs`
-- **Tradeoffs.** Morphology geometry is generated once at network build time; `connection_curve_lift` changes force a full `regenerate_morphology` call. The cylinders and ribbon required no such bake step.
+- **Code anchors.** `crates/brain-visualizer/src/sim/gpu/mod.rs →
+  DRAW_LEGACY_CYLINDERS / DRAW_LEGACY_RIBBONS`;
+  `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl`;
+  `crates/brain-visualizer/src/sim/morphology.rs`
+- **Tradeoffs.** Morphology geometry is generated once at network build time;
+  `connection_curve_lift` changes force a full `regenerate_morphology` call.
+  The cylinders and ribbon required no such bake step.
 
 ## Whole-connection spike lighting, τ-synced (no traveling pulse)
 
-- **Decision.** When a neuron fires, its connections light **instantly** and fade with the *same* `exp(-tick_diff/glow_tau)` curve as the far-glow neuron dot — there is no pulse band that races outward over a `signal_speed` and fades over a separate `lifetime`. Two independent, combinable toggles: `light_next` (downstream — a firing neuron's own segments/outgoing connections, default ON) and `light_past` (upstream, axon-only — an axon lights when its *target* neuron fires, default OFF). The retired `signal_speed`/`lifetime` knobs are gone and their settings-array indices were repurposed.
-- **Why.** Syncing the connection fade to the neuron's own glow τ reads as one coherent event ("this neuron fired, and *these* are its synapses") instead of two unrelated animations the eye has to reconcile. Upstream lighting answers the complementary question ("what is driving this neuron"). Removing the spatial pulse also drops a per-segment timing dependency on `path_len`.
+- **Decision.** When a neuron fires, its connections light **instantly** and
+  fade with the *same* `exp(-tick_diff/glow_tau)` curve as the far-glow neuron
+  dot — there is no pulse band that races outward over a `signal_speed` and
+  fades over a separate `lifetime`. Two independent, combinable toggles:
+  `light_next` (downstream — a firing neuron's own segments/outgoing
+  connections, default ON) and `light_past` (upstream, terminal-only for the
+  shared arbor — an axon lights when its *target* neuron fires, default OFF).
+  The retired `signal_speed`/`lifetime` knobs are gone and their settings-array
+  indices were repurposed.
+- **Why.** Syncing the connection fade to the neuron's own glow τ reads as one
+  coherent event ("this neuron fired, and *these* are its synapses") instead of
+  two unrelated animations the eye has to reconcile. On the shipped shared
+  arbor, only terminal twigs carry real target ids; shared root/cluster segments
+  use the source id, so upstream lighting naturally resolves to the terminal
+  twigs instead of pretending the whole path is target-owned.
 - **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md)
-- **Code anchors.** `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl → vs_main` (the `light_next`/`light_past`/`glow_tau` brightness model); `crates/brain-visualizer/src/sim/gpu/resources.rs → MorphUniforms`.
+- **Code anchors.** `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl →
+  vs_main` (the `light_next`/`light_past`/`glow_tau` brightness model);
+  `crates/brain-visualizer/src/sim/gpu/resources.rs → MorphUniforms`.
 
 ## Draw all K outgoing connections per neuron
 

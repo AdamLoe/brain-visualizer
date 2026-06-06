@@ -1,8 +1,8 @@
 ---
-status:        draft
+status:        shipped
 owner:         adamg
 last_updated:  2026-06-06
-okay_to_delete: false
+okay_to_delete: true
 long_lived:    false
 owning_docs:
   - architecture/manifold.md
@@ -191,6 +191,20 @@ Route durable content into:
   rationale.
 - `decisions/dev-tooling.md` / `decisions/profiling.md` - only if tuning creates
   new durable settings/profiling rationale.
+
+Issue list addressed:
+
+- Bright lattice clutter.
+- Weak far-view directionality.
+- Weak continuity legibility.
+- Detached soma/readability.
+- Brightness/taper imbalance.
+
+Review decision:
+
+- Shipped after artifact review, gates, and orchestrator artifact sanity check.
+  No stats regression; dropped count stayed at 0 and unique-target coverage
+  stayed at 1.0.
 
 ## See also
 

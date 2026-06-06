@@ -1,6 +1,6 @@
 {
   "name": "brain-visualizer",
-  "version": "0.1.2",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "description": "Hardware-adaptive spiking-neural-network cortical visualizer",

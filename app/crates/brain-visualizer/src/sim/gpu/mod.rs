@@ -66,94 +66,94 @@ enum MetricsReadState {
 pub struct VisualSettings {
     // ── continuous knobs ──────────────────────────────────────────────────
     /// index 0  — glow decay in ticks (default 60.0)
-    pub glow_tau:                   f32,
+    pub glow_tau: f32,
     /// index 1  — billboard radius in world units (default 0.004)
-    pub point_radius:               f32,
+    pub point_radius: f32,
     /// index 2  — neuron mesh radius (default 0.004)
-    pub neuron_visual_radius:       f32,
+    pub neuron_visual_radius: f32,
     /// index 3  — radius multiplier when actively firing (default 2.0)
     pub active_neuron_radius_boost: f32,
     /// index 4  — opacity of inactive neurons (default 1.0)
-    pub inactive_neuron_opacity:    f32,
+    pub inactive_neuron_opacity: f32,
     /// index 5  — voltage glow contribution (default 0.0 = off)
-    pub voltage_glow_strength:      f32,
+    pub voltage_glow_strength: f32,
     /// index 6  — Morphology controls: branch-width multiplier on the stored
     /// tube radii (default 1.0; <1 thinner, >1 thicker)
-    pub connection_visual_width:    f32,
+    pub connection_visual_width: f32,
     /// index 7  — Bézier midpoint lift for ribbon curves (default 0.15)
-    pub connection_curve_lift:      f32,
+    pub connection_curve_lift: f32,
     /// index 8  — Morphology controls: light a firing neuron's downstream
     /// (outgoing) axon connections (0 = off, 1 = on; default 1)
-    pub connection_light_next:      u32,
+    pub connection_light_next: u32,
     /// index 9  — Morphology controls: light a firing neuron's upstream
     /// (incoming) axon connections (0 = off, 1 = on; default 0)
-    pub connection_light_past:      u32,
+    pub connection_light_past: u32,
     /// index 10 — bloom post-process intensity (default 0.0 = off)
-    pub bloom_strength:             f32,
+    pub bloom_strength: f32,
     /// index 11 — manifold surface opacity (default 1.0)
-    pub surface_opacity:            f32,
+    pub surface_opacity: f32,
     /// index 12 — ambient drive current (sim tuning; default 0.055)
-    pub i_ext:                      f32,
+    pub i_ext: f32,
     /// index 13 — recurrent coupling scale (sim tuning; default 0.03)
-    pub synaptic_scale:             f32,
+    pub synaptic_scale: f32,
     /// index 14 — per-neuron parameter spread 0→1 (default 0.0 = homogeneous)
-    pub heterogeneity:              f32,
+    pub heterogeneity: f32,
     // ── index 15 (repurposed) ──────────────────────────────────────────────
     /// index 15 — Morphology controls: resting opacity of non-active structure
     /// (0..1; default 0.25). 0 → only live signal pulses are visible. (Replaces
     /// the retired max_active_visual_edges budget.)
-    pub morph_resting_opacity:      f32,
+    pub morph_resting_opacity: f32,
     // ── mode enums (stored as integer cast to f32) ─────────────────────────
     /// index 16 — signal_source mode (default 0)
-    pub signal_source:              u32,
+    pub signal_source: u32,
     /// index 17 — connection_layer mode (default 0)
-    pub connection_layer:           u32,
+    pub connection_layer: u32,
     /// index 18 — color_by mode (default 0)
-    pub color_by:                   u32,
+    pub color_by: u32,
     /// index 19 — neuron_visibility mode (default 0)
-    pub neuron_visibility:          u32,
+    pub neuron_visibility: u32,
     /// index 20 — surface mode (default 0)
-    pub surface:                    u32,
+    pub surface: u32,
     /// index 21 — weight normalization: 0=none, 1=sqrt_k, 2=k (default 1)
-    pub weight_normalization:       u32,
+    pub weight_normalization: u32,
     /// index 22 — input_mode: 0=constant, ... (default 0)
-    pub input_mode:                 u32,
+    pub input_mode: u32,
     /// index 23 — adaptive scaler enabled: 0=off (default 0)
-    pub adaptive_scaler_enabled:    u32,
+    pub adaptive_scaler_enabled: u32,
 }
 
 impl Default for VisualSettings {
     fn default() -> Self {
         Self {
-            glow_tau:                   60.0,
-            point_radius:               0.004,
-            neuron_visual_radius:       0.004,
+            glow_tau: 60.0,
+            point_radius: 0.004,
+            neuron_visual_radius: 0.004,
             active_neuron_radius_boost: 2.0,
-            inactive_neuron_opacity:    1.0,
-            voltage_glow_strength:      0.0,
+            inactive_neuron_opacity: 1.0,
+            voltage_glow_strength: 0.0,
             // Morphology controls: width multiplier (1.0 = use raw radii).
-            connection_visual_width:    1.0,
-            connection_curve_lift:      0.15,
-            connection_light_next:      1,
-            connection_light_past:      0,
+            connection_visual_width: 0.80,
+            connection_curve_lift: 0.15,
+            connection_light_next: 1,
+            connection_light_past: 0,
             // Morphology controls: bloom on by default so the glow blooms.
-            bloom_strength:             0.5,
-            surface_opacity:            1.0,
-            i_ext:                      0.055,
-            synaptic_scale:             0.03,
-            heterogeneity:              0.0,
+            bloom_strength: 0.40,
+            surface_opacity: 1.0,
+            i_ext: 0.055,
+            synaptic_scale: 0.03,
+            heterogeneity: 0.0,
             // Morphology controls: resting opacity of non-active structure.
-            morph_resting_opacity:      0.25,
-            signal_source:              0,
+            morph_resting_opacity: 0.20,
+            signal_source: 0,
             // Morphology controls: default 1 = on (resting structure + signal
             // flow). 0 = off (morphology pass skipped).
-            connection_layer:           1,
-            color_by:                   0,
-            neuron_visibility:          0,
-            surface:                    0,
-            weight_normalization:       1,
-            input_mode:                 0,
-            adaptive_scaler_enabled:    0,
+            connection_layer: 1,
+            color_by: 0,
+            neuron_visibility: 0,
+            surface: 0,
+            weight_normalization: 1,
+            input_mode: 0,
+            adaptive_scaler_enabled: 0,
         }
     }
 }
@@ -165,35 +165,65 @@ impl VisualSettings {
     pub fn from_slice(data: &[f32]) -> Self {
         let d = Self::default();
         let f = |i: usize, def: f32| -> f32 { data.get(i).copied().unwrap_or(def) };
-        let u = |i: usize, def: u32| -> u32 {
-            data.get(i).copied().map(|v| v as u32).unwrap_or(def)
-        };
+        let u =
+            |i: usize, def: u32| -> u32 { data.get(i).copied().map(|v| v as u32).unwrap_or(def) };
         Self {
-            glow_tau:                   f(0,  d.glow_tau),
-            point_radius:               f(1,  d.point_radius),
-            neuron_visual_radius:       f(2,  d.neuron_visual_radius),
-            active_neuron_radius_boost: f(3,  d.active_neuron_radius_boost),
-            inactive_neuron_opacity:    f(4,  d.inactive_neuron_opacity),
-            voltage_glow_strength:      f(5,  d.voltage_glow_strength),
-            connection_visual_width:    f(6,  d.connection_visual_width),
-            connection_curve_lift:      f(7,  d.connection_curve_lift),
-            connection_light_next:      u(8,  d.connection_light_next),
-            connection_light_past:      u(9,  d.connection_light_past),
-            bloom_strength:             f(10, d.bloom_strength),
-            surface_opacity:            f(11, d.surface_opacity),
-            i_ext:                      f(12, d.i_ext),
-            synaptic_scale:             f(13, d.synaptic_scale),
-            heterogeneity:              f(14, d.heterogeneity),
-            morph_resting_opacity:      f(15, d.morph_resting_opacity),
-            signal_source:              u(16, d.signal_source),
-            connection_layer:           u(17, d.connection_layer),
-            color_by:                   u(18, d.color_by),
-            neuron_visibility:          u(19, d.neuron_visibility),
-            surface:                    u(20, d.surface),
-            weight_normalization:       u(21, d.weight_normalization),
-            input_mode:                 u(22, d.input_mode),
-            adaptive_scaler_enabled:    u(23, d.adaptive_scaler_enabled),
+            glow_tau: f(0, d.glow_tau),
+            point_radius: f(1, d.point_radius),
+            neuron_visual_radius: f(2, d.neuron_visual_radius),
+            active_neuron_radius_boost: f(3, d.active_neuron_radius_boost),
+            inactive_neuron_opacity: f(4, d.inactive_neuron_opacity),
+            voltage_glow_strength: f(5, d.voltage_glow_strength),
+            connection_visual_width: f(6, d.connection_visual_width),
+            connection_curve_lift: f(7, d.connection_curve_lift),
+            connection_light_next: u(8, d.connection_light_next),
+            connection_light_past: u(9, d.connection_light_past),
+            bloom_strength: f(10, d.bloom_strength),
+            surface_opacity: f(11, d.surface_opacity),
+            i_ext: f(12, d.i_ext),
+            synaptic_scale: f(13, d.synaptic_scale),
+            heterogeneity: f(14, d.heterogeneity),
+            morph_resting_opacity: f(15, d.morph_resting_opacity),
+            signal_source: u(16, d.signal_source),
+            connection_layer: u(17, d.connection_layer),
+            color_by: u(18, d.color_by),
+            neuron_visibility: u(19, d.neuron_visibility),
+            surface: u(20, d.surface),
+            weight_normalization: u(21, d.weight_normalization),
+            input_mode: u(22, d.input_mode),
+            adaptive_scaler_enabled: u(23, d.adaptive_scaler_enabled),
         }
+    }
+
+    /// Compact JSON snapshot for review artifacts.
+    pub fn to_json(&self) -> String {
+        format!(
+            "{{\"glow_tau\":{:.6},\"point_radius\":{:.6},\"neuron_visual_radius\":{:.6},\"active_neuron_radius_boost\":{:.6},\"inactive_neuron_opacity\":{:.6},\"voltage_glow_strength\":{:.6},\"connection_visual_width\":{:.6},\"connection_curve_lift\":{:.6},\"connection_light_next\":{},\"connection_light_past\":{},\"bloom_strength\":{:.6},\"surface_opacity\":{:.6},\"i_ext\":{:.6},\"synaptic_scale\":{:.6},\"heterogeneity\":{:.6},\"morph_resting_opacity\":{:.6},\"signal_source\":{},\"connection_layer\":{},\"color_by\":{},\"neuron_visibility\":{},\"surface\":{},\"weight_normalization\":{},\"input_mode\":{},\"adaptive_scaler_enabled\":{}}}",
+            self.glow_tau,
+            self.point_radius,
+            self.neuron_visual_radius,
+            self.active_neuron_radius_boost,
+            self.inactive_neuron_opacity,
+            self.voltage_glow_strength,
+            self.connection_visual_width,
+            self.connection_curve_lift,
+            self.connection_light_next,
+            self.connection_light_past,
+            self.bloom_strength,
+            self.surface_opacity,
+            self.i_ext,
+            self.synaptic_scale,
+            self.heterogeneity,
+            self.morph_resting_opacity,
+            self.signal_source,
+            self.connection_layer,
+            self.color_by,
+            self.neuron_visibility,
+            self.surface,
+            self.weight_normalization,
+            self.input_mode,
+            self.adaptive_scaler_enabled,
+        )
     }
 }
 
@@ -398,8 +428,8 @@ impl GpuBackend {
         // GENERATION time, so it only takes effect by rebuilding the morphology.
         // Detect a real change and regenerate after storing (so generation reads
         // the new value). Guarded so dragging other sliders never regenerates.
-        let curve_changed = (v.connection_curve_lift - self.visual.connection_curve_lift).abs()
-            > f32::EPSILON;
+        let curve_changed =
+            (v.connection_curve_lift - self.visual.connection_curve_lift).abs() > f32::EPSILON;
         self.visual = v;
         if curve_changed {
             self.regenerate_morphology();
@@ -418,8 +448,10 @@ impl GpuBackend {
             &self.ctx.device,
             &manifold.neuron_positions,
             &manifold.spatial_grid,
+            &manifold.neuron_regions,
             &config,
-            self.visual.connection_curve_lift,
+            &crate::sim::morphology::MorphologyParams::locked_default()
+                .with_curve_lift(self.visual.connection_curve_lift),
         );
         self.resources
             .refresh_bind_groups(&self.ctx.device, &self.layouts);
@@ -511,8 +543,9 @@ impl GpuBackend {
             .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
             .map_err(|e| format!("create_surface: {e}"))?;
         // Safety: Canvas surface stores no external reference; lifetime is phantom.
-        let surface: wgpu::Surface<'static> =
-            unsafe { std::mem::transmute::<wgpu::Surface<'_>, wgpu::Surface<'static>>(raw_surface) };
+        let surface: wgpu::Surface<'static> = unsafe {
+            std::mem::transmute::<wgpu::Surface<'_>, wgpu::Surface<'static>>(raw_surface)
+        };
 
         // 3. Request adapter compatible with the surface.
         let adapter = instance
@@ -524,9 +557,7 @@ impl GpuBackend {
             .await
             .map_err(|e| format!("no wgpu adapter: {e}"))?;
 
-        let timestamps_supported = adapter
-            .features()
-            .contains(wgpu::Features::TIMESTAMP_QUERY);
+        let timestamps_supported = adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
         let mut required_features = wgpu::Features::empty();
         if timestamps_supported {
             required_features |= wgpu::Features::TIMESTAMP_QUERY;
@@ -536,8 +567,7 @@ impl GpuBackend {
         let adapter_limits = adapter.limits();
         let mut limits = wgpu::Limits::downlevel_webgl2_defaults();
         // Prefer the higher WebGPU limits if available.
-        limits.max_storage_buffer_binding_size =
-            adapter_limits.max_storage_buffer_binding_size;
+        limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
         limits.max_buffer_size = adapter_limits.max_buffer_size;
         limits.max_compute_workgroups_per_dimension =
             adapter_limits.max_compute_workgroups_per_dimension;
@@ -585,7 +615,12 @@ impl GpuBackend {
         );
 
         Ok((
-            GpuContext { device, queue, timestamps_supported, instance: Some(instance) },
+            GpuContext {
+                device,
+                queue,
+                timestamps_supported,
+                instance: Some(instance),
+            },
             surface,
             format,
         ))
@@ -595,8 +630,7 @@ impl GpuBackend {
     /// build a `GpuContext`. Native-only (examples + tests).
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn acquire_native() -> Result<GpuContext, String> {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
@@ -606,9 +640,7 @@ impl GpuBackend {
             .await
             .map_err(|e| format!("no wgpu adapter: {e}"))?;
         let info = adapter.get_info();
-        let timestamps_supported = adapter
-            .features()
-            .contains(wgpu::Features::TIMESTAMP_QUERY);
+        let timestamps_supported = adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
         let mut required_features = wgpu::Features::empty();
         if timestamps_supported {
             required_features |= wgpu::Features::TIMESTAMP_QUERY;
@@ -617,8 +649,7 @@ impl GpuBackend {
         // big N fits a single binding. Clamp to adapter limits.
         let mut limits = wgpu::Limits::downlevel_defaults();
         let adapter_limits = adapter.limits();
-        limits.max_storage_buffer_binding_size =
-            adapter_limits.max_storage_buffer_binding_size;
+        limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
         limits.max_buffer_size = adapter_limits.max_buffer_size;
         limits.max_compute_workgroups_per_dimension =
             adapter_limits.max_compute_workgroups_per_dimension;
@@ -626,8 +657,7 @@ impl GpuBackend {
         // is only 4. Lift to the adapter's capability.
         limits.max_storage_buffers_per_shader_stage =
             adapter_limits.max_storage_buffers_per_shader_stage;
-        limits.max_storage_buffer_binding_size =
-            adapter_limits.max_storage_buffer_binding_size;
+        limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("brain-visualizer-gpu"),
@@ -716,9 +746,10 @@ impl GpuBackend {
             &self.ctx.device,
             &manifold.neuron_positions,
             &manifold.spatial_grid,
+            &manifold.neuron_regions,
             config,
-            // Morphology controls: bake the current curve-lift into the axon bow.
-            self.visual.connection_curve_lift,
+            &crate::sim::morphology::MorphologyParams::locked_default()
+                .with_curve_lift(self.visual.connection_curve_lift),
         );
         self.resources
             .refresh_bind_groups(&self.ctx.device, &self.layouts);
@@ -743,9 +774,11 @@ impl GpuBackend {
         // V2 Phase E: remember the surface format so the bloom HDR scene target
         // matches it (scene pipelines are format-specific).
         self.render_color_format = color_format;
-        self.pipelines.build_render(&self.ctx.device, &self.layouts, color_format);
+        self.pipelines
+            .build_render(&self.ctx.device, &self.layouts, color_format);
         // Phase 4: near-LOD pipelines use the same color format.
-        self.pipelines.build_near_lod(&self.ctx.device, &self.layouts, color_format);
+        self.pipelines
+            .build_near_lod(&self.ctx.device, &self.layouts, color_format);
     }
 
     /// Set camera distance (from surface/origin) each frame so near-LOD can
@@ -792,8 +825,16 @@ impl GpuBackend {
         point_radius: f32,
     ) {
         // Default to far-only: caller did not set camera_distance explicitly.
-        self.render_full(target_view, mvp, camera_right, camera_up, glow_tau, point_radius,
-            [0.0, 0.0, 3.0], self.lod_camera_distance);
+        self.render_full(
+            target_view,
+            mvp,
+            camera_right,
+            camera_up,
+            glow_tau,
+            point_radius,
+            [0.0, 0.0, 3.0],
+            self.lod_camera_distance,
+        );
     }
 
     /// Full render variant accepting camera_pos + camera_distance explicitly
@@ -867,7 +908,11 @@ impl GpuBackend {
             (dist - LOD_NEAR_ONLY_DIST) / (LOD_FAR_ONLY_DIST - LOD_NEAR_ONLY_DIST)
         };
         // Billboards-everywhere: always full-strength. (Was `_legacy_far_alpha`.)
-        let far_alpha = if DRAW_LEGACY_NEAR_SPHERES { _legacy_far_alpha } else { 1.0f32 };
+        let far_alpha = if DRAW_LEGACY_NEAR_SPHERES {
+            _legacy_far_alpha
+        } else {
+            1.0f32
+        };
         let near_alpha = 1.0 - far_alpha;
         let run_near_lod = DRAW_LEGACY_NEAR_SPHERES
             && near_alpha > 0.001
@@ -898,7 +943,9 @@ impl GpuBackend {
             _pad3: 0.0,
             _pad4: 0.0,
         };
-        self.ctx.queue.write_buffer(&rr.render_uniform, 0, bytemuck::bytes_of(&ru));
+        self.ctx
+            .queue
+            .write_buffer(&rr.render_uniform, 0, bytemuck::bytes_of(&ru));
 
         // V2 Phase D: upload the per-frame ribbon uniform when the layer is on.
         // Morphology: ribbons are RETIRED — gated behind DRAW_LEGACY_RIBBONS.
@@ -924,7 +971,9 @@ impl GpuBackend {
                     _pad1: 0,
                     _pad2: 0,
                 };
-                self.ctx.queue.write_buffer(&eb.ribbon_uniform, 0, bytemuck::bytes_of(&rib));
+                self.ctx
+                    .queue
+                    .write_buffer(&eb.ribbon_uniform, 0, bytemuck::bytes_of(&rib));
             }
         }
 
@@ -939,7 +988,9 @@ impl GpuBackend {
                     lod_alpha: near_alpha,
                     _pad: [0.0; 3],
                 };
-                self.ctx.queue.write_buffer(&nlb.near_render_uniform, 0, bytemuck::bytes_of(&nru));
+                self.ctx
+                    .queue
+                    .write_buffer(&nlb.near_render_uniform, 0, bytemuck::bytes_of(&nru));
 
                 // Extract 6 frustum planes from column-major MVP matrix.
                 // Standard Gribb/Hartmann plane extraction from MVP rows.
@@ -947,21 +998,35 @@ impl GpuBackend {
                 let fu = FrustumCullUniforms {
                     planes,
                     camera_pos,
-                    max_synapse_dist: 2.5,  // cull synapses beyond 2.5 world units
+                    max_synapse_dist: 2.5, // cull synapses beyond 2.5 world units
                     current_tick: self.tick,
                     n,
                     _pad: [0; 2],
                 };
-                self.ctx.queue.write_buffer(&nlb.frustum_uniform, 0, bytemuck::bytes_of(&fu));
+                self.ctx
+                    .queue
+                    .write_buffer(&nlb.frustum_uniform, 0, bytemuck::bytes_of(&fu));
 
                 // Zero per-frame atomic counters.
                 let zero = [0u32];
-                self.ctx.queue.write_buffer(&nlb.neuron_count,    0, bytemuck::cast_slice(&zero));
-                self.ctx.queue.write_buffer(&nlb.synapse_count,   0, bytemuck::cast_slice(&zero));
-                self.ctx.queue.write_buffer(&nlb.neuron_overflow, 0, bytemuck::cast_slice(&zero));
-                self.ctx.queue.write_buffer(&nlb.synapse_overflow,0, bytemuck::cast_slice(&zero));
-                self.ctx.queue.write_buffer(&nlb.neuron_visible,  0, bytemuck::cast_slice(&zero));
-                self.ctx.queue.write_buffer(&nlb.synapse_visible, 0, bytemuck::cast_slice(&zero));
+                self.ctx
+                    .queue
+                    .write_buffer(&nlb.neuron_count, 0, bytemuck::cast_slice(&zero));
+                self.ctx
+                    .queue
+                    .write_buffer(&nlb.synapse_count, 0, bytemuck::cast_slice(&zero));
+                self.ctx
+                    .queue
+                    .write_buffer(&nlb.neuron_overflow, 0, bytemuck::cast_slice(&zero));
+                self.ctx
+                    .queue
+                    .write_buffer(&nlb.synapse_overflow, 0, bytemuck::cast_slice(&zero));
+                self.ctx
+                    .queue
+                    .write_buffer(&nlb.neuron_visible, 0, bytemuck::cast_slice(&zero));
+                self.ctx
+                    .queue
+                    .write_buffer(&nlb.synapse_visible, 0, bytemuck::cast_slice(&zero));
             }
         }
 
@@ -981,12 +1046,17 @@ impl GpuBackend {
                 _pad0: 0,
                 _pad1: 0,
             };
-            self.ctx.queue.write_buffer(&rr.manifold_uniform, 0, bytemuck::bytes_of(&mu));
+            self.ctx
+                .queue
+                .write_buffer(&rr.manifold_uniform, 0, bytemuck::bytes_of(&mu));
         }
 
-        let mut enc = self.ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("render-frame"),
-        });
+        let mut enc = self
+            .ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("render-frame"),
+            });
 
         // V2 Phase E: manifold surface pass (optional, before far-glow). Clears
         // color + depth so the far-glow pass can load on top. Depth-writes so the
@@ -1000,7 +1070,12 @@ impl GpuBackend {
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }),
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.0,
+                            g: 0.0,
+                            b: 0.0,
+                            a: 1.0,
+                        }),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -1031,7 +1106,12 @@ impl GpuBackend {
             let color_load = if draw_surface {
                 wgpu::LoadOp::Load
             } else {
-                wgpu::LoadOp::Clear(wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 })
+                wgpu::LoadOp::Clear(wgpu::Color {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 1.0,
+                })
             };
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("far-glow-pass"),
@@ -1087,7 +1167,9 @@ impl GpuBackend {
                     _pad1: 0,
                     _pad2: 0,
                 };
-                self.ctx.queue.write_buffer(&mb.morph_uniform, 0, bytemuck::bytes_of(&mu));
+                self.ctx
+                    .queue
+                    .write_buffer(&mb.morph_uniform, 0, bytemuck::bytes_of(&mu));
                 let segs = mb.segment_count;
                 let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("morphology-pass"),
@@ -1274,11 +1356,11 @@ impl GpuBackend {
             // synchronously — identical deadlock risk as stats_staging in tick(). Skip.
             #[cfg(not(target_arch = "wasm32"))]
             {
-                enc.copy_buffer_to_buffer(&nlb.neuron_count,    0, &nlb.profiler_staging, 0,  4);
-                enc.copy_buffer_to_buffer(&nlb.neuron_overflow, 0, &nlb.profiler_staging, 4,  4);
-                enc.copy_buffer_to_buffer(&nlb.synapse_count,   0, &nlb.profiler_staging, 8,  4);
-                enc.copy_buffer_to_buffer(&nlb.synapse_overflow,0, &nlb.profiler_staging, 12, 4);
-                enc.copy_buffer_to_buffer(&nlb.neuron_visible,  0, &nlb.profiler_staging, 16, 4);
+                enc.copy_buffer_to_buffer(&nlb.neuron_count, 0, &nlb.profiler_staging, 0, 4);
+                enc.copy_buffer_to_buffer(&nlb.neuron_overflow, 0, &nlb.profiler_staging, 4, 4);
+                enc.copy_buffer_to_buffer(&nlb.synapse_count, 0, &nlb.profiler_staging, 8, 4);
+                enc.copy_buffer_to_buffer(&nlb.synapse_overflow, 0, &nlb.profiler_staging, 12, 4);
+                enc.copy_buffer_to_buffer(&nlb.neuron_visible, 0, &nlb.profiler_staging, 16, 4);
                 enc.copy_buffer_to_buffer(&nlb.synapse_visible, 0, &nlb.profiler_staging, 20, 4);
             }
         }
@@ -1297,7 +1379,10 @@ impl GpuBackend {
             let pipe_composite = self.pipelines.bloom_composite.as_ref().unwrap();
 
             let inv_full = [1.0 / rt.width.max(1) as f32, 1.0 / rt.height.max(1) as f32];
-            let inv_half = [1.0 / rt.bloom_width.max(1) as f32, 1.0 / rt.bloom_height.max(1) as f32];
+            let inv_half = [
+                1.0 / rt.bloom_width.max(1) as f32,
+                1.0 / rt.bloom_height.max(1) as f32,
+            ];
 
             // Per-pass uniforms.
             let bright_u = resources::BloomUniforms {
@@ -1325,10 +1410,20 @@ impl GpuBackend {
                 _pad: 0.0,
             };
             let composite_u = bright_u; // direction/threshold unused by composite
-            self.ctx.queue.write_buffer(&rr.bloom_bright_uniform, 0, bytemuck::bytes_of(&bright_u));
-            self.ctx.queue.write_buffer(&rr.bloom_blur_h_uniform, 0, bytemuck::bytes_of(&blur_h_u));
-            self.ctx.queue.write_buffer(&rr.bloom_blur_v_uniform, 0, bytemuck::bytes_of(&blur_v_u));
-            self.ctx.queue.write_buffer(&rr.bloom_composite_uniform, 0, bytemuck::bytes_of(&composite_u));
+            self.ctx
+                .queue
+                .write_buffer(&rr.bloom_bright_uniform, 0, bytemuck::bytes_of(&bright_u));
+            self.ctx
+                .queue
+                .write_buffer(&rr.bloom_blur_h_uniform, 0, bytemuck::bytes_of(&blur_h_u));
+            self.ctx
+                .queue
+                .write_buffer(&rr.bloom_blur_v_uniform, 0, bytemuck::bytes_of(&blur_v_u));
+            self.ctx.queue.write_buffer(
+                &rr.bloom_composite_uniform,
+                0,
+                bytemuck::bytes_of(&composite_u),
+            );
 
             let dev = &self.ctx.device;
             // bright: read HDR scene → bloom_a (half-res). uniform = bright.
@@ -1336,9 +1431,18 @@ impl GpuBackend {
                 label: Some("bloom-bright-bg"),
                 layout: &self.layouts.bloom_pass_bgl,
                 entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::Sampler(&rr.bloom_sampler) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(hdr_view) },
-                    wgpu::BindGroupEntry { binding: 2, resource: rr.bloom_bright_uniform.as_entire_binding() },
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Sampler(&rr.bloom_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(hdr_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: rr.bloom_bright_uniform.as_entire_binding(),
+                    },
                 ],
             });
             // blur_h: read bloom_a → bloom_b. uniform = blur_h.
@@ -1346,9 +1450,18 @@ impl GpuBackend {
                 label: Some("bloom-blur-h-bg"),
                 layout: &self.layouts.bloom_pass_bgl,
                 entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::Sampler(&rr.bloom_sampler) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(bloom_a_view) },
-                    wgpu::BindGroupEntry { binding: 2, resource: rr.bloom_blur_h_uniform.as_entire_binding() },
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Sampler(&rr.bloom_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(bloom_a_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: rr.bloom_blur_h_uniform.as_entire_binding(),
+                    },
                 ],
             });
             // blur_v: read bloom_b → bloom_a. uniform = blur_v.
@@ -1356,9 +1469,18 @@ impl GpuBackend {
                 label: Some("bloom-blur-v-bg"),
                 layout: &self.layouts.bloom_pass_bgl,
                 entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::Sampler(&rr.bloom_sampler) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(bloom_b_view) },
-                    wgpu::BindGroupEntry { binding: 2, resource: rr.bloom_blur_v_uniform.as_entire_binding() },
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Sampler(&rr.bloom_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(bloom_b_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: rr.bloom_blur_v_uniform.as_entire_binding(),
+                    },
                 ],
             });
             // composite: scene(1)=HDR, bloom(3)=bloom_a (final blur), uniform(2).
@@ -1366,10 +1488,22 @@ impl GpuBackend {
                 label: Some("bloom-composite-bg"),
                 layout: &self.layouts.bloom_composite_bgl,
                 entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::Sampler(&rr.bloom_sampler) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(hdr_view) },
-                    wgpu::BindGroupEntry { binding: 2, resource: rr.bloom_composite_uniform.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(bloom_a_view) },
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Sampler(&rr.bloom_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(hdr_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: rr.bloom_composite_uniform.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(bloom_a_view),
+                    },
                 ],
             });
 
@@ -1385,7 +1519,12 @@ impl GpuBackend {
                         resolve_target: None,
                         depth_slice: None,
                         ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }),
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: 0.0,
+                                g: 0.0,
+                                b: 0.0,
+                                a: 1.0,
+                            }),
                             store: wgpu::StoreOp::Store,
                         },
                     })],
@@ -1399,10 +1538,34 @@ impl GpuBackend {
                 pass.draw(0..3, 0..1);
             };
 
-            fullscreen(&mut enc, "bloom-bright", bloom_a_view, pipe_bright, &bright_bg);
-            fullscreen(&mut enc, "bloom-blur-h", bloom_b_view, pipe_blur, &blur_h_bg);
-            fullscreen(&mut enc, "bloom-blur-v", bloom_a_view, pipe_blur, &blur_v_bg);
-            fullscreen(&mut enc, "bloom-composite", target_view, pipe_composite, &composite_bg);
+            fullscreen(
+                &mut enc,
+                "bloom-bright",
+                bloom_a_view,
+                pipe_bright,
+                &bright_bg,
+            );
+            fullscreen(
+                &mut enc,
+                "bloom-blur-h",
+                bloom_b_view,
+                pipe_blur,
+                &blur_h_bg,
+            );
+            fullscreen(
+                &mut enc,
+                "bloom-blur-v",
+                bloom_a_view,
+                pipe_blur,
+                &blur_v_bg,
+            );
+            fullscreen(
+                &mut enc,
+                "bloom-composite",
+                target_view,
+                pipe_composite,
+                &composite_bg,
+            );
         }
 
         self.ctx.queue.submit([enc.finish()]);
@@ -1457,7 +1620,10 @@ impl GpuBackend {
             eprintln!("[debug] mean(v)={mean_v:.3} outside [-0.5,1.5]");
         }
         if frac > 0.80 {
-            eprintln!("[debug] {:.0}% fired in one tick (excitability bug?)", frac * 100.0);
+            eprintln!(
+                "[debug] {:.0}% fired in one tick (excitability bug?)",
+                frac * 100.0
+            );
         }
         (mean_v, frac)
     }
@@ -1533,9 +1699,10 @@ impl GpuBackend {
                 Some(p) => p,
                 None => return,
             };
-            let (Some(bg), Some(sim)) =
-                (self.resources.bind_groups.as_ref(), self.resources.sim_buffers.as_ref())
-            else {
+            let (Some(bg), Some(sim)) = (
+                self.resources.bind_groups.as_ref(),
+                self.resources.sim_buffers.as_ref(),
+            ) else {
                 return;
             };
 
@@ -1551,15 +1718,22 @@ impl GpuBackend {
                 histo_bins: METRICS_HISTO_BINS,
                 _pad: [0; 2],
             };
-            self.ctx.queue.write_buffer(&sim.metrics_uniform, 0, bytemuck::bytes_of(&mu));
+            self.ctx
+                .queue
+                .write_buffer(&sim.metrics_uniform, 0, bytemuck::bytes_of(&mu));
             // Zero the metrics buffer (atomic accumulators start fresh each pass).
             let zeros = [0u32; METRICS_SLOT_COUNT];
-            self.ctx.queue.write_buffer(&sim.metrics_buf, 0, bytemuck::cast_slice(&zeros));
+            self.ctx
+                .queue
+                .write_buffer(&sim.metrics_buf, 0, bytemuck::cast_slice(&zeros));
 
             let groups = n.div_ceil(256).max(1);
-            let mut enc = self.ctx.device.create_command_encoder(
-                &wgpu::CommandEncoderDescriptor { label: Some("metrics-reduce") },
-            );
+            let mut enc = self
+                .ctx
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("metrics-reduce"),
+                });
             {
                 let mut cp = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("reduce_metrics"),
@@ -1620,8 +1794,7 @@ impl GpuBackend {
 
         // Recombine the 64-bit fixed-point voltage sum, then mean (undo offset).
         let volt_sum = (m[10] as f64) * 4_294_967_296.0 + (m[9] as f64);
-        let mean_v =
-            ((volt_sum / METRICS_VOLT_SCALE as f64) / n as f64) as f32 + METRICS_VOLT_LO;
+        let mean_v = ((volt_sum / METRICS_VOLT_SCALE as f64) / n as f64) as f32 + METRICS_VOLT_LO;
 
         let input_spikes = m[1] as f32;
         let assoc_spikes = m[2] as f32;
@@ -1648,11 +1821,14 @@ impl GpuBackend {
                 }
                 prev = Some(s);
             }
-            if count > 0 { (sum / count as f64) as f32 } else { 0.0 }
+            if count > 0 {
+                (sum / count as f64) as f32
+            } else {
+                0.0
+            }
         };
         // Cascade age is counted in readbacks; scale to ticks via the interval.
-        let time_since_last_large_cascade =
-            (self.last_cascade_age * METRICS_ISSUE_INTERVAL) as f32;
+        let time_since_last_large_cascade = (self.last_cascade_age * METRICS_ISSUE_INTERVAL) as f32;
 
         let refractory_blocked_attempts = m[11] as f32; // unused this phase (0)
         let current_accumulator_high_water = self.max_abs_current_hw as f32;
@@ -1728,9 +1904,8 @@ impl SimBackend for GpuBackend {
         // Phase 3: write stimulation uniform. Pre-extract stim resources so the
         // borrow checker can split self.pipelines / self.resources borrows.
         let stim_pending = self.stim_pending.take();
-        let do_stim = stim_pending.is_some()
-            && self.pipelines.stimulate.is_some()
-            && bg.stimulate.is_some();
+        let do_stim =
+            stim_pending.is_some() && self.pipelines.stimulate.is_some() && bg.stimulate.is_some();
         if let Some(su) = stim_pending {
             if let Some(rr) = self.resources.render_resources.as_ref() {
                 queue.write_buffer(&rr.stim_uniform, 0, bytemuck::bytes_of(&su));
@@ -1840,8 +2015,12 @@ impl SimBackend for GpuBackend {
                         n,
                         k: self.config.k as u32,
                         seed_lo: self.config.seed_lo(),
-                        grid_dim: self.resources.grid_buffers.as_ref()
-                            .map(|g| g.grid_dim).unwrap_or(1),
+                        grid_dim: self
+                            .resources
+                            .grid_buffers
+                            .as_ref()
+                            .map(|g| g.grid_dim)
+                            .unwrap_or(1),
                         modulus: edge_modulus,
                         sample_stride: 1, // emit per firing neuron (ring caps the budget)
                         _pad: 0,
@@ -1915,8 +2094,7 @@ impl SimBackend for GpuBackend {
         // metrics reduction + non-blocking readback state machine. This re-borrows
         // self mutably, so it must come AFTER the immutable sim/device borrows
         // used by read_stats above are released.
-        self.ticks_since_metrics_issue =
-            self.ticks_since_metrics_issue.saturating_add(ticks);
+        self.ticks_since_metrics_issue = self.ticks_since_metrics_issue.saturating_add(ticks);
         self.update_metrics();
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -1982,13 +2160,13 @@ fn extract_frustum_planes(m: &[f32; 16]) -> [[f32; 4]; 6] {
     // Row 1: m[1],m[5],m[9],m[13]
     // Row 2: m[2],m[6],m[10],m[14]
     // Row 3: m[3],m[7],m[11],m[15]
-    let row0 = [m[0], m[4], m[8],  m[12]];
-    let row1 = [m[1], m[5], m[9],  m[13]];
+    let row0 = [m[0], m[4], m[8], m[12]];
+    let row1 = [m[1], m[5], m[9], m[13]];
     let row2 = [m[2], m[6], m[10], m[14]];
     let row3 = [m[3], m[7], m[11], m[15]];
 
-    let add = |a: [f32;4], b: [f32;4]| [a[0]+b[0], a[1]+b[1], a[2]+b[2], a[3]+b[3]];
-    let sub = |a: [f32;4], b: [f32;4]| [a[0]-b[0], a[1]-b[1], a[2]-b[2], a[3]-b[3]];
+    let add = |a: [f32; 4], b: [f32; 4]| [a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3]];
+    let sub = |a: [f32; 4], b: [f32; 4]| [a[0] - b[0], a[1] - b[1], a[2] - b[2], a[3] - b[3]];
 
     // Left:   row3 + row0
     // Right:  row3 - row0
@@ -1997,12 +2175,12 @@ fn extract_frustum_planes(m: &[f32; 16]) -> [[f32; 4]; 6] {
     // Near:   row3 + row2
     // Far:    row3 - row2
     [
-        add(row3, row0),  // left
-        sub(row3, row0),  // right
-        add(row3, row1),  // bottom
-        sub(row3, row1),  // top
-        add(row3, row2),  // near
-        sub(row3, row2),  // far
+        add(row3, row0), // left
+        sub(row3, row0), // right
+        add(row3, row1), // bottom
+        sub(row3, row1), // top
+        add(row3, row2), // near
+        sub(row3, row2), // far
     ]
 }
 

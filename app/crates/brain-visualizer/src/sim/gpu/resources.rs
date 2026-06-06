@@ -196,6 +196,10 @@ pub struct MorphBuffers {
     pub segment_count: u32,
     /// Per-frame morphology render uniform.
     pub morph_uniform: wgpu::Buffer,
+    /// Generation parameters used to build this buffer (for artifact capture).
+    pub params: crate::sim::morphology::MorphologyParams,
+    /// Build-time stats for this buffer (for artifact capture).
+    pub stats: crate::sim::morphology::MorphologyStats,
 }
 
 /// V2 Phase A: number of u32 slots in the metrics reduction buffer. Slots
@@ -1545,18 +1549,22 @@ impl GpuResources {
         device: &wgpu::Device,
         positions: &[[f32; 3]],
         grid: &SpatialGrid,
+        neuron_regions: &[crate::manifold::RegionKind],
         config: &SimConfig,
-        // Morphology controls: axon-bow height (connection_curve_lift setting).
-        curve_lift: f32,
+        params: &crate::sim::morphology::MorphologyParams,
     ) {
+        let source_types =
+            crate::sim::morphology::build_source_types(config.seed_lo(), neuron_regions);
         let morph = crate::sim::morphology::generate(
             positions,
             grid,
             config.k,
             config.seed_lo(),
-            curve_lift,
+            params,
+            &source_types,
         );
         let segment_count = morph.segments.len() as u32;
+        let stats = morph.stats;
         eprintln!(
             "[morphology] generated {} segments for {} neurons ({} dropped)",
             segment_count,
@@ -1598,6 +1606,8 @@ impl GpuResources {
             segment_buffer,
             segment_count,
             morph_uniform,
+            params: *params,
+            stats,
         });
         self.bind_groups_dirty = true;
     }

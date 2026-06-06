@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-05
+last_updated:  2026-06-06
 ---
 
 # Dev Panel
@@ -51,6 +51,16 @@ Six tabs are defined in the `TABS` constant in `web/src/ui/dev-panel.ts`:
 | Rendering | Visual knobs with impact dots |
 | Debug View | Read-only string labels for current visual-mode settings |
 | Storage | Reset-to-defaults button + localStorage key/size readout |
+
+The Rendering tab now includes a compact Morphology subsection that groups the
+accepted live render controls together: `connectionLayer`,
+`connectionLightNext`, `connectionLightPast`, `morphRestingOpacity`,
+`connectionVisualWidth`, and `connectionCurveLift`. That grouping is UI
+consolidation only; it does not add new Float32Array indices, but v0.2.1 did
+ship narrowed defaults for the existing render knobs and therefore bumped the
+localStorage schema sentinel. The branch-grammar inputs that shaped v0.2.0
+remain code-only / protected and are captured in morphology build artifacts and
+stats instead.
 
 ## Network-state classifier
 
@@ -111,14 +121,16 @@ currently no-ops — kept for callers that still wire them.
 **Key:** `bv2_settings_v1` (hardcoded in both `web/src/core/settings.ts → LS_KEY` and
 `web/src/ui/dev-panel.ts → DevPanel.LS_KEY`).
 
-**Schema:** `{ version: 3, public: {…}, dev: {…} }`. The `public` sub-object
+**Schema:** `{ version: 4, public: {…}, dev: {…} }`. The `public` sub-object
 holds user-facing beauty knobs; `dev` holds tuning/debug knobs. The split is
 defined by the `SavedPublic` and `SavedDev` interfaces in `web/src/core/settings.ts`.
 
-**Version sentinel:** any saved object whose `version` field is not `3` is
+**Version sentinel:** any saved object whose `version` field is not `4` is
 silently discarded and defaults are used. No migration is attempted. (The
 sentinel is bumped whenever a Float32Array index is repurposed or a default
-changes so old saves cannot silently mislead.)
+changes so old saves cannot silently mislead.) The v0.2.1 Morphology tuning
+did require a bump because the shipped render defaults changed even though the
+float-array contract stayed intact.
 
 **Merge-over-defaults:** on load, each saved key is merged over
 `DEFAULT_SETTINGS` with `?? base_value` guards (`web/src/core/settings.ts → mergeOver`).
@@ -161,7 +173,8 @@ stored as `_unsubSettings` and called in `destroy()`.
 - A new tab is added to `TABS`.
 - Classifier thresholds change.
 - Any setting's impact level changes in `SETTING_IMPACT`.
-- The localStorage version sentinel changes.
+- The localStorage version sentinel changes, or a UI consolidation repurposes a
+  saved setting without changing the underlying float-array contract.
 - The instant-tooltip mechanism (`_buildTooltip` / `_attachTip` / `data-tip`) changes.
 
 ## See also

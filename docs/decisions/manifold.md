@@ -38,23 +38,42 @@
 - **Revisit when.** Spatial blocking is needed for the cursor-stimulation
   "click posterior to activate input region" UX to work reliably.
 
-## Procedural per-neuron morphology geometry (no billboards-only)
+## Shared arbor, not K independent splines
 
-- **Decision.** Each neuron is rendered as a real cell: a soma with a bushy
-  dendrite tree (local, decorative) and a branching axon arbor that routes toward
-  the neuron's actual synaptic targets. Geometry is a flat list of tapered line
-  segments generated on the CPU once and uploaded to a static GPU buffer.
-- **Why.** Billboard glows alone cannot convey directed signal flow. Giving each
-  neuron a real axon arbor toward its actual targets — lit on spike (see
-  [`rendering.md`](rendering.md)) — makes the brain's connectivity and activity
-  pattern legible at a glance.
+- **Decision.** Each neuron is rendered as a real cell with a soma, a local
+  dendrite tree, a deterministic shared trunk/root, 2-5 cluster branches, and
+  one terminal twig per unique non-self target. The generator uses a locked
+  morphology preset plus build stats, source-type bytes derived from region+seed,
+  deterministic sockets, and named per-kind segment budgets with slack. The
+  branch grammar is cubic Bezier, not a sin-bow or Catmull-Rom.
+- **Why.** Independent per-target splines read like unrelated sticks; they do
+  not show shared structure or terminal identity. A shared arbor with visible
+  sockets gives the brain connected directional grain while still making the
+  actual target terminals legible. Using the same source-type bytes as
+  production connectivity keeps the morphology honest.
 - **Applies to.** [`../architecture/manifold.md`](../architecture/manifold.md)
-- **Code anchors.** `crates/brain-visualizer/src/sim/morphology.rs → generate, MorphSegment, max_segs_per_neuron`;
-  `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl → vs_main`
-- **Tradeoffs.** Static geometry means the axon arbor reflects the connectivity
-  at initialization time; it does not update if connectivity were ever made
-  dynamic. The 48-byte `MorphSegment` layout is a hard binary contract between
-  Rust and WGSL — reordering fields silently corrupts the render.
+- **Code anchors.** `crates/brain-visualizer/src/sim/morphology.rs → generate,
+  MorphologyParams::locked_default, MorphologyStats, MorphSegment,
+  max_segs_per_neuron`; `crates/brain-visualizer/src/connectivity/hash.rs →
+  mix_key, hash32`; `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl → vs_main`
+- **Tradeoffs.** The shared trunk/cluster segments do not carry a distinct real
+  target id; they use the source id and defer upstream lighting to the terminal
+  twigs. The 48-byte `MorphSegment` layout remains the hard binary contract
+  between Rust and WGSL.
+
+## Deterministic sockets over vague near-target landing
+
+- **Decision.** Terminal twigs land on deterministic socket anchors near visible
+  dendrite endpoints or branch points instead of stopping "close enough" to a
+  target soma.
+- **Why.** A vague near-target endpoint still looks detached at review scale.
+  Sockets give the terminal twigs a visible landing cue and make the final
+  target branches feel attached to the cell rather than floating in the void.
+- **Applies to.** [`../architecture/manifold.md`](../architecture/manifold.md)
+- **Code anchors.** `crates/brain-visualizer/src/sim/morphology.rs → generate,
+  MorphologyStats`
+- **Tradeoffs.** Socket placement is deterministic and local, but it is still a
+  visual grammar choice rather than a claim about biological microscale detail.
 
 ## See also
 

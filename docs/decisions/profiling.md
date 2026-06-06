@@ -62,6 +62,20 @@
   subcritical / critical / supercritical classification.
 - **Applies to.** [`../architecture/profiling.md`](../architecture/profiling.md).
 
+## Morphology build stats stay out of the always-on profiler
+
+- **Decision.** The morphology review harness (`morph_view`) records its own
+  build/review stats, config snapshots, and artifact metadata rather than
+  folding them into the always-on runtime profiler or corner HUD.
+- **Why.** Those numbers are acceptance evidence for a specific morphology
+  build, not a live per-frame signal. Keeping them separate prevents the runtime
+  profiler from accumulating one-off review noise and makes the browser WASM
+  timing behavior explicit: morphology timing is zero there because native
+  `Instant` is not available.
+- **Applies to.** [`../architecture/profiling.md`](../architecture/profiling.md)
+- **Code anchors.** `crates/brain-visualizer/examples/morph_view.rs`;
+  `crates/brain-visualizer/src/profiler.rs → Profiler`
+
 ## See also
 
 - [`../architecture/profiling.md`](../architecture/profiling.md)

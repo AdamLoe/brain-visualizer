@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-04
+last_updated:  2026-06-06
 ---
 
 # GPU Rendering
@@ -66,18 +66,20 @@ Each call to `GpuBackend::render_full` encodes passes in this order into a singl
 
 1. **Manifold surface pass** (optional — skipped when `surface == 0`): clears color + depth, draws the static folded brain mesh as a dim fill so the brain shape reads through the glow. `render_manifold.wgsl → fs_main` emits `base * mode_scale * surface_opacity`.
 2. **Far-glow pass**: clears (or loads if surface pass ran). Additive blend, no depth write, `Draw(6, N)` — one instance per neuron.
-3. **Morphology pass** (skipped when `connection_layer == 0`): additive, no depth. Draws procedural dendrite + axon segments per neuron; when a neuron fires, its connections light instantly and fade with the same `exp(-tick_diff/glow_tau)` curve as the far-glow dot (see Morphology pass below). `render_morphology.wgsl → vs_main` reads `MorphSegment` from a storage buffer generated at network build time (`crates/brain-visualizer/src/sim/morphology.rs`).
+3. **Morphology pass** (skipped when `connection_layer == 0`): additive, no depth. Draws procedural dendrite + axon segments per neuron; when a neuron fires, its source-driven shared segments and downstream terminal twigs light instantly and fade with the same `exp(-tick_diff/glow_tau)` curve as the far-glow dot (see Morphology pass below). `render_morphology.wgsl → vs_main` reads `MorphSegment` from a storage buffer generated at network build time (`crates/brain-visualizer/src/sim/morphology.rs`).
 4. **Near-LOD passes** (skipped when `DRAW_LEGACY_NEAR_SPHERES = false`): cull_neurons compute → (cull_synapses if `DRAW_LEGACY_CYLINDERS`) → write_indirect → sphere render → cylinder render.
 5. **Bloom post-process** (skipped when `bloom_strength == 0`): scene is in an HDR offscreen target; bright-pass → separable 9-tap Gaussian blur (half-res ping-pong) → composite with soft-add `1 - exp(-bloom)` to avoid hard clipping. When bloom is off, `scene_view` IS `target_view` — no offscreen indirection whatsoever.
 
 ## Morphology pass
 
-Procedural neuron geometry (soma radius + dendrite tree branches + axon arbor with a baked bow) is generated once at network build time and uploaded as a flat `MorphSegment` array. Each axon segment carries both its SOURCE `neuron_id` and its synaptic `target_id` (the destination neuron); dendrites set `target_id = neuron_id` (self, unused). `kind 0` = dendrite (cool dim tint); `kind 1` = axon (E/I or region tinted). `connection_curve_lift` is baked into the axon bow geometry at generation time and triggers `regenerate_morphology` on change — see `crates/brain-visualizer/src/sim/gpu/mod.rs → set_visual_settings`. All K outgoing connections are drawn per neuron (one axon arbor per synaptic target), so the lit segments match real synapses — see [`manifold.md`](manifold.md) for the generation rule.
+Procedural neuron geometry (soma radius + dendrite tree branches + shared root/cluster branches + terminal twigs) is generated once at network build time and uploaded as a flat `MorphSegment` array. Shared root/cluster segments carry `target_id = neuron_id` so they behave as source-owned structure; terminal twigs carry the real synaptic `target_id`. Dendrites also use `target_id = neuron_id` (self, local only). `kind 0` = dendrite (cool dim tint); `kind 1` = axon (E/I or region tinted). `connection_curve_lift` is baked into the axon bow geometry at generation time and triggers `regenerate_morphology` on change — see `crates/brain-visualizer/src/sim/gpu/mod.rs → set_visual_settings`. Unique non-self target coverage is the rendered contract; the generator clusters targets deterministically and lands terminal twigs on sockets near visible dendrite anchors. See [`manifold.md`](manifold.md) for the generation rule.
+
+v0.2.1 narrows the shipped render defaults to reduce lattice clutter: `connection_visual_width = 0.8`, `bloom_strength = 0.4`, and `morph_resting_opacity = 0.2`. The morphology geometry itself also became thinner and more tapered, so the same lighting model now reads cleaner at far and near distances without changing the socket or branch contracts.
 
 **Whole-connection spike lighting.** There is no traveling pulse. When a neuron fires its connections light *instantly* and fade with the **same** `exp(-tick_diff/glow_tau)` curve as the far-glow neuron dot. Two independent toggles, both fed via `MorphUniforms` (`light_next`, `light_past`, `glow_tau`) and combined as a `max`:
 
 - `light_next` (downstream, default ON): a segment lights when its SOURCE neuron (`neuron_id`) fires — a firing neuron's own structure and outgoing connections.
-- `light_past` (upstream, default OFF, **axon only**): a segment lights when its TARGET neuron (`target_id`) fires — an axon glows when the neuron it drives spikes. Dendrites carry `target_id = self` and never respond to `light_past`.
+- `light_past` (upstream, default OFF, **terminal-only for shared arbors**): a segment lights when its TARGET neuron (`target_id`) fires. On v0.2.0 shared paths, shared root/cluster segments carry `target_id = neuron_id`, so upstream lighting resolves only on the terminal twigs whose `target_id` is the real synaptic target. Dendrites also carry `target_id = self` and never respond to `light_past`.
 
 The shader reads `last_spike[neuron_id]` (and `last_spike[target_id]` for upstream) each frame; `path_len` is retained in the struct but no longer drives timing. See `render_morphology.wgsl → vs_main` for the brightness model and [`../decisions/rendering.md`](../decisions/rendering.md) for the rationale.
 
@@ -91,7 +93,7 @@ Permanently off (`DRAW_LEGACY_CYLINDERS = false`); the morphology pass is the li
 
 When `bloom_strength > 0` the scene renders into an `rgba16float` offscreen texture (`hdr_view`). The bloom pipeline is: bright-pass (luminance threshold `BLOOM_THRESHOLD = 0.55`) → horizontal blur → vertical blur at half resolution → composite. The composite uses `1 - exp(-bloom * strength)` rather than plain addition to roll off smoothly near 1.0. The additive scene passes cooperate naturally with bloom because additive energy accumulates in the HDR buffer without clamping before the post pass.
 
-When `bloom_strength == 0` (the default), `scene_view = target_view` — the validated direct path — with zero overhead and bit-for-bit identical output to the pre-bloom baseline.
+When `bloom_strength == 0`, `scene_view = target_view` — the validated direct path — with zero overhead and bit-for-bit identical output to the pre-bloom baseline. The shipped v0.2.1 default is `0.4`, so the HDR path is now enabled unless a caller explicitly turns bloom off.
 
 ## Key gotcha: no portable point size in WebGPU
 

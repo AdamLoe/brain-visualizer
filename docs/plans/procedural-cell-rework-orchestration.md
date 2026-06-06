@@ -1,8 +1,8 @@
 ---
-status:        draft
+status:        shipped
 owner:         adamg
 last_updated:  2026-06-06
-okay_to_delete: false
+okay_to_delete: true
 long_lived:    false
 owning_docs:
   - architecture/manifold.md
@@ -71,15 +71,15 @@ disk truth, agent reports, or human review.
 
 | Stream | Area | Status | Last observed fact | Next action | Blockers |
 |---|---|---|---|---|---|
-| 0 | Baseline recon | Not started | Current docs are draft/untracked in the working tree. | Confirm dirty state, current versions, current `generate()` signature, and baseline artifact behavior. | None |
-| 1 | Config/profile foundation | Not started | Plan now requires `MorphologyParams`-style config and JSON stats before grammar work. | Add config object, default preset, artifact snapshot, and build/profile stats. | Stream 0 |
-| 2 | Source-type preflight | Not started | Plan expects morphology target resolution to stop using fixed `0u8`. | Implement or verify source-type input through the config/stat path, then run the narrow morphology gate. | Stream 1 |
-| 3 | Branch grammar | Not started | Contract: shared arbor, visible dendrite sockets, one terminal per unique non-self target. | Start after Stream 2 coverage test is green, using only the named config surface for tuning. | Stream 2 |
-| 4 | Artifact harness | Not started | Needs baseline/candidate frames, config snapshots, and stats JSON. | Add or verify artifact output after branch grammar exists. | Stream 3 |
-| 5 | Visual review | Not started | Human acceptance is required. | Review fixed camera set, config snapshot, and stats. | Stream 4 |
-| 6 | Settings UI consolidation | Not started | Hidden dev-panel Morphology settings group waits for accepted defaults. | Promote accepted settings together; update impact metadata, persistence, and Rust/TS boundary. | Stream 5 |
-| 7 | Ship v0.2.0 | Not started | Version/docs migration wait for accepted shape and UI consolidation. | Bump versions and update owning docs after review. | Stream 6 |
-| 8 | v0.2.1 tuning | Not started | Starts from accepted v0.2.0 artifacts, config snapshots, and a written issue list. | Decide whether the patch is needed after v0.2.0. | Stream 7 |
+| 0 | Baseline recon | Complete | Worktree clean; crate and web package are `0.1.2`; `generate()` is scalar-based; source type is hardcoded to `0u8`; `morph_view` writes raw RGBA only with no PNG/stats JSON. | None. | None |
+| 1 | Config/profile foundation | Complete | `MorphologyParams`, `MorphologyStats`, `generate(..., params)`, and `/tmp/morph_view_stats.json` landed; gate `cd app && cargo test -p brain-visualizer morphology` passed with 8 tests, 72 filtered; `cargo check -p brain-visualizer --example morph_view` also passed. | None. | None |
+| 2 | Source-type preflight | Complete | Morphology now builds production `neuron_type_byte(...)` values from region+seed, passes them through initialize and `regenerate_morphology`, and uses them with `target_with_cell`; gate `cd app && cargo test -p brain-visualizer morphology` passed with 9 tests, 72 filtered. | None. | None |
+| 3 | Branch grammar | Complete | Shared-root/cluster/terminal-twig grammar landed with deterministic sockets, terminal segments carrying real target ids, shared segments carrying source id, unique-target stats, and default-scale `dropped == 0` expected; gate `cd app && cargo test -p brain-visualizer morphology` passed with 10 tests. | None. | None |
+| 4 | Artifact harness | Complete | `morph_view` passed under llvmpipe and wrote `/tmp/morph_view_stats.json` plus `/tmp/morph_{0,1,2,3}.rgba`; PNG review copies also exist at `/tmp/morph_{0,1,2,3}.png`; latest run reports `segment_count=68854`, `dropped_count=0`, full unique-target coverage, and per-frame opacity snapshots. | None. | None |
+| 5 | Visual review | Complete | Human review accepted that the candidate is moving in the right direction and cleared the plan to continue from the v0.2.0 artifacts. | None. | None |
+| 6 | Settings UI consolidation | Complete | Hidden Rendering-tab controls were re-homed under a Morphology section: `connectionLayer`, `connectionLightNext`, `connectionLightPast`, `morphRestingOpacity`, `connectionVisualWidth`, `connectionCurveLift`; `connectionCurveLift` metadata now reflects geometry rebuild; no Float32/Rust/default/persistence changes; `cd app/web && npm run typecheck` passed. | None. | None |
+| 7 | Ship v0.2.0 | Complete | Versions now read `0.2.0`; durable docs were migrated; gates passed: `cargo test -p brain-visualizer`, `morph_view`, `render_check`, and `npm run typecheck`; v0.2.0 leaf plan is `shipped + okay_to_delete: true`. | None. | None |
+| 8 | v0.2.1 tuning | Complete | v0.2.1 shipped as a narrow tuning patch: calmer dendrite reach/count, thinner/tapered shared branches, updated render defaults, versions at `0.2.1`, and gates passed (`morphology`, full Rust, `morph_view`, `render_check`, web typecheck). | None. | None |
 
 ## Artifact Ledger
 
@@ -89,15 +89,27 @@ produce it.
 
 | Version | Artifact set | Command | Output paths | Config snapshot | Stats/profile path | Review decision |
 |---|---|---|---|---|---|---|
-| baseline | Current morphology | TBD | TBD | TBD | TBD | TBD |
-| 0.2.0 candidate | Shared arbor | TBD | TBD | TBD | TBD | TBD |
-| 0.2.1 candidate | Tuning patch, if used | TBD | TBD | TBD | TBD | TBD |
+| baseline | Current morphology | Not yet produced by this run; recon observed native `morph_view` writes `/tmp/morph_{0,1,2,3}.rgba` and asserts non-black only. | `/tmp/morph_0.rgba` through `/tmp/morph_3.rgba` when run | Default visual behavior observed: `connection_curve_lift=0.15`, `connection_layer=1`, `morph_resting_opacity=0.25`; no morphology config snapshot exists yet. | No stats/profile JSON exists yet. | Pending baseline artifact capture |
+| 0.2.0 candidate | Shared arbor | `cd app && cargo run -p brain-visualizer --example morph_view`; PNG conversion via `ffmpeg` | `/tmp/morph_0.rgba` through `/tmp/morph_3.rgba`; `/tmp/morph_0.png` through `/tmp/morph_3.png` | In `/tmp/morph_view_stats.json`; includes morphology params plus base/final/per-frame visual settings. | `/tmp/morph_view_stats.json` (`status=pass`, `segment_count=68854`, `dropped_count=0`, `unique_target_coverage=1.0`) | Accepted to continue v0.2.0 plan |
+| 0.2.1 candidate | Tuning patch | `cd app && cargo run -p brain-visualizer --example morph_view`; PNG conversion via `ffmpeg` | `/tmp/morph_0.2.1_0.rgba` through `/tmp/morph_0.2.1_3.rgba`; `/tmp/morph_0.2.1_0.png` through `/tmp/morph_0.2.1_3.png` | In `/tmp/morph_view_0.2.1_stats.json`; includes morphology params plus base/final/per-frame visual settings. | `/tmp/morph_view_0.2.1_stats.json` (`status=pass`, `segment_count=56058`, `dropped_count=0`, `unique_target_coverage=1.0`, `all_k_coverage=true`) | Shipped as v0.2.1 tuning patch |
 
 ## Decision Log
 
 | Decision | Why | Source |
 |---|---|---|
-| TBD | TBD | TBD |
+| Stream 0 recon established current baseline before implementation. | Avoid dispatching Stream 1 against stale hub assumptions: current worktree is clean, packages are `0.1.2`, `generate()` has no config object, source type is still fixed to `0u8`, and `morph_view` lacks stats/profile JSON. | Cheap explorer report, 2026-06-06 |
+| Stream 2 source-type contract should use production `neuron_type_byte(...)` values, not a new classifier. | CPU/GPU scatter decode the same byte from `last_spike`; only bit 0 affects routing, but the full byte is the source-of-truth contract. | Cheap explorer report, 2026-06-06 |
+| Stream 1 parameter surface classifications are initial, not final UI commitments. | Popper classified current defaults as generator-owned, `axon_curve_lift` as review override, `axon_segments_per_branch`/`cap_slack`/hardcoded source type as protected, and no dev-panel candidates yet. | Stream 1 worker report, 2026-06-06 |
+| Stream 2 source-type plumbing is protected internal behavior, not a user-facing morphology knob. | It aligns morphology target resolution with production scatter and should remain tied to region+seed `neuron_type_byte(...)` rather than dev-panel tuning. | Stream 2 worker report, 2026-06-06 |
+| Stream 3 accepts terminal-only upstream lighting semantics for shared paths. | Terminal twig segments carry real target ids while shared root/cluster segments carry the source id; shader/layout work for whole-path upstream lighting remains out of v0.2.0. | Stream 3 worker report, 2026-06-06 |
+| Stream 4 artifact pass is not visual-review-ready until visual settings metadata is fixed. | The first `morph_view` run passed and produced frames/stats, but JSON recorded final opacity-zero settings as the artifact-level visual settings for all frames. | Read-only review report, 2026-06-06 |
+| Stream 4 stabilization fixed artifact metadata without changing grammar semantics. | The JSON now has base/final visual settings and per-frame visual settings; source-type coverage was removed as misleading; empty-network builder byte stats were clarified. | Stabilization worker report, 2026-06-06 |
+| Morphology build timings are native-only; WASM reports zero timings. | Browser WASM panicked because `std::time::Instant::now()` is unsupported on this target during `morphology::generate()`. A target-aware timer preserves native artifact timings and avoids browser initialization panic. | Browser console report and local fix, 2026-06-06 |
+| v0.2.0 visual direction is accepted enough to continue. | Human review said the candidate is moving in the right direction and cleared continuation of the plan. | Human review, 2026-06-06 |
+| Stream 6 does not expose structural morphology generator parameters. | The shipped hidden UI groups existing render/rebuild controls only; base radius, sockets, cluster bounds, samples, budgets, and slack remain protected code/config snapshot values. | Stream 6 worker report, 2026-06-06 |
+| v0.2.0 shipped after consolidated gates. | Versions, architecture docs, decisions docs, and plan migration notes were updated; full Rust, `morph_view`, `render_check`, and web typecheck gates passed. | Stream 7 worker report, 2026-06-06 |
+| v0.2.1 should proceed as a narrow tuning patch. | Artifact review found no stats regression but identified visual clutter, weak far-view directionality, weak continuity legibility, detached soma/readability, and brightness/taper imbalance; source-target/socket/topology/shader contracts must not change. | v0.2.1 artifact review, 2026-06-06 |
+| v0.2.1 shipped without reopening v0.2.0 contracts. | Tuning reduced segment count and visual density while preserving `dropped_count=0`, unique-target coverage, source-target behavior, socket/topology contracts, shader layout, and terminal-only upstream lighting. | v0.2.1 worker report and orchestrator artifact check, 2026-06-06 |
 
 ## Open Questions
 
