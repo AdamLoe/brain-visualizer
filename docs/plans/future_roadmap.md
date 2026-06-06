@@ -1,7 +1,7 @@
 ---
 status:        long_lived
 owner:         adamg
-last_updated:  2026-06-04
+last_updated:  2026-06-06
 okay_to_delete: false
 long_lived:    true
 owning_docs:   [architecture/*, decisions/*]
@@ -38,6 +38,25 @@ when one is killed, move it to the rejected table.
 - Reviving a near-LOD connection visual (ribbon or cylinder) is gated behind the
   `DRAW_LEGACY_*` flags — [`../architecture/active-edges.md`](../architecture/active-edges.md).
 
+### Procedural morphology follow-ups
+- **Cell identity polish after the v0.2.x arbor.** Per-region morphology
+  variation is deferred because region assignment is spatially random today; a
+  variation pass should happen only if screenshots show it reads as coherent
+  identity instead of speckled noise, or if regions become spatially contiguous.
+- **Morph-pass soma primitive (`kind = 2`).** Defer until close-camera
+  screenshots prove the billboard soma looks detached from the generated arbor.
+  Any shipped version must update Rust/WGSL `MorphSegment` semantics and layout
+  asserts in one serial stream.
+- **Whole-path upstream lighting for shared arbors.** v0.2.x may leave
+  `light_past` effectively terminal-only for shared trunk/cluster segments.
+  Revisit only with a shader-facing plan that does not overload `target_id`.
+- **Incoming-direction dendrite bias.** A reverse "who targets me" pass could
+  orient dendrites toward real incoming axons, but it is deferred until the
+  simpler socket model is proven insufficient.
+- **Single-neuron inspect / pick mode.** Useful for debugging or an educational
+  zoom mode, but deferred until the homepage visual needs it; the morphology
+  rework should not depend on a selection UX.
+
 ### Scaling / control
 - **Smart within-tier auto-scaling** — a gentle, hysteretic, stall-aware
   replacement for the auto-scaler that was pulled in 0.1.1
@@ -67,6 +86,7 @@ when one is killed, move it to the rejected table.
 | Spectral overlay / live FFT of population activity | Turns a toy into a dashboard; the HUD covers perf. | Deferred |
 | Damage / lesioning mode | Out of scope for now. | Deferred |
 | Scripted "wake up" intro (seed spike, cortex loads dark) | Natural posterior→anterior propagation produces the effect for free. | Permanent — see [`../decisions/interaction.md`](../decisions/interaction.md) |
+| Catmull-Rom curve sampler for the v0.2 morphology rework | A single cubic Bezier sampler is easier to budget, test, and tune; richer splines can wait until Bezier is proven insufficient. | Deferred |
 
 ## See also
 

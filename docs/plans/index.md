@@ -22,9 +22,10 @@ ls docs/plans/
 
 The V1 phase plans and the V2 beauty-first plan have shipped; their durable
 content was migrated into `architecture/` and `decisions/` and their history
-lives in git. The one remaining file is [`future_roadmap.md`](future_roadmap.md)
-— the long-lived home for deferred work and considered-and-rejected ideas;
-everything else should reach `shipped + okay_to_delete: true` and be deleted.
+lives in git. [`future_roadmap.md`](future_roadmap.md) is the one long-lived
+plan: the home for deferred work and considered-and-rejected ideas. Other files
+in this directory should be active/recent coordination docs that eventually
+reach `shipped + okay_to_delete: true` or `abandoned + okay_to_delete: true`.
 
 ## Routing
 
