@@ -34,7 +34,6 @@ export const SETTING_IMPACT: Record<keyof VisualizerSettings, SettingImpact> = {
   connectionVisualWidth:    "live", // Morphology: branch-width multiplier (live)
   connectionCurveLift:      "renderer-rebuild", // Morphology: regenerates geometry on apply/release
   connectionLightNext:      "live",
-  connectionLightPast:      "live",
   bloomStrength:            "live",
   surfaceOpacity:           "live",
   // ── Sim drive knobs — live ─────────────────────────────────────────────────

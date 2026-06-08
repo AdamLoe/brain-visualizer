@@ -105,8 +105,9 @@ upload of per-instance data. Order:
    color+depth so later passes load on top.
 3. **far-LOD glow pass** — clears color (unless the surface pass already did),
    additive, no depth.
-4. **morphology pass** — when `connection_layer != 0`; additive, no depth.
-5. **(retired) ribbon pass** — behind `DRAW_LEGACY_RIBBONS`.
+4. **morphology tube pass** — when `connection_layer != 0`; additive, no depth. Branch segments via `render_morphology.wgsl → vs_main`.
+5. **morphology soma sphere pass** — when `connection_layer != 0`; additive, no depth. One UV-sphere per neuron via `render_morphology.wgsl → vs_sphere`. Uses `render_soma_spheres` pipeline (`crates/brain-visualizer/src/sim/gpu/pipelines.rs → GpuPipelines`), reusing the same `last_spike` and `morph_uniform` buffers from the tube pass.
+6. **(retired) ribbon pass** — behind `DRAW_LEGACY_RIBBONS`.
 6. **(retired) near-LOD passes** — cull_neurons → (cull_synapses) → write_indirect
    → sphere draw → (cylinder draw), all behind `DRAW_LEGACY_NEAR_SPHERES`.
 7. **(optional) bloom post** — bright → blur_h → blur_v → composite into the
@@ -138,7 +139,11 @@ All large buffers are **persistent across frames**. Allocation happens only on a
 - **tier resize / network rebuild** — `GpuBackend::initialize` (called by
   `resize`) runs the `GpuResources::resize_neurons` + `init_render_resources` +
   `init_near_lod_resources` + `init_edge_resources` + `init_morph_resources`
-  allocators, then `refresh_bind_groups`.
+  allocators, then `refresh_bind_groups`. `init_morph_resources` allocates both
+  the branch segment buffer and the soma sphere instance buffer (`sphere_instances`
+  via `crates/brain-visualizer/src/sim/morphology.rs → emit_soma_spheres`), and
+  builds both the tube and sphere bind groups (`MorphUniforms` at 192 B,
+  `crates/brain-visualizer/src/sim/gpu/resources.rs → MorphUniforms`).
 - **render-target resize** — `resize_render_targets`, guarded: it recreates the
   depth + bloom textures **only when width/height actually changed** (the
   `changed` check in `crates/brain-visualizer/src/sim/gpu/resources.rs → GpuResources::resize_render_targets`).

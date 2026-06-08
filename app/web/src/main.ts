@@ -27,6 +27,15 @@ import { ZERO_STATS, loadConfig, saveConfig, type AppConfig, type BackendKind } 
 import { getSettings, parseMetrics, subscribe, toFloat32Array } from "./core/settings";
 import { DevPanel } from "./ui/dev-panel"; // V2 Phase A / Phase B
 
+// v0.3.1: morphology-config WASM entry point. The Rust agent adds
+// `set_morphology_config(json: &str)` to WasmGpuBackend in parallel; until the
+// pkg .d.ts is regenerated the method is not on the generated type, so we declare
+// the expected signature here and cast at the single call site (no `any`).
+// TODO(v0.3.1): drop this shim once the regenerated pkg exports the method.
+interface MorphCapableBackend {
+  set_morphology_config(json: string): void;
+}
+
 // Cursor stimulation constants (BV10 / phase-3 spec).
 const STIM_RADIUS  = 0.15;  // world units
 const STIM_CURRENT = 0.3;   // biological mV → fixed-point in backend
@@ -78,14 +87,25 @@ async function boot(): Promise<void> {
   camera.setAspect(canvas.width / canvas.height);
 
   canvas.addEventListener("pointerdown", (e) => {
-    camera.onPointerDown(e.clientX, e.clientY);
+    camera.onPointerDown(e.clientX, e.clientY, e.buttons, e.shiftKey);
+    if (e.button === 2 || (e.button === 0 && e.shiftKey)) {
+      e.preventDefault();
+    }
+    if (canvas.setPointerCapture) {
+      canvas.setPointerCapture(e.pointerId);
+    }
   });
   window.addEventListener("pointerup", () => camera.onPointerUp());
 
   canvas.addEventListener("pointermove", (e) => {
-    const isOrbit = camera.onPointerMove(e.clientX, e.clientY, e.buttons);
+    const rect = canvas.getBoundingClientRect();
+    const isDrag = camera.onPointerMove(e.clientX, e.clientY, e.buttons, rect.width, rect.height, e.shiftKey);
+    if (isDrag) {
+      e.preventDefault();
+      return;
+    }
     // Skip cursor stimulation on mobile (BV10 amendment / Phase 5).
-    if (!isOrbit && !mobile) {
+    if (!mobile) {
       // Queue stimulation for the next rAF turn rather than calling the wasm
       // backend directly here — direct calls from event handlers can re-enter a
       // live &mut borrow on WasmGpuBackend and cause a wasm-bindgen panic.
@@ -100,6 +120,8 @@ async function boot(): Promise<void> {
     { passive: false },
   );
 
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+
   // Touch events: one-finger orbit, two-finger pinch zoom.
   canvas.addEventListener("touchstart", (e) => {
     e.preventDefault();
@@ -110,6 +132,14 @@ async function boot(): Promise<void> {
     camera.onTouchMove(e.touches);
   }, { passive: false });
   canvas.addEventListener("touchend", () => camera.onPointerUp());
+
+  window.addEventListener("keydown", (e) => {
+    if (e.key !== "r" && e.key !== "R") return;
+    const target = e.target as HTMLElement | null;
+    const tag = target?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
+    camera.resetTarget();
+  });
 
   // Pending resize / stimulate: set by DOM event handlers, consumed at the TOP of
   // the next rAF turn.  Never call gpuBackend methods with &mut self directly from
@@ -128,6 +158,10 @@ async function boot(): Promise<void> {
   // UX round 2: network rebuild flag — set by onNetwork handler, flushed at top
   // of rafLoop (same &mut discipline as pendingResize / pendingBrainReset).
   let pendingNetworkRebuild = false;
+  // v0.3.1: morphology-config JSON to push, set by the dev-panel morph handlers
+  // (live uniform edits AND the explicit Rebuild). Flushed via set_morphology_config
+  // in the rafLoop &mut-discipline block. Latest-wins (a single JSON snapshot).
+  let pendingMorphConfig: string | null = null;
 
   window.addEventListener("resize", () => {
     // UX overhaul: when the settings panel is open, the canvas occupies only the
@@ -167,6 +201,11 @@ async function boot(): Promise<void> {
   // reload keeps the chosen ticks/sec instead of snapping back to the default.
   let targetTicksPerSec = config.ticksPerSec;
 
+  // Pause state: when true, the rAF loop renders (camera still orbits, glow
+  // still decays toward steady state) but issues zero sim ticks. The tick
+  // accumulator is drained each paused frame so resuming doesn't burst.
+  let paused = false;
+
   // 7d. Dev panel (V2 Phase A / Phase B). Desktop-only: skip on mobile so the
   //     public UI stays clean on small screens. ?dev=1 / backtick / gear button.
   const devPanel: DevPanel | null = mobile ? null : new DevPanel();
@@ -194,6 +233,7 @@ async function boot(): Promise<void> {
           onExcitability(v: number): void;
           onSpeed(tps: number): void;
           onNetwork(p: { n: number; k: number; seed: number }): void;
+          onConfigReset?(config: AppConfig): void;
         }): void;
       }).setSimHandlers({
         onExcitability(v: number): void {
@@ -215,6 +255,38 @@ async function boot(): Promise<void> {
           saveConfig(config); // 0.1.1: persist user-chosen N/K so it survives reload
           pendingNetworkRebuild = true;
           pendingSettingsPush   = true;
+        },
+        onConfigReset(defaultConfig: AppConfig): void {
+          config.n = defaultConfig.n;
+          config.k = defaultConfig.k;
+          config.seed = defaultConfig.seed >>> 0;
+          config.tier = defaultConfig.tier;
+          config.speed = defaultConfig.speed;
+          config.backend = defaultConfig.backend;
+          config.excitability = defaultConfig.excitability;
+          config.ticksPerSec = defaultConfig.ticksPerSec;
+          targetTicksPerSec = defaultConfig.ticksPerSec;
+          seedExcitability(defaultConfig.excitability);
+        },
+      });
+    }
+
+    // v0.3.1: wire morphology-config apply handlers. Both paths stash the JSON in
+    // pendingMorphConfig (latest-wins); the rafLoop flushes it via
+    // set_morphology_config under the same &mut discipline. The Rust side diffs
+    // the config and runs the narrowest update (uniform / regenerate / pipeline).
+    if (typeof (devPanel as unknown as { setMorphHandlers: unknown }).setMorphHandlers === "function") {
+      (devPanel as unknown as {
+        setMorphHandlers(h: {
+          onMorphLive(json: string): void;
+          onMorphRebuild(json: string): void;
+        }): void;
+      }).setMorphHandlers({
+        onMorphLive(json: string): void {
+          pendingMorphConfig = json;
+        },
+        onMorphRebuild(json: string): void {
+          pendingMorphConfig = json;
         },
       });
     }
@@ -289,6 +361,19 @@ async function boot(): Promise<void> {
   } else if (soundBtn && mobile) {
     // Hide sound toggle on mobile.
     (soundBtn as HTMLElement).style.display = "none";
+  }
+
+  // Pause toggle (bottom-center transport). Freezes sim ticks; rendering and
+  // camera orbit continue. Available on mobile too (no &mut interaction — it
+  // only flips a JS flag the rAF loop reads).
+  const pauseBtn = document.getElementById("pause-toggle");
+  if (pauseBtn) {
+    pauseBtn.addEventListener("click", () => {
+      paused = !paused;
+      pauseBtn.textContent = paused ? "▶" : "⏸";
+      pauseBtn.title = paused ? "Resume simulation" : "Pause simulation";
+      pauseBtn.setAttribute("aria-pressed", String(paused));
+    });
   }
 
   // Settings / gear toggle (UX overhaul). Opens/closes the dev panel.
@@ -459,6 +544,14 @@ async function boot(): Promise<void> {
       gpuBackend.update_settings(toFloat32Array(getSettings()));
       pendingSettingsPush = false;
     }
+    // v0.3.1: flush morphology-config JSON to the backend. The Rust side diffs
+    // current-vs-new and chooses uniform-only / regenerate / pipeline-rebuild.
+    // TODO(v0.3.1): set_morphology_config exists after the parallel wasm rebuild;
+    // the method is declared on MorphCapableBackend below so typecheck passes now.
+    if (pendingMorphConfig !== null && gpuBackend) {
+      (gpuBackend as unknown as MorphCapableBackend).set_morphology_config(pendingMorphConfig);
+      pendingMorphConfig = null;
+    }
     if (pendingStim !== null) {
       const { x, y, z, radius, current } = pendingStim;
       pendingStim = null;
@@ -477,7 +570,9 @@ async function boot(): Promise<void> {
     const frameMs = timestamp - lastTimestamp;
     const dtSec   = Math.min(frameMs / 1000, 0.05); // clamp: max 50 ms of sim per frame
     let ticks = 0;
-    if (frameMs <= 50) {
+    if (paused) {
+      tickAccumulator = 0; // frozen: drain so resume doesn't burst
+    } else if (frameMs <= 50) {
       tickAccumulator += dtSec * targetTicksPerSec;
       ticks = Math.floor(tickAccumulator);
       tickAccumulator -= ticks;

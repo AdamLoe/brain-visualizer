@@ -24,7 +24,7 @@ use crate::connectivity::spatial::SpatialGrid;
 use crate::connectivity::{self};
 use crate::manifold::RegionKind;
 use crate::sim::backend::neuron_type_byte;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
@@ -231,6 +231,222 @@ impl Default for MorphologyParams {
     }
 }
 
+// ─── v0.3.1 morphology config (JSON round-trip) ───────────────────────────────
+//
+// The dev-panel morphology config crosses the WASM boundary as a single JSON
+// blob `{ generator: {...}, renderQuality: {...}, lighting: {...} }`. The field
+// names/shape are LOCKED by the `## Config Contract` table in
+// docs/plans/v0.3.1-morph-config.md — both this Rust side and the TS side verify
+// against that table, NOT against each other.
+//
+// Discipline: budgets/slack/salts are deliberately EXCLUDED from the generator
+// group (allocation/determinism boundaries, not visual tuning). When mapping the
+// config into `MorphologyParams`, the protected budget fields keep their
+// `locked_default()` values.
+
+/// Generator controls — the 24 exposed `MorphologyParams` fields (budgets/slack
+/// and salts are protected and excluded). `#[serde(default)]` so a partial JSON
+/// blob falls back to the locked defaults per field.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct GeneratorConfig {
+    pub base_radius: f32,
+    pub dendrite_primary_min: u32,
+    pub dendrite_primary_span: u32,
+    pub dendrite_reach_lo: f32,
+    pub dendrite_reach_hi: f32,
+    pub axon_stop_fraction: f32,
+    pub axon_root_radius_fraction: f32,
+    pub axon_curve_lift: f32,
+    pub socket_count_min: usize,
+    pub socket_count_max: usize,
+    pub socket_radius_lo: f32,
+    pub socket_radius_hi: f32,
+    pub socket_tip_preference: f32,
+    pub cluster_min: usize,
+    pub cluster_max: usize,
+    pub trunk_root_samples: usize,
+    pub cluster_branch_samples: usize,
+    pub terminal_twig_samples: usize,
+    pub trunk_length_fraction: f32,
+    pub cluster_split_fraction: f32,
+    pub root_radius_fraction: f32,
+    pub cluster_radius_fraction: f32,
+    pub twig_radius_fraction: f32,
+    pub taper_curve: f32,
+    pub dendrite_mid_radius_fraction: f32,
+    pub dendrite_tip_radius_fraction: f32,
+}
+
+impl Default for GeneratorConfig {
+    fn default() -> Self {
+        Self::from_params(&MorphologyParams::locked_default())
+    }
+}
+
+impl GeneratorConfig {
+    /// Extract the 24 generator-tunable fields from a `MorphologyParams`.
+    pub fn from_params(p: &MorphologyParams) -> Self {
+        Self {
+            base_radius: p.base_radius,
+            dendrite_primary_min: p.dendrite_primary_min,
+            dendrite_primary_span: p.dendrite_primary_span,
+            dendrite_reach_lo: p.dendrite_reach_lo,
+            dendrite_reach_hi: p.dendrite_reach_hi,
+            axon_stop_fraction: p.axon_stop_fraction,
+            axon_root_radius_fraction: p.axon_root_radius_fraction,
+            axon_curve_lift: p.axon_curve_lift,
+            socket_count_min: p.socket_count_min,
+            socket_count_max: p.socket_count_max,
+            socket_radius_lo: p.socket_radius_lo,
+            socket_radius_hi: p.socket_radius_hi,
+            socket_tip_preference: p.socket_tip_preference,
+            cluster_min: p.cluster_min,
+            cluster_max: p.cluster_max,
+            trunk_root_samples: p.trunk_root_samples,
+            cluster_branch_samples: p.cluster_branch_samples,
+            terminal_twig_samples: p.terminal_twig_samples,
+            trunk_length_fraction: p.trunk_length_fraction,
+            cluster_split_fraction: p.cluster_split_fraction,
+            root_radius_fraction: p.root_radius_fraction,
+            cluster_radius_fraction: p.cluster_radius_fraction,
+            twig_radius_fraction: p.twig_radius_fraction,
+            taper_curve: p.taper_curve,
+            dendrite_mid_radius_fraction: p.dendrite_mid_radius_fraction,
+            dendrite_tip_radius_fraction: p.dendrite_tip_radius_fraction,
+        }
+    }
+
+    /// Apply these 24 fields onto a base `MorphologyParams`, preserving the base's
+    /// protected budget/slack fields (`dendrite_budget`, `trunk_cluster_budget`,
+    /// `terminal_twig_budget`, `cap_slack`).
+    pub fn apply_to(&self, base: &MorphologyParams) -> MorphologyParams {
+        MorphologyParams {
+            base_radius: self.base_radius,
+            dendrite_primary_min: self.dendrite_primary_min,
+            dendrite_primary_span: self.dendrite_primary_span,
+            dendrite_reach_lo: self.dendrite_reach_lo,
+            dendrite_reach_hi: self.dendrite_reach_hi,
+            axon_stop_fraction: self.axon_stop_fraction,
+            axon_root_radius_fraction: self.axon_root_radius_fraction,
+            axon_curve_lift: self.axon_curve_lift,
+            socket_count_min: self.socket_count_min,
+            socket_count_max: self.socket_count_max,
+            socket_radius_lo: self.socket_radius_lo,
+            socket_radius_hi: self.socket_radius_hi,
+            socket_tip_preference: self.socket_tip_preference,
+            cluster_min: self.cluster_min,
+            cluster_max: self.cluster_max,
+            trunk_root_samples: self.trunk_root_samples,
+            cluster_branch_samples: self.cluster_branch_samples,
+            terminal_twig_samples: self.terminal_twig_samples,
+            trunk_length_fraction: self.trunk_length_fraction,
+            cluster_split_fraction: self.cluster_split_fraction,
+            root_radius_fraction: self.root_radius_fraction,
+            cluster_radius_fraction: self.cluster_radius_fraction,
+            twig_radius_fraction: self.twig_radius_fraction,
+            taper_curve: self.taper_curve,
+            dendrite_mid_radius_fraction: self.dendrite_mid_radius_fraction,
+            dendrite_tip_radius_fraction: self.dendrite_tip_radius_fraction,
+            // Protected: keep the base preset's budgets/slack.
+            dendrite_budget: base.dendrite_budget,
+            trunk_cluster_budget: base.trunk_cluster_budget,
+            terminal_twig_budget: base.terminal_twig_budget,
+            cap_slack: base.cap_slack,
+        }
+    }
+}
+
+/// Render-quality controls — tube/sphere tessellation. These drive WGSL pipeline
+/// override constants AND the Rust draw vert-counts; a change triggers a morph
+/// render-pipeline rebuild (applyKind = pipeline-rebuild).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RenderQualityConfig {
+    pub tube_sides: u32,
+    pub sphere_slices: u32,
+    pub sphere_stacks: u32,
+}
+
+impl Default for RenderQualityConfig {
+    fn default() -> Self {
+        // Inherited v0.3.0 defaults (TUBE_SIDES=6, SPHERE_SLICES=8, SPHERE_STACKS=6).
+        Self {
+            tube_sides: 6,
+            sphere_slices: 8,
+            sphere_stacks: 6,
+        }
+    }
+}
+
+/// Lighting / brightness controls. All uniform-only (applyKind = uniform) — no
+/// regeneration or pipeline rebuild. Direction is re-normalised CPU-side before
+/// it reaches the uniform. `resting_brightness` and `active_boost` map to the two
+/// NEW `MorphUniforms` fields (the latter replaces the WGSL `const BOOST=1.8`).
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct LightingConfig {
+    pub light_dir_x: f32,
+    pub light_dir_y: f32,
+    pub light_dir_z: f32,
+    pub ambient: f32,
+    pub diffuse_intensity: f32,
+    pub rim_intensity: f32,
+    pub rim_power: f32,
+    pub resting_brightness: f32,
+    pub active_boost: f32,
+}
+
+impl Default for LightingConfig {
+    fn default() -> Self {
+        // Defaults locked to the v0.3.0 lighting consts + the brightness split
+        // (resting 0.20 ≈ current morph_resting_opacity, activeBoost 1.8 = current
+        // shader BOOST). light_dir defaults are the pre-normalised components of
+        // normalize(-0.35, 0.55, 0.75).
+        Self {
+            light_dir_x: -0.352,
+            light_dir_y: 0.553,
+            light_dir_z: 0.755,
+            ambient: 0.55,
+            diffuse_intensity: 0.35,
+            rim_intensity: 0.30,
+            rim_power: 2.0,
+            resting_brightness: 0.20,
+            active_boost: 1.8,
+        }
+    }
+}
+
+/// Full morphology config blob — the JSON contract for the dev-panel
+/// `set_morphology_config` WASM entry point. `Default` equals the contract
+/// defaults (generator == `locked_default()`, lighting == v0.3.0 consts).
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MorphologyConfig {
+    pub generator: GeneratorConfig,
+    pub render_quality: RenderQualityConfig,
+    pub lighting: LightingConfig,
+}
+
+impl MorphologyConfig {
+    /// Parse a JSON blob into a config, falling back to per-field defaults for any
+    /// missing keys (`#[serde(default)]`).
+    pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(json)
+    }
+
+    /// Serialise to a JSON string (camelCase keys, nested groups).
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    /// Build the `MorphologyParams` this config implies, layering the generator
+    /// group over the locked default (so protected budgets stay locked).
+    pub fn to_params(&self) -> MorphologyParams {
+        self.generator.apply_to(&MorphologyParams::locked_default())
+    }
+}
+
 /// Coarse build-profile timings for the morphology generator.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct MorphologyTimings {
@@ -334,6 +550,27 @@ pub struct MorphSegment {
     pub target_id: u32,
 }
 
+/// Soma sphere instance for the soma-sphere render pass (Wave 2 / Stream 2).
+/// 32 bytes, 16-aligned. Field order + size MUST match `SphereInstance` in
+/// render_morphology.wgsl (vs_sphere reads it from a storage buffer).
+///
+/// Layout (32 B):
+///   center: [f32;3] (12 B), radius: f32 (4 B)     → 16 B block 0
+///   neuron_id: u32  (4 B),  kind: u32 (4 B),
+///   _pad0: u32      (4 B),  _pad1: u32 (4 B)       → 16 B block 1
+///
+/// `kind` = 2 (soma). `neuron_id` keys last_spike for spike brightness.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct MorphSphereInstance {
+    pub center: [f32; 3],
+    pub radius: f32,
+    pub neuron_id: u32,
+    pub kind: u32,   // 2 = soma
+    pub _pad0: u32,
+    pub _pad1: u32,
+}
+
 /// Generated morphology: the flat segment list plus the total count. (Per-neuron
 /// ranges are implicit in `neuron_id`; the renderer keys off that.)
 pub struct Morphology {
@@ -345,9 +582,40 @@ pub struct Morphology {
     pub stats: MorphologyStats,
 }
 
-/// Worst-case dendrite segments per neuron: up to 5 primaries × (1 stem + 2
-/// children) = 15.
-pub const DENDRITE_MAX: usize = 15;
+/// Build the flat soma-sphere instance list from neuron positions and source
+/// types. Emits exactly one `MorphSphereInstance` per neuron (index == neuron_id).
+///
+/// Soma radius = `params.base_radius` (same R0 that seeds the dendrite/axon
+/// radius at the soma attachment point — this makes the sphere diameter
+/// visually match the tube's root footprint).
+pub fn emit_soma_spheres(
+    positions: &[[f32; 3]],
+    source_types: &[u8],
+    params: &MorphologyParams,
+) -> Vec<MorphSphereInstance> {
+    positions
+        .iter()
+        .enumerate()
+        .map(|(i, &pos)| {
+            let _ = source_types.get(i); // bounds check only; kind is always 2 (soma)
+            MorphSphereInstance {
+                center: pos,
+                radius: params.base_radius,
+                neuron_id: i as u32,
+                kind: 2,
+                _pad0: 0,
+                _pad1: 0,
+            }
+        })
+        .collect()
+}
+
+const DENDRITE_STEM_SAMPLES: usize = 2;
+const DENDRITE_TWIG_SAMPLES: usize = 2;
+
+/// Worst-case dendrite segments per neuron for the locked grammar: up to 5
+/// primaries × (2 sampled stem segments + 2 twigs × 2 sampled segments) = 30.
+pub const DENDRITE_MAX: usize = 30;
 
 /// Build the production type-byte slice from the manifold region assignment and
 /// seed, matching `initial_last_spike()` / the integrate-shader path.
@@ -668,60 +936,108 @@ pub fn generate(
         let dcount = params.dendrite_primary_min
             + (mix_key(seed_lo, id, 0, salt::DENDRITE_COUNT) % params.dendrite_primary_span);
         for d in 0..dcount {
-            // Primary direction (roughly uniform).
-            let dir = dir_from_hashes(
+            let primary_dir = dir_from_hashes(
                 mix_key(seed_lo, id, d, salt::DENDRITE_DIR),
                 mix_key(seed_lo, id, d.wrapping_add(64), salt::DENDRITE_DIR),
             );
             let reach = params.dendrite_reach_lo
                 + unit(mix_key(seed_lo, id, d, salt::DENDRITE_CURL))
                     * (params.dendrite_reach_hi - params.dendrite_reach_lo);
-
-            // Segment 1: soma → mid (half the reach), then bifurcate into 2.
-            let half = reach * 0.5;
-            // A small per-segment curl so dendrites aren't dead straight.
-            let curl1 = perp(dir, mix_key(seed_lo, id, d, salt::DENDRITE_CURL));
-            let mid = add(add(soma, scale(dir, half)), scale(curl1, half * 0.25));
-            // Soma path_len starts at 0; accumulate along the branch.
+            let stem_len = reach
+                * lerp(
+                    0.42,
+                    0.58,
+                    unit(mix_key(seed_lo, id, d, salt::DENDRITE_COUNT ^ 0x7f4a_7c15)),
+                );
             let r_soma = params.base_radius;
             let r_mid = params.base_radius * params.dendrite_mid_radius_fraction;
-            push(
-                &mut segments,
-                MorphSegment {
-                    a: soma,
-                    radius_a: r_soma,
-                    b: mid,
-                    radius_b: r_mid,
-                    neuron_id: id,
-                    path_len: 0.0,
-                    kind: 0,
-                    target_id: id, // dendrite: self (unused)
-                },
-                &mut dropped,
-            );
-            let len_mid = len(sub(mid, soma));
+            let r_tip = params.base_radius * params.dendrite_tip_radius_fraction;
 
-            // Two child branches from the tip of segment 1 (the bifurcation).
+            let stem_bend = bend_vector(
+                primary_dir,
+                mix_key(seed_lo, id, d, salt::DENDRITE_CURL),
+                stem_len * 0.45,
+            );
+            let stem_tip = add(
+                add(soma, scale(primary_dir, stem_len)),
+                scale(stem_bend, 0.35),
+            );
+            let stem_p1 = add(
+                add(soma, scale(primary_dir, stem_len * 0.36)),
+                scale(stem_bend, 0.44),
+            );
+            let stem_p2 = add(
+                add(stem_tip, scale(primary_dir, -stem_len * 0.26)),
+                scale(stem_bend, -0.18),
+            );
+            let (stem_path_end, _, _) = emit_bezier_path(
+                &mut segments,
+                cap,
+                &mut dropped,
+                id,
+                id,
+                0,
+                soma,
+                stem_p1,
+                stem_p2,
+                stem_tip,
+                r_soma,
+                r_mid,
+                DENDRITE_STEM_SAMPLES,
+                0.0,
+                params.taper_curve * 0.8,
+            );
+
             for c in 0..2u32 {
-                let salt_c = salt::DENDRITE_CURL ^ (c.wrapping_mul(0x9e37_79b1));
-                let spread = perp(dir, mix_key(seed_lo, id, d.wrapping_add(c * 17), salt_c));
+                let child_seed = mix_key(
+                    seed_lo,
+                    id,
+                    d.wrapping_mul(19).wrapping_add(c),
+                    salt::DENDRITE_CURL ^ 0x9e37_79b1,
+                );
                 let sign = if c == 0 { 1.0 } else { -1.0 };
-                let child_dir = norm(add(scale(dir, 1.0), scale(spread, 0.7 * sign)));
-                let tip = add(mid, scale(child_dir, half));
-                let r_tip = params.base_radius * params.dendrite_tip_radius_fraction;
-                push(
+                let spread = perp(primary_dir, child_seed ^ 0x00ff_00ff);
+                let split_strength =
+                    lerp(0.38, 0.74, unit(hash32(child_seed ^ 0x1357_9bdf))) * sign;
+                let child_dir = norm(add(
+                    add(scale(primary_dir, 1.0), scale(spread, split_strength)),
+                    scale(norm(sub(stem_tip, soma)), 0.22),
+                ));
+                let twig_len = (reach - stem_len).max(reach * 0.25)
+                    * lerp(0.88, 1.08, unit(hash32(child_seed ^ 0x2468_ace0)));
+                let twig_bend = bend_vector(
+                    child_dir,
+                    child_seed,
+                    twig_len * 0.38,
+                );
+                let tip = add(
+                    add(stem_tip, scale(child_dir, twig_len)),
+                    scale(twig_bend, 0.24),
+                );
+                let twig_p1 = add(
+                    add(stem_tip, scale(child_dir, twig_len * 0.32)),
+                    scale(twig_bend, 0.40),
+                );
+                let twig_p2 = add(
+                    add(tip, scale(child_dir, -twig_len * 0.21)),
+                    scale(twig_bend, -0.14),
+                );
+                let _ = emit_bezier_path(
                     &mut segments,
-                    MorphSegment {
-                        a: mid,
-                        radius_a: r_mid,
-                        b: tip,
-                        radius_b: r_tip,
-                        neuron_id: id,
-                        path_len: len_mid,
-                        kind: 0,
-                        target_id: id, // dendrite: self (unused)
-                    },
+                    cap,
                     &mut dropped,
+                    id,
+                    id,
+                    0,
+                    stem_tip,
+                    twig_p1,
+                    twig_p2,
+                    tip,
+                    r_mid,
+                    r_tip,
+                    DENDRITE_TWIG_SAMPLES,
+                    stem_path_end,
+                    params.taper_curve * 0.75,
                 );
             }
         }
@@ -897,7 +1213,6 @@ pub fn generate(
             mix_key(seed_lo, id, unique_count as u32, salt::AXON_BOW),
             root_len * params.axon_curve_lift.max(0.0),
         );
-        let mut path_cursor = 0.0f32;
         let root_p1 = add(
             add(soma, scale(root_dir, root_len * 0.33)),
             scale(root_bend, 0.35),
@@ -920,13 +1235,13 @@ pub fn generate(
             shared_root_radius,
             cluster_start_radius,
             params.trunk_root_samples.max(1),
-            path_cursor,
+            0.0,
             params.taper_curve,
         );
         if !root_complete {
             all_k_coverage = false;
         }
-        path_cursor = next_path;
+        let root_path_end = next_path;
 
         for (cluster_idx, cluster) in clusters.iter().enumerate() {
             let mut cluster_dir = [0.0f32; 3];
@@ -970,13 +1285,13 @@ pub fn generate(
                 cluster_start_radius,
                 twig_start_radius,
                 params.cluster_branch_samples.max(1),
-                path_cursor,
+                root_path_end,
                 params.taper_curve,
             );
             if !cluster_complete {
                 all_k_coverage = false;
             }
-            path_cursor = next_path;
+            let cluster_path_end = next_path;
 
             for &plan_idx in cluster {
                 let plan = &mut plans[plan_idx];
@@ -1025,7 +1340,7 @@ pub fn generate(
                     twig_start_radius,
                     twig_end_radius,
                     params.terminal_twig_samples.max(1),
-                    path_cursor,
+                    cluster_path_end,
                     params.taper_curve,
                 );
                 if !twig_complete {
@@ -1033,7 +1348,7 @@ pub fn generate(
                 } else {
                     unique_targets_emitted += 1;
                 }
-                path_cursor = next_path;
+                let _ = next_path;
             }
         }
         axon_ms += axon_start.elapsed_ms();
@@ -1149,6 +1464,12 @@ mod tests {
     fn segment_layout_is_48_bytes() {
         assert_eq!(std::mem::size_of::<MorphSegment>(), 48);
         assert_eq!(std::mem::size_of::<MorphSegment>() % 16, 0);
+    }
+
+    #[test]
+    fn sphere_instance_layout_is_32_bytes() {
+        assert_eq!(std::mem::size_of::<MorphSphereInstance>(), 32);
+        assert_eq!(std::mem::size_of::<MorphSphereInstance>() % 16, 0);
     }
 
     #[test]

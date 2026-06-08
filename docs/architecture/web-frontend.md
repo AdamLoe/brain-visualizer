@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-05
+last_updated:  2026-06-06
 ---
 
 # Web Frontend
@@ -77,6 +77,7 @@ Three categories of backend call, each with a different cost profile:
 | `gpuBackend.render_frame(mvp, right, up, eye, dist)` | Every frame | Cheap JS→wasm boundary; GPU work happens inside |
 | `gpuBackend.tick(ticks, excitability)` | Every frame (time-based accumulator) | Submits compute passes; returns spike count |
 | `gpuBackend.update_settings(Float32Array)` | On settings change | Pushes `VisualSettings` uniform; one per change event |
+| `gpuBackend.set_morphology_config(json)` | On morphology config apply | Separate JSON path for the dev-panel morphology config; the backend diffs and runs the narrowest update. Distinct from the Float32Array — see below |
 
 `render_frame` receives the MVP matrix and billboard axes from `Camera`; it does
 not read back any GPU state. The struct contract for `VisualSettings` and the
@@ -86,6 +87,15 @@ tick return value live in `crates/brain-visualizer/src/lib.rs`; cross-link to
 the data-layout contracts for `VisualSettings` and `SimConfig`/`TickStats` are
 owned by [`dev-panel.md`](dev-panel.md) and [`simulation.md`](simulation.md)
 respectively.
+
+The morphology config travels a **separate** channel from the Float32Array:
+`crates/brain-visualizer/src/lib.rs → WasmGpuBackend::set_morphology_config` takes
+a JSON string (the `MorphologyConfig` from `web/src/core/morph-config.ts`,
+persisted under its own `bv2_morph_v1` key) rather than a packed float array, and
+the backend chooses the narrowest update path. The dev-panel apply is queued like
+the other backend calls (a `pendingMorphConfig` flag flushed in the rAF loop).
+Why a separate key + entry point rather than extending the frozen Float32Array:
+see [`../decisions/dev-tooling.md`](../decisions/dev-tooling.md).
 
 ## Camera
 
@@ -117,6 +127,13 @@ accumulator path exclusively.
 The `Controls` class is a thin backwards-compat facade; `main.ts` wires DOM
 handlers directly to the module-level functions.
 
+A bottom-center **pause** button (`#pause-toggle` in `index.html`, wired in
+`main.ts`) flips a `paused` flag the rAF loop reads: while paused it zeroes the
+per-frame tick count and drains `tickAccumulator` (so resume doesn't burst), but
+`render_frame` and the camera keep running — the sculpture freezes mid-flight
+while orbit/zoom stay live. It is a pure JS flag (no backend `&mut` call) and so
+is available on mobile too.
+
 ## Renderer (canvas + device acquisition)
 
 `web/src/render/renderer.ts → Renderer.init()` acquires the WebGPU adapter and device and
@@ -138,7 +155,7 @@ TIER_PRESETS`, `N_MIN`, `N_MAX`; tier→N/K logic belongs to
 
 The user-chosen runtime knobs in `AppConfig` are persisted to localStorage so a
 reload restores the last-used network — they were previously lost on every reload.
-`web/src/core/types.ts → loadConfig`, `saveConfig` own this; the key is
+`web/src/core/types.ts → loadConfig`, `saveConfig`, `resetConfig` own this; the key is
 `bv2_config_v1`. The shape deliberately mirrors the dev-panel settings pattern
 ([`dev-panel.md`](dev-panel.md)): a versioned key, a version gate that falls back
 to `DEFAULT_CONFIG` on mismatch/parse-error/missing key, a field-by-field

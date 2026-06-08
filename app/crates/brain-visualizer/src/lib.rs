@@ -293,6 +293,21 @@ mod wasm_entry {
             self.inner.set_visual_settings(v);
         }
 
+        /// v0.3.1: push a morphology-config JSON blob from the dev panel. Shape is
+        /// `{ generator: {...}, renderQuality: {...}, lighting: {...} }` per the
+        /// Config Contract. The Rust side diffs vs the current config and runs the
+        /// narrowest update (uniform-only lighting, generator regenerate, and/or
+        /// render-pipeline rebuild). This is a SEPARATE path from update_settings —
+        /// it does NOT touch the VisualSettings Float32Array contract. Logs and
+        /// ignores malformed JSON (no panic across the WASM boundary).
+        pub fn set_morphology_config(&mut self, json: &str) {
+            if let Err(e) = self.inner.set_morphology_config(json) {
+                web_sys::console::warn_1(
+                    &format!("[gpu] set_morphology_config: ignoring bad config: {e}").into(),
+                );
+            }
+        }
+
         /// Return the length-33 metrics Vec (Float32Array on the JS side).
         /// Layout matches METRICS_LAYOUT + the 16-bin voltage histogram in
         /// web/settings.ts.  V2 Phase A: sourced from the GPU reduction pass +

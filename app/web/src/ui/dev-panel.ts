@@ -33,11 +33,23 @@ import "./dev-panel.css";
 import type { Metrics } from "../core/settings";
 import { getSettings, resetSettings, setSetting } from "../core/settings";
 import { subscribe } from "../core/settings";
+import { CONFIG_LS_KEY, resetConfig, type AppConfig } from "../core/types";
 import {
   impactColor,
   impactLabel,
   type SettingImpact,
 } from "../core/setting-metadata";
+// v0.3.1: morphology-local descriptor-driven config surface.
+import {
+  MORPH_DESCRIPTORS,
+  getMorphValue,
+  loadMorphConfig,
+  resetMorphConfig,
+  saveMorphConfig,
+  setMorphValue,
+  type MorphDescriptor,
+  type MorphologyConfig,
+} from "../core/morph-config";
 // UX round 2: BRAIN_STATES / TIER_PRESETS no longer used in the panel
 // (presets removed). Controls.ts exports are kept for external consumers.
 
@@ -151,6 +163,23 @@ export interface SimHandlers {
   onSpeed: (tps: number) => void;
   /** Called when N/K/seed changes or Regenerate is pressed (triggers network rebuild). */
   onNetwork: (params: { n: number; k: number; seed: number }) => void;
+  /** Called when Storage reset clears AppConfig persistence; must not rebuild the network. */
+  onConfigReset?: (config: AppConfig) => void;
+}
+
+// ── v0.3.1: MorphHandlers (provided by main.ts via setMorphHandlers) ─────────
+
+/**
+ * Morphology-config callbacks. Both deliver the full serialized config JSON to
+ * the backend's `set_morphology_config(json)` entry point; the split exists so
+ * the live (uniform) path and the explicit Rebuild path stay separate at the
+ * call site (Q2 decision B / Q3).
+ */
+export interface MorphHandlers {
+  /** Live uniform-only update (lighting/brightness sliders on input). */
+  onMorphLive: (json: string) => void;
+  /** Explicit apply for generator + render-quality (Rebuild Morphology button). */
+  onMorphRebuild: (json: string) => void;
 }
 
 // ── Formatting helpers ────────────────────────────────────────────────────────
@@ -240,6 +269,15 @@ export class DevPanel {
   // UX overhaul: sim handlers for Network tab controls.
   private simHandlers: SimHandlers | null = null;
 
+  // v0.3.1: morphology-config handlers + state.
+  private morphHandlers: MorphHandlers | null = null;
+  // The applied (persisted) config. Lighting writes go here immediately (live).
+  private morphConfig: MorphologyConfig = loadMorphConfig();
+  // Pending edits to generator/render-quality groups; applied on Rebuild.
+  private morphPending: MorphologyConfig = loadMorphConfig();
+  // Descriptor rows for external sync (reset). Keyed by jsonPath.
+  private morphRows: Map<string, { input: HTMLInputElement; readout: HTMLSpanElement; decimals: number }> = new Map();
+
   // UX overhaul: visibility callback(s) for main.ts canvas shrinking.
   private visibilityCallbacks: Array<(open: boolean) => void> = [];
 
@@ -249,6 +287,16 @@ export class DevPanel {
   private _initSeed = 0;
   private _initExcitability = 0.71;
   private _initTps = 30;
+  private _currentSeed = 0;
+  private _nSlider: HTMLInputElement | null = null;
+  private _nInput: HTMLInputElement | null = null;
+  private _kSlider: HTMLInputElement | null = null;
+  private _kInput: HTMLInputElement | null = null;
+  private _seedInput: HTMLInputElement | null = null;
+  private _excitabilitySlider: HTMLInputElement | null = null;
+  private _excitabilityInput: HTMLInputElement | null = null;
+  private _speedSlider: HTMLInputElement | null = null;
+  private _speedInput: HTMLInputElement | null = null;
 
   // V2 Phase B: unsubscribe function returned by subscribe().
   // Called in destroy() to clean up when the panel is removed.
@@ -324,6 +372,11 @@ export class DevPanel {
     this.simHandlers = h;
   }
 
+  /** v0.3.1: wire morphology-config apply handlers (main.ts). */
+  setMorphHandlers(h: MorphHandlers): void {
+    this.morphHandlers = h;
+  }
+
   /**
    * UX round 2: Seed initial control values from the live app config.
    * Call after setSimHandlers so the Network tab shows current state.
@@ -337,6 +390,7 @@ export class DevPanel {
     this._initSeed        = opts.seed;
     this._initExcitability = opts.excitability;
     this._initTps         = opts.tps;
+    this._currentSeed     = opts.seed >>> 0;
 
     // The Network tab is built eagerly in the constructor, before main.ts calls
     // this method — so its sliders captured the field defaults, not the persisted
@@ -869,8 +923,7 @@ export class DevPanel {
     root.appendChild(this._sep("Network Scale"));
     this._caption(root, "Changing N / K / seed rebuilds the network.");
 
-    // current seed state (mutable within this closure)
-    let currentSeed = this._initSeed;
+    this._currentSeed = this._initSeed >>> 0;
 
     // N — slider + number input, fires onNetwork on change (not every input tick)
     const [nSlider, nInput] = this._sliderWithInput(root, {
@@ -880,8 +933,10 @@ export class DevPanel {
       min: 1000, max: 200_000, step: 1000,
       initialValue: this._initN,
     }, (n) => {
-      this.simHandlers?.onNetwork({ n, k: parseInt(kInput.value, 10), seed: currentSeed });
+      this.simHandlers?.onNetwork({ n, k: parseInt(kInput.value, 10), seed: this._currentSeed });
     }, /* liveOnInput */ false);
+    this._nSlider = nSlider;
+    this._nInput = nInput;
 
     // K — slider + number input, fires onNetwork on change
     const [kSlider, kInput] = this._sliderWithInput(root, {
@@ -891,8 +946,10 @@ export class DevPanel {
       min: 4, max: 64, step: 1,
       initialValue: this._initK,
     }, (k) => {
-      this.simHandlers?.onNetwork({ n: parseInt(nInput.value, 10), k, seed: currentSeed });
+      this.simHandlers?.onNetwork({ n: parseInt(nInput.value, 10), k, seed: this._currentSeed });
     }, /* liveOnInput */ false);
+    this._kSlider = kSlider;
+    this._kInput = kInput;
 
     // Seed row: number input + Regenerate button
     const seedRow = document.createElement("div");
@@ -910,20 +967,21 @@ export class DevPanel {
     seedInput.min = "0";
     seedInput.max = "4294967295";
     seedInput.step = "1";
-    seedInput.value = String(currentSeed >>> 0);
+    seedInput.value = String(this._currentSeed >>> 0);
     const applySeed = () => {
-      currentSeed = (parseInt(seedInput.value, 10) || 0) >>> 0;
-      seedInput.value = String(currentSeed);
+      this._currentSeed = (parseInt(seedInput.value, 10) || 0) >>> 0;
+      seedInput.value = String(this._currentSeed);
       this.simHandlers?.onNetwork({
         n: parseInt(nInput.value, 10),
         k: parseInt(kInput.value, 10),
-        seed: currentSeed,
+        seed: this._currentSeed,
       });
     };
     seedInput.addEventListener("change", applySeed);
     seedInput.addEventListener("keydown", (e) => { if (e.key === "Enter") applySeed(); });
     seedRow.appendChild(seedInput);
     root.appendChild(seedRow);
+    this._seedInput = seedInput;
 
     const regenRow = document.createElement("div");
     regenRow.style.cssText = "display:flex;gap:4px;padding:3px 10px 6px;";
@@ -933,12 +991,12 @@ export class DevPanel {
     this._attachTip(regenBtn, "Pick a new random seed and rebuild the network.");
     regenBtn.addEventListener("click", () => {
       // Simple seed mutation: add a large prime, wrap in u32. UX round 2.
-      currentSeed = (currentSeed + 0x9e3779b9) >>> 0;
-      seedInput.value = String(currentSeed);
+      this._currentSeed = (this._currentSeed + 0x9e3779b9) >>> 0;
+      seedInput.value = String(this._currentSeed);
       this.simHandlers?.onNetwork({
         n: parseInt(nInput.value, 10),
         k: parseInt(kInput.value, 10),
-        seed: currentSeed,
+        seed: this._currentSeed,
       });
     });
     regenRow.appendChild(regenBtn);
@@ -952,7 +1010,7 @@ export class DevPanel {
     this._caption(root, "All drive controls take effect immediately.");
 
     // Excitability — slider + number input (live)
-    this._sliderWithInput(root, {
+    const [excitabilitySlider, excitabilityInput] = this._sliderWithInput(root, {
       label: "Excitability",
       tooltip: "Global gain on synaptic input — low = sleepy, high = seizure-like.",
       impact: "live",
@@ -962,9 +1020,11 @@ export class DevPanel {
     }, (v) => {
       this.simHandlers?.onExcitability(v);
     }, /* liveOnInput */ true);
+    this._excitabilitySlider = excitabilitySlider;
+    this._excitabilityInput = excitabilityInput;
 
     // Speed (ticks/sec) — slider + number input (live). UX round 2.
-    this._sliderWithInput(root, {
+    const [speedSlider, speedInput] = this._sliderWithInput(root, {
       label: "Speed (ticks/sec)",
       tooltip: "Target simulation ticks per second (time-based, independent of frame rate). Default 30.",
       impact: "live",
@@ -974,6 +1034,8 @@ export class DevPanel {
     }, (v) => {
       this.simHandlers?.onSpeed(Math.max(1, Math.min(60, Math.round(v))));
     }, /* liveOnInput */ true);
+    this._speedSlider = speedSlider;
+    this._speedInput = speedInput;
 
     // iExt (sim drive) — live
     this._sliderRow(root, {
@@ -1132,6 +1194,7 @@ export class DevPanel {
         { value: 2, label: "Spike age" },
         { value: 3, label: "Voltage (debug)" },
         { value: 4, label: "Activity" },
+        { value: 5, label: "Identity" },
       ],
     }, s.colorBy, "live");
 
@@ -1245,16 +1308,6 @@ export class DevPanel {
       ],
     }, s.connectionLightNext, "live");
 
-    this._selectRow(root, {
-      key: "connectionLightPast",
-      label: "Light past (upstream)",
-      tooltip: "When a neuron fires, the incoming connections from the neurons that feed it light up and fade out in sync with the firing neuron's glow.",
-      options: [
-        { value: 0, label: "Off" },
-        { value: 1, label: "On" },
-      ],
-    }, s.connectionLightPast, "live");
-
     this._sliderRow(root, {
       key: "morphRestingOpacity",
       label: "Resting opacity",
@@ -1281,6 +1334,10 @@ export class DevPanel {
       changeOnly: true,
     }, s.connectionCurveLift, "renderer-rebuild");
 
+    // v0.3.1: descriptor-driven morphology config (generator / render-quality /
+    // lighting). Rendered from MORPH_DESCRIPTORS — no hand-written rows.
+    this._buildMorphConfigRows(root);
+
     // ── Post (bloom on by default; morphology glow blooms out of the box) ──────
     root.appendChild(this._sep("Post"));
 
@@ -1299,6 +1356,104 @@ export class DevPanel {
     // The settings field at index 23 (adaptiveScalerEnabled) is kept RESERVED/INERT
     // to preserve the Rust↔TS VisualSettings contract; it is no longer exposed.
     // UX round 2: Sim Drive + Network Params moved to Network tab (Drive + Structure sections).
+  }
+
+  // ── v0.3.1: descriptor-driven morphology config rows ──────────────────────
+  // Renders one row per MORPH_DESCRIPTORS entry, grouped by generator /
+  // renderQuality / lighting. Lighting (applyKind "uniform") writes live on
+  // slider input; generator + renderQuality (regenerate / pipeline-rebuild) edit
+  // a pending config applied only on the "Rebuild Morphology" button.
+
+  private _buildMorphConfigRows(root: HTMLDivElement): void {
+    // Reset row registry (rebuilds happen e.g. on reset → re-entry).
+    this.morphRows.clear();
+
+    const GROUP_LABELS: Record<MorphDescriptor["group"], string> = {
+      generator:     "Morphology · Generator",
+      renderQuality: "Morphology · Render quality",
+      lighting:      "Morphology · Lighting",
+    };
+
+    let lastGroup: MorphDescriptor["group"] | null = null;
+    for (const d of MORPH_DESCRIPTORS) {
+      if (d.group !== lastGroup) {
+        root.appendChild(this._sep(GROUP_LABELS[d.group]));
+        lastGroup = d.group;
+      }
+      this._morphRow(root, d);
+    }
+
+  }
+
+  /** One descriptor-driven slider row for a morphology config control. */
+  private _morphRow(parent: HTMLElement, d: MorphDescriptor): void {
+    const isInt = d.type === "int";
+    const decimals = isInt ? 0 : Math.max(0, -Math.floor(Math.log10(d.step)));
+    const live = d.applyKind === "uniform";
+    // Lighting reads from the applied config; pending groups read from pending.
+    const initial = live
+      ? getMorphValue(this.morphConfig, d.jsonPath)
+      : getMorphValue(this.morphPending, d.jsonPath);
+
+    const row = document.createElement("div");
+    row.className = "dp-ctrl-row";
+    if (d.tooltip) this._attachTip(row, d.tooltip);
+
+    row.appendChild(this._impactDot(d.impact));
+
+    const lbl = document.createElement("span");
+    lbl.className = "dp-label dp-ctrl-label";
+    lbl.textContent = d.label;
+    row.appendChild(lbl);
+
+    const readout = document.createElement("span");
+    readout.className = "dp-value dp-ctrl-readout";
+    readout.textContent = initial.toFixed(decimals);
+    row.appendChild(readout);
+
+    const sliderWrap = document.createElement("div");
+    sliderWrap.className = "dp-slider-wrap";
+    if (d.tooltip) this._attachTip(sliderWrap, d.tooltip);
+
+    const input = document.createElement("input");
+    input.type = "range";
+    input.className = "dp-slider";
+    input.min = String(d.min);
+    input.max = String(d.max);
+    input.step = String(d.step);
+    input.value = String(initial);
+
+    input.addEventListener("input", () => {
+      const v = parseFloat(input.value);
+      readout.textContent = v.toFixed(decimals);
+      if (d.applyKind === "uniform") {
+        this._onMorphInput(d, v);
+      } else {
+        this.morphPending = setMorphValue(this.morphPending, d.jsonPath, v);
+      }
+    });
+
+    if (d.applyKind !== "uniform") {
+      input.addEventListener("change", () => {
+        this.morphConfig = structuredClone(this.morphPending);
+        saveMorphConfig(this.morphConfig);
+        this.morphHandlers?.onMorphRebuild(JSON.stringify(this.morphConfig));
+      });
+    }
+
+    sliderWrap.appendChild(input);
+    parent.appendChild(row);
+    parent.appendChild(sliderWrap);
+
+    this.morphRows.set(d.jsonPath, { input, readout, decimals });
+  }
+
+  /** Apply a live (uniform) morphology slider change immediately. */
+  private _onMorphInput(d: MorphDescriptor, value: number): void {
+    this.morphConfig = setMorphValue(this.morphConfig, d.jsonPath, value);
+    this.morphPending = setMorphValue(this.morphPending, d.jsonPath, value);
+    saveMorphConfig(this.morphConfig);
+    this.morphHandlers?.onMorphLive(JSON.stringify(this.morphConfig));
   }
 
   // ── V2 Phase E: Debug View tab DOM ────────────────────────────────────────
@@ -1332,7 +1487,7 @@ export class DevPanel {
     if (!this.debugViewFields) return;
     const d = this.debugViewFields;
 
-    const COLOR_BY_LABELS   = ["Region", "E/I", "Spike age", "Voltage (debug)", "Activity"];
+    const COLOR_BY_LABELS   = ["Region", "E/I", "Spike age", "Voltage (debug)", "Activity", "Identity"];
     const NEURON_VIS_LABELS = ["All", "Active emphasis", "Active only"];
     const CONN_LAYER_LABELS = ["Off", "On"];
     const SURFACE_LABELS    = ["Off", "Dim", "Normal"];
@@ -1355,6 +1510,15 @@ export class DevPanel {
     resetBtn.textContent = "Reset settings to defaults";
     resetBtn.addEventListener("click", () => {
       resetSettings();
+      // v0.3.1: clear bv2_morph_v1 on the SAME reset path and re-sync morph rows.
+      this.morphConfig = resetMorphConfig();
+      this.morphPending = structuredClone(this.morphConfig);
+      this._syncMorphRows();
+      // Push defaults to the backend (uniform + rebuild) so the live view resets.
+      this.morphHandlers?.onMorphRebuild(JSON.stringify(this.morphConfig));
+      const defaultConfig = resetConfig();
+      this._syncNetworkControls(defaultConfig);
+      this.simHandlers?.onConfigReset?.(defaultConfig);
       this._refreshStorageReadout();
     });
 
@@ -1513,6 +1677,19 @@ export class DevPanel {
     parent.appendChild(cap);
   }
 
+  // ── v0.3.1: sync morphology rows to the current config (e.g. after reset) ──
+
+  private _syncMorphRows(): void {
+    for (const d of MORPH_DESCRIPTORS) {
+      const el = this.morphRows.get(d.jsonPath);
+      if (!el) continue;
+      const src = d.applyKind === "uniform" ? this.morphConfig : this.morphPending;
+      const v = getMorphValue(src, d.jsonPath);
+      el.input.value = String(v);
+      el.readout.textContent = v.toFixed(el.decimals);
+    }
+  }
+
   // ── V2 Phase B: sync sliders to external settings changes ────────────────
   // Called when settings change from any source (including resetSettings).
 
@@ -1547,17 +1724,45 @@ export class DevPanel {
     const el = document.getElementById("dp-storage-readout");
     if (!el) return;
     try {
-      const raw = localStorage.getItem(DevPanel.LS_KEY);
-      if (!raw) {
-        el.textContent = `Key: ${DevPanel.LS_KEY}\nSize: (not set)`;
-      } else {
-        const byteLen = new TextEncoder().encode(raw).length;
-        el.textContent =
-          `Key: ${DevPanel.LS_KEY}\nSize: ${byteLen} bytes`;
-      }
+      el.textContent = [
+        this._storageLine(DevPanel.LS_KEY),
+        this._storageLine(CONFIG_LS_KEY),
+      ].join("\n");
     } catch {
       el.textContent = "(localStorage unavailable)";
     }
+  }
+
+  private _storageLine(key: string): string {
+    const raw = localStorage.getItem(key);
+    if (!raw) return `Key: ${key} - Size: (not set)`;
+    const byteLen = new TextEncoder().encode(raw).length;
+    return `Key: ${key} - Size: ${byteLen} bytes`;
+  }
+
+  private _syncNetworkControls(config: AppConfig): void {
+    this._initN = config.n;
+    this._initK = config.k;
+    this._initSeed = config.seed >>> 0;
+    this._initExcitability = config.excitability;
+    this._initTps = config.ticksPerSec;
+    this._currentSeed = config.seed >>> 0;
+
+    this._setSliderInputPair(this._nSlider, this._nInput, config.n, 0);
+    this._setSliderInputPair(this._kSlider, this._kInput, config.k, 0);
+    if (this._seedInput) this._seedInput.value = String(config.seed >>> 0);
+    this._setSliderInputPair(this._excitabilitySlider, this._excitabilityInput, config.excitability, 2);
+    this._setSliderInputPair(this._speedSlider, this._speedInput, config.ticksPerSec, 0);
+  }
+
+  private _setSliderInputPair(
+    slider: HTMLInputElement | null,
+    input: HTMLInputElement | null,
+    value: number,
+    decimals: number,
+  ): void {
+    if (slider) slider.value = String(value);
+    if (input) input.value = value.toFixed(decimals);
   }
 
   // ── V2 Phase C: populate Dynamics tab live readouts. ─────────────────────

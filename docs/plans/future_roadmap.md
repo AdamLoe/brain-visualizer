@@ -1,94 +1,107 @@
 ---
-status:        long_lived
+status:        active
 owner:         adamg
-last_updated:  2026-06-06
+last_updated:  2026-06-08
 okay_to_delete: false
 long_lived:    true
-owning_docs:   [architecture/*, decisions/*]
+owning_docs:
+  - plans/*
+  - architecture/*
+  - decisions/*
 ---
 
-# Future roadmap & rejected ideas
+# Future Roadmap
 
-The one long-lived plan. It holds two kinds of durable context that don't fit a
-current-state architecture doc or a per-domain decision: **deferred work** we
-might do, and **ideas we considered and rejected** (with the reason, so they're
-not re-proposed). When a deferred item is taken on, move it into a real plan;
-when one is killed, move it to the rejected table.
+Long-lived parking lot for deferred work, rejected ideas, and follow-up routes
+that should not distract the active v0.3-v0.5 visual roadmap. Active
+implementation details belong in the versioned plan docs, not here.
 
-## Deferred / possible future work
+## Deferred candidates
 
-### Sim & model
-- **GLIF neuron model** (Allen-style adaptation terms) upgrading LIF. See
-  [`../decisions/scope.md`](../decisions/scope.md) (LIF-first).
-- **Hybrid connectivity**: procedural local + sparse stored long-range "highway"
-  edges. Today's rule is local-only — [`../architecture/connectivity.md`](../architecture/connectivity.md).
-- **Sim-accurate conduction delay** (delay ring buffer) instead of visual-only.
-- **Synaptic plasticity / STDP** so the network visibly learns.
+### Real Mesh Brain Asset
 
-### Other engines to stack on the SNN
-- N-body physics layout; GPU particle signal field; live in-browser
-  forward-pass / training. All deferred from the SNN engine choice
-  ([`../decisions/scope.md`](../decisions/scope.md)).
+- **Deferred.** Do not make external mesh acquisition part of v0.3.0.
+- **Why.** The current accepted direction keeps the manifold procedural and
+  asset-free for the active roadmap.
+- **Revisit when.** A licensed mesh route is explicitly chosen as a new product
+  decision after the procedural showcase is stable.
+- **Route.** Would require license verification, attribution, source + runtime
+  asset handling, mesh normalization, and an explicit replacement of the current
+  no-external-mesh manifold decision.
 
-### Rendering / UX
-- Region labels / anatomical overlays on zoom.
-- **Side-by-side CPU/GPU "race"** — both backends on one seed, throughput
-  counters racing. The backend toggle ships first
-  ([`../decisions/backends.md`](../decisions/backends.md)).
-- Reviving a near-LOD connection visual (ribbon or cylinder) is gated behind the
-  `DRAW_LEGACY_*` flags — [`../architecture/active-edges.md`](../architecture/active-edges.md).
+### Soft Spatial Region Territories
 
-### Procedural morphology follow-ups
-- **Cell identity polish after the v0.2.x arbor.** Per-region morphology
-  variation is deferred because region assignment is spatially random today; a
-  variation pass should happen only if screenshots show it reads as coherent
-  identity instead of speckled noise, or if regions become spatially contiguous.
-- **Morph-pass soma primitive (`kind = 2`).** Defer until close-camera
-  screenshots prove the billboard soma looks detached from the generated arbor.
-  Any shipped version must update Rust/WGSL `MorphSegment` semantics and layout
-  asserts in one serial stream.
-- **Whole-path upstream lighting for shared arbors.** v0.2.x may leave
-  `light_past` effectively terminal-only for shared trunk/cluster segments.
-  Revisit only with a shader-facing plan that does not overload `target_id`.
-- **Incoming-direction dendrite bias.** A reverse "who targets me" pass could
-  orient dendrites toward real incoming axons, but it is deferred until the
-  simpler socket model is proven insufficient.
-- **Single-neuron inspect / pick mode.** Useful for debugging or an educational
-  zoom mode, but deferred until the homepage visual needs it; the morphology
-  rework should not depend on a selection UX.
+- **Deferred.** Spatial Input/Association/Output geography is out of the v0.5
+  critical path.
+- **Why.** Hard bands previously read as slabs and fought the existing dynamics
+  decision that region topology is functional, not anatomical.
+- **Revisit when.** The showcase is stable and visual propagation still needs
+  more directional structure.
+- **Route.** Draft a new implementation plan after v0.5. Use soft
+  probabilistic territories with deterministic jitter and preserved global
+  ratios. Do not ship hard posterior/middle/anterior slabs.
+- **Constraints.** Preserve approximate 30/40/30 global ratios, keep every
+  visible zone mixed, keep `RegionKind` integer ordering stable, and treat the
+  change as a dynamics review because input-region ambient drive moves with
+  region geography.
+- **Review.** Check region-color views, spikes/sec, branching ratio,
+  silent/tuned/overactive classification, hover response, and low/balanced/max
+  tier behavior. If the only working version requires hard bands, abandon it.
 
-### Scaling / control
-- **Smart within-tier auto-scaling** — a gentle, hysteretic, stall-aware
-  replacement for the auto-scaler that was pulled in 0.1.1
-  ([`../decisions/scaling.md`](../decisions/scaling.md)). It must: decide on the
-  **average** frame time, not p95 (a one-frame resize stall is invisible to p95
-  and caused an unbounded grow loop); and make resize **cheap** — skip the
-  render-pipeline recompile by splitting GPU buffer-resize out of
-  `build_render_pipelines` so a within-tier N change doesn't full-teardown.
-  The dormant `scalerDecide` / `scaler.rs` stub is the seed
-  ([`../architecture/scaling.md`](../architecture/scaling.md)).
-- **Auto-tier selection heuristic** per device on load — distinct from the
-  within-tier scaler above ([`../architecture/scaling.md`](../architecture/scaling.md)).
-- **CPU backend revival** to feature-parity (heterogeneity, weight norm, input
-  modes, a connection visual) — or formal retirement. It is parked today
-  ([`../architecture/cpu-backend.md`](../architecture/cpu-backend.md),
-  [`../decisions/backends.md`](../decisions/backends.md)).
+### External Texture Asset Pipeline
 
-## Considered and rejected
+- **Deferred.** v0.3.2 stays procedural and subtle; no PNG/JPEG texture uploads,
+  UV unwraps, sampler bind groups, or asset pipeline.
+- **Revisit when.** Procedural material polish fails close-up review and the
+  extra complexity has a clear visual payoff.
 
-| Idea | Reason rejected | Permanent / deferred |
-|---|---|---|
-| Biophysically detailed (multi-compartment, ion-channel) neurons | ~1000× cost/neuron, needs a supercomputer, and the detail is invisible at this scale; point/LIF reproduces the look. | Deferred (revisit only on a drastic scope change) |
-| Graphics engine (three.js / Babylon) | Conflicts with the from-scratch, peak-performance framing; we hand-write shaders + pipelines, `wgpu` is a thin binding. | Permanent |
-| Real connectome data (HCP tractography, etc.) | Large, messy, licensing-encumbered; tiny visual payoff over procedural distance-decay wiring. | Deferred |
-| "Machine score" / shareable benchmark + leaderboard | It's a "pretty toy with slight interactivity," not a competitive product; throughput still shows in the HUD. | Deferred |
-| Avalanche trace mode (highlight a cascade path in a distinct color) | Visual-complexity scope creep over the core glow. | Deferred |
-| Spectral overlay / live FFT of population activity | Turns a toy into a dashboard; the HUD covers perf. | Deferred |
-| Damage / lesioning mode | Out of scope for now. | Deferred |
-| Scripted "wake up" intro (seed spike, cortex loads dark) | Natural posterior→anterior propagation produces the effect for free. | Permanent — see [`../decisions/interaction.md`](../decisions/interaction.md) |
-| Catmull-Rom curve sampler for the v0.2 morphology rework | A single cubic Bezier sampler is easier to budget, test, and tune; richer splines can wait until Bezier is proven insufficient. | Deferred |
+### Public Visual Presets
+
+- **Deferred.** Keep default/performance/hero variants as review-harness or
+  hidden-dev-panel concepts first.
+- **Why.** The public product should open to the accepted default without asking
+  visitors to choose a rendering mode.
+- **Revisit when.** Real users need a public low-power mode or screenshot mode.
+
+### Click-To-Inspect / Picking
+
+- **Deferred.** Selection, per-neuron inspection, incoming/outgoing highlighting,
+  and GPU picking remain outside the visual-roadmap critical path.
+- **Why.** The interaction model is still a watch-and-perturb toy; click does
+  nothing by design.
+
+### Education Mode
+
+- **Deferred.** Labels, lessons, anatomical overlays, and explanatory sequences
+  are not part of the v0.3-v0.5 work.
+
+### Sim-Accurate Conduction Delay
+
+- **Deferred.** v0.3.3 traveling impulses are visual-only and derived from
+  `last_spike` plus `path_len`; they do not delay synaptic delivery.
+
+### Learning / Plasticity
+
+- **Deferred.** STDP or any learning rule would change the simulation model and
+  needs a separate dynamics plan.
+
+### CPU Backend Revival
+
+- **Deferred.** The CPU/WebGL2 backend stays parked during visual showcase work.
+
+## Rejected for the active roadmap
+
+- **Hard spatial region bands before v0.5.** Rejected because they risk the
+  "three glowing slabs" failure mode.
+- **Real mesh as the default v0.3.0 path.** Rejected for now because it turns a
+  visual-shape pass into licensing, asset processing, and point-in-mesh work.
+- **User-facing hero/performance/default presets in v0.4.0.** Rejected until
+  review harness configs prove that separate public modes are worth exposing.
 
 ## See also
 
-- [`index.md`](index.md) — plans landing + lifecycle.
-- [`../decisions/index.md`](../decisions/index.md) — the choices these alternatives were weighed against.
+- [`00-roadmap-index.md`](00-roadmap-index.md)
+- [`visual-acceptance-contract.md`](visual-acceptance-contract.md)
+- [`v0.3.0-brain-shaped-arena.md`](v0.3.0-brain-shaped-arena.md)
+- [`../decisions/manifold.md`](../decisions/manifold.md)
+- [`../decisions/dynamics.md`](../decisions/dynamics.md)

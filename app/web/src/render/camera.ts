@@ -1,19 +1,21 @@
 // Orbit + zoom camera (BV10, Phase 3). Produces a column-major MVP matrix,
 // camera_right and camera_up vectors for the billboard shader, and handles
-// left-drag orbit, wheel zoom, and touch events.
+// left-drag orbit, right-drag / Shift-left drag pan, wheel zoom, and touch
+// events.
 // No readback, no sim coupling (architecture §13).
 
 export class Camera {
   private azimuth = 0.3;     // radians (spec default)
   private elevation = 0.4;   // radians (spec default)
   private distance = 3.0;    // world units from origin (spec default)
-  private readonly targetPt: V3 = [0, 0, 0];
+  private targetPt: V3 = [0, 0, 0];
   private readonly fov = (50 * Math.PI) / 180;
   private aspect = 1;
 
-  // Pointer state for drag-orbit.
+  // Pointer state for drag-orbit / drag-pan.
   private lastX = 0;
   private lastY = 0;
+  private dragMode: DragMode = null;
 
   // Touch state for pinch-zoom.
   private lastPinchDist = 0;
@@ -24,19 +26,29 @@ export class Camera {
 
   // --- Input handlers ---
 
-  onPointerDown(x: number, y: number): void {
+  onPointerDown(x: number, y: number, buttons = 0, shiftKey = false): void {
     this.lastX = x;
     this.lastY = y;
+    this.dragMode = resolveDragMode(buttons, shiftKey, this.dragMode);
   }
 
   onPointerUp(): void {
+    this.dragMode = null;
     this.lastPinchDist = 0;
   }
 
-  /** Called on mousemove. Returns true if this is an orbit move (button held),
+  /** Called on mousemove. Returns true if this is a drag move (orbit or pan),
    *  false if it is a hover event (no button) — caller routes hover to stimulate. */
-  onPointerMove(x: number, y: number, buttons: number): boolean {
-    if (buttons & 1) { // left drag = orbit
+  onPointerMove(
+    x: number,
+    y: number,
+    buttons: number,
+    viewportWidth: number,
+    viewportHeight: number,
+    shiftKey = false,
+  ): boolean {
+    const mode = resolveDragMode(buttons, shiftKey, this.dragMode);
+    if (mode === "orbit") {
       const dx = x - this.lastX;
       const dy = y - this.lastY;
       this.azimuth -= dx * 0.005;
@@ -44,8 +56,19 @@ export class Camera {
       this.elevation = clamp(this.elevation, -1.4, 1.4);
       this.lastX = x;
       this.lastY = y;
+      this.dragMode = mode;
       return true;
     }
+    if (mode === "pan") {
+      const dx = x - this.lastX;
+      const dy = y - this.lastY;
+      this.pan(dx, dy, viewportWidth, viewportHeight);
+      this.lastX = x;
+      this.lastY = y;
+      this.dragMode = mode;
+      return true;
+    }
+    this.dragMode = null;
     this.lastX = x;
     this.lastY = y;
     return false;
@@ -54,6 +77,24 @@ export class Camera {
   onWheel(deltaY: number): void {
     this.distance *= 1 + deltaY * 0.001;
     this.distance = clamp(this.distance, 0.5, 10.0);
+  }
+
+  /** Recenter the target at the world origin. */
+  resetTarget(): void {
+    this.targetPt[0] = 0;
+    this.targetPt[1] = 0;
+    this.targetPt[2] = 0;
+  }
+
+  /** Translate the camera target in screen space. */
+  pan(dxPx: number, dyPx: number, viewportWidth: number, viewportHeight: number): void {
+    if (viewportWidth <= 0 || viewportHeight <= 0) return;
+    const worldPerPixel = (2 * this.distance * Math.tan(this.fov / 2)) / viewportHeight;
+    const right = this.cameraRight();
+    const up = this.cameraUp();
+    this.targetPt[0] += (-right[0] * dxPx + up[0] * dyPx) * worldPerPixel;
+    this.targetPt[1] += (-right[1] * dxPx + up[1] * dyPx) * worldPerPixel;
+    this.targetPt[2] += (-right[2] * dxPx + up[2] * dyPx) * worldPerPixel;
   }
 
   // Touch: one-finger = orbit, two-finger pinch = zoom.
@@ -215,6 +256,22 @@ function mat4mul(a: Float32Array, b: Float32Array): Float32Array {
 }
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
+}
+
+type DragMode = "orbit" | "pan" | null;
+
+function resolveDragMode(buttons: number, shiftKey: boolean, current: DragMode): DragMode {
+  const orbitRequested = (buttons & 1) !== 0;
+  const panRequested = (buttons & 2) !== 0 || (orbitRequested && shiftKey);
+
+  if (current === "orbit" && orbitRequested && !panRequested) return "orbit";
+  if (current === "pan" && panRequested && !orbitRequested) return "pan";
+  if (current === "orbit" && orbitRequested && panRequested) return "orbit";
+  if (current === "pan" && orbitRequested && panRequested) return "pan";
+  if (panRequested && !orbitRequested) return "pan";
+  if (orbitRequested && !panRequested) return "orbit";
+  if (orbitRequested && panRequested) return current ?? "orbit";
+  return null;
 }
 
 /** Invert a column-major 4×4 matrix. Returns null if singular. */

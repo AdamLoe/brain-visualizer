@@ -85,8 +85,8 @@ pub struct VisualSettings {
     /// index 8  — Morphology controls: light a firing neuron's downstream
     /// (outgoing) axon connections (0 = off, 1 = on; default 1)
     pub connection_light_next: u32,
-    /// index 9  — Morphology controls: light a firing neuron's upstream
-    /// (incoming) axon connections (0 = off, 1 = on; default 0)
+    /// index 9  — reserved_zero (connectionLightPast removed; upstream lighting
+    /// deferred until whole-path shared-arbor semantics are redesigned)
     pub connection_light_past: u32,
     /// index 10 — bloom post-process intensity (default 0.0 = off)
     pub bloom_strength: f32,
@@ -177,7 +177,7 @@ impl VisualSettings {
             connection_visual_width: f(6, d.connection_visual_width),
             connection_curve_lift: f(7, d.connection_curve_lift),
             connection_light_next: u(8, d.connection_light_next),
-            connection_light_past: u(9, d.connection_light_past),
+            connection_light_past: 0, // index 9: reserved_zero (upstream lighting removed)
             bloom_strength: f(10, d.bloom_strength),
             surface_opacity: f(11, d.surface_opacity),
             i_ext: f(12, d.i_ext),
@@ -198,7 +198,7 @@ impl VisualSettings {
     /// Compact JSON snapshot for review artifacts.
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"glow_tau\":{:.6},\"point_radius\":{:.6},\"neuron_visual_radius\":{:.6},\"active_neuron_radius_boost\":{:.6},\"inactive_neuron_opacity\":{:.6},\"voltage_glow_strength\":{:.6},\"connection_visual_width\":{:.6},\"connection_curve_lift\":{:.6},\"connection_light_next\":{},\"connection_light_past\":{},\"bloom_strength\":{:.6},\"surface_opacity\":{:.6},\"i_ext\":{:.6},\"synaptic_scale\":{:.6},\"heterogeneity\":{:.6},\"morph_resting_opacity\":{:.6},\"signal_source\":{},\"connection_layer\":{},\"color_by\":{},\"neuron_visibility\":{},\"surface\":{},\"weight_normalization\":{},\"input_mode\":{},\"adaptive_scaler_enabled\":{}}}",
+            "{{\"glow_tau\":{:.6},\"point_radius\":{:.6},\"neuron_visual_radius\":{:.6},\"active_neuron_radius_boost\":{:.6},\"inactive_neuron_opacity\":{:.6},\"voltage_glow_strength\":{:.6},\"connection_visual_width\":{:.6},\"connection_curve_lift\":{:.6},\"connection_light_next\":{},\"bloom_strength\":{:.6},\"surface_opacity\":{:.6},\"i_ext\":{:.6},\"synaptic_scale\":{:.6},\"heterogeneity\":{:.6},\"morph_resting_opacity\":{:.6},\"signal_source\":{},\"connection_layer\":{},\"color_by\":{},\"neuron_visibility\":{},\"surface\":{},\"weight_normalization\":{},\"input_mode\":{},\"adaptive_scaler_enabled\":{}}}",
             self.glow_tau,
             self.point_radius,
             self.neuron_visual_radius,
@@ -208,7 +208,6 @@ impl VisualSettings {
             self.connection_visual_width,
             self.connection_curve_lift,
             self.connection_light_next,
-            self.connection_light_past,
             self.bloom_strength,
             self.surface_opacity,
             self.i_ext,
@@ -273,6 +272,24 @@ const LEGACY_RIBBON_EDGE_BUDGET: u32 = 100;
 /// taken live from the setting; this const documents the default value.
 #[allow(dead_code)]
 const MORPH_BASE_BRIGHTNESS: f32 = 0.25;
+
+/// Morphology tube geometry: number of sides in the tube cross-section polygon.
+/// MUST match `TUBE_SIDES` const in render_morphology.wgsl. Vertices per tube =
+/// TUBE_SIDES * 2 * 3 (two rings, triangulated as quads → 2 tris per side).
+/// v0.3.1 will expose this as a pipeline rebuild knob.
+const TUBE_SIDES: u32 = 6;
+
+/// Morphology soma sphere geometry (Wave 2): vertex count per soma instance.
+/// MUST match the WGSL constants in render_morphology.wgsl:
+///   SPHERE_SLICES=8, SPHERE_STACKS=6
+///   SPHERE_VERTS = SPHERE_SLICES * SPHERE_STACKS * 2 * 3 = 288
+/// (top cap: 8*3, body quads: 5*8*6, bottom cap: 8*3 = 24+240+24 = 288)
+const SPHERE_VERTS: u32 = 288;
+
+// Morphology lighting defaults (Stage 0 / v0.3.0) moved into
+// `morphology::LightingConfig::default()` (v0.3.1). The MorphUniforms lighting
+// fields are now sourced from `self.morph_config.lighting` each frame; the
+// dev-panel `set_morphology_config` entry point owns them.
 
 /// V2 Phase E: bright-pass luminance threshold for bloom (only the part of the
 /// scene above this contributes to the blurred halo). Hardcoded (no settings
@@ -366,6 +383,28 @@ pub struct GpuBackend {
     /// The bloom HDR scene target uses THIS format (so the scene pipelines stay
     /// compatible); only the bloom blur ping-pong is rgba16float.
     render_color_format: wgpu::TextureFormat,
+    // ─── v0.3.1 morphology config (dev-panel exposure) ────────────────────────
+    /// Current applied morphology config (generator + render-quality + lighting).
+    /// Initialised to `Default` (== contract defaults); `set_morphology_config`
+    /// diffs incoming vs this and runs the narrowest update.
+    morph_config: crate::sim::morphology::MorphologyConfig,
+    /// Tube draw vertex-count = tube_sides * 2 * 3. Runtime value kept in sync with
+    /// the WGSL `TUBE_SIDES` override constant the morph pipeline was built with.
+    morph_tube_verts: u32,
+    /// Soma sphere draw vertex-count = sphere_slices * sphere_stacks * 2 * 3.
+    morph_sphere_verts: u32,
+}
+
+/// Tube draw vertex-count from a tube-sides tessellation value.
+#[inline]
+fn tube_verts(tube_sides: u32) -> u32 {
+    tube_sides * 2 * 3
+}
+
+/// Soma-sphere draw vertex-count from slice/stack tessellation values.
+#[inline]
+fn sphere_verts(slices: u32, stacks: u32) -> u32 {
+    slices * stacks * 2 * 3
 }
 
 impl GpuBackend {
@@ -407,6 +446,12 @@ impl GpuBackend {
             // V2 Phase E: overwritten by build_render_pipelines with the real
             // surface format; this is only a placeholder until then.
             render_color_format: wgpu::TextureFormat::Rgba8Unorm,
+            // v0.3.1: morphology config defaults (== contract defaults). Draw
+            // counts match the default tessellation (TUBE_SIDES=6 → 36 verts,
+            // 8×6 sphere → 288 verts).
+            morph_config: crate::sim::morphology::MorphologyConfig::default(),
+            morph_tube_verts: tube_verts(TUBE_SIDES),
+            morph_sphere_verts: SPHERE_VERTS,
         }
     }
 
@@ -444,17 +489,87 @@ impl GpuBackend {
     fn regenerate_morphology(&mut self) {
         let config = self.config.clone();
         let manifold = crate::build_manifold(&config);
+        let params = self.current_morph_params();
         self.resources.init_morph_resources(
             &self.ctx.device,
             &manifold.neuron_positions,
             &manifold.spatial_grid,
             &manifold.neuron_regions,
             &config,
-            &crate::sim::morphology::MorphologyParams::locked_default()
-                .with_curve_lift(self.visual.connection_curve_lift),
+            &params,
         );
         self.resources
             .refresh_bind_groups(&self.ctx.device, &self.layouts);
+    }
+
+    /// Effective generator params: the morphology-config generator group layered
+    /// over the locked default (protected budgets preserved), then the live
+    /// Float32Array `connection_curve_lift` applied last (it owns the axon bow at
+    /// generation time and is not part of the morph-config Float32Array contract).
+    fn current_morph_params(&self) -> crate::sim::morphology::MorphologyParams {
+        self.morph_config
+            .to_params()
+            .with_curve_lift(self.visual.connection_curve_lift)
+    }
+
+    /// Re-normalised world-space light direction from the morph-config lighting
+    /// group (falls back to +Y if the user zeroes all three axes).
+    fn morph_light_dir(&self) -> [f32; 3] {
+        let l = self.morph_config.lighting;
+        let v = [l.light_dir_x, l.light_dir_y, l.light_dir_z];
+        let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        if len < 1e-6 {
+            [0.0, 1.0, 0.0]
+        } else {
+            [v[0] / len, v[1] / len, v[2] / len]
+        }
+    }
+
+    /// v0.3.1 dev-panel morphology config entry point. Deserialises a JSON blob,
+    /// diffs it against the current config, and runs the NARROWEST update:
+    ///   - generator changed → re-run `generate()` + re-upload morphology buffers
+    ///   - render-quality (tessellation) changed → rebuild the morph render
+    ///     pipelines (WGSL override constants) + recompute draw vert-counts
+    ///   - lighting/brightness only → no rebuild; picked up by the next frame's
+    ///     uniform write (uniform-only)
+    /// Combinations run all applicable paths. Returns Err on malformed JSON.
+    pub fn set_morphology_config(&mut self, json: &str) -> Result<(), String> {
+        let incoming =
+            crate::sim::morphology::MorphologyConfig::from_json(json).map_err(|e| e.to_string())?;
+        let prev = self.morph_config;
+        if incoming == prev {
+            return Ok(());
+        }
+
+        let generator_changed = incoming.generator != prev.generator;
+        let render_quality_changed = incoming.render_quality != prev.render_quality;
+        // lighting changes need no rebuild — the next render_full uniform write
+        // reads self.morph_config directly.
+
+        self.morph_config = incoming;
+
+        if render_quality_changed {
+            let rq = incoming.render_quality;
+            self.pipelines.build_morph_pipelines(
+                &self.ctx.device,
+                &self.layouts,
+                self.render_color_format,
+                rq,
+            );
+            self.morph_tube_verts = tube_verts(rq.tube_sides);
+            self.morph_sphere_verts = sphere_verts(rq.sphere_slices, rq.sphere_stacks);
+        }
+
+        if generator_changed {
+            self.regenerate_morphology();
+        }
+
+        Ok(())
+    }
+
+    /// Read-only access to the current morphology config (artifact capture).
+    pub fn morph_config(&self) -> &crate::sim::morphology::MorphologyConfig {
+        &self.morph_config
     }
 
     /// Read-only access to the current visual settings.
@@ -742,14 +857,15 @@ impl GpuBackend {
             .init_edge_resources(&self.ctx.device, &self.ctx.queue);
         // Morphology: generate + upload procedural neuron geometry (soma +
         // dendrites + axon arbor). Regenerated on every network (re)build.
+        // v0.3.1: generator params come from the current morphology config.
+        let morph_params = self.current_morph_params();
         self.resources.init_morph_resources(
             &self.ctx.device,
             &manifold.neuron_positions,
             &manifold.spatial_grid,
             &manifold.neuron_regions,
             config,
-            &crate::sim::morphology::MorphologyParams::locked_default()
-                .with_curve_lift(self.visual.connection_curve_lift),
+            &morph_params,
         );
         self.resources
             .refresh_bind_groups(&self.ctx.device, &self.layouts);
@@ -776,6 +892,16 @@ impl GpuBackend {
         self.render_color_format = color_format;
         self.pipelines
             .build_render(&self.ctx.device, &self.layouts, color_format);
+        // v0.3.1: build_render builds the morph pipelines at DEFAULT tessellation;
+        // re-apply the current render-quality config so a non-default tubeSides /
+        // sphere tessellation survives a surface re-creation.
+        let rq = self.morph_config.render_quality;
+        if rq != crate::sim::morphology::RenderQualityConfig::default() {
+            self.pipelines
+                .build_morph_pipelines(&self.ctx.device, &self.layouts, color_format, rq);
+        }
+        self.morph_tube_verts = tube_verts(rq.tube_sides);
+        self.morph_sphere_verts = sphere_verts(rq.sphere_slices, rq.sphere_stacks);
         // Phase 4: near-LOD pipelines use the same color format.
         self.pipelines
             .build_near_lod(&self.ctx.device, &self.layouts, color_format);
@@ -1147,6 +1273,7 @@ impl GpuBackend {
                 bg.render_morphology.as_ref(),
                 self.resources.morph_buffers.as_ref(),
             ) {
+                let lighting = self.morph_config.lighting;
                 let mu = MorphUniforms {
                     mvp: *mvp,
                     camera_right,
@@ -1157,15 +1284,29 @@ impl GpuBackend {
                     camera_pos,
                     // Morphology controls: whole-connection τ-fade lighting toggles.
                     light_next: self.visual.connection_light_next,
-                    light_past: self.visual.connection_light_past,
+                    light_past: 0, // reserved_zero: upstream lighting removed
                     glow_tau: self.visual.glow_tau,
-                    // Morphology controls: resting brightness from the setting.
+                    // Legacy Float32Array resting opacity (kept populated for the
+                    // contract slot; the shader now reads resting_brightness below).
                     base_brightness: self.visual.morph_resting_opacity,
                     connection_layer: self.visual.connection_layer,
                     color_by: self.visual.color_by,
-                    _pad0: 0,
-                    _pad1: 0,
-                    _pad2: 0,
+                    _pad_a: 0,
+                    _pad_b: 0,
+                    _pad_c: 0,
+                    // v0.3.1: lighting + brightness from the morphology config
+                    // (set_morphology_config), not the Float32Array. light_dir is
+                    // re-normalised CPU-side.
+                    light_dir: self.morph_light_dir(),
+                    ambient: lighting.ambient,
+                    diffuse_intensity: lighting.diffuse_intensity,
+                    rim_intensity: lighting.rim_intensity,
+                    rim_power: lighting.rim_power,
+                    _pad3: 0,
+                    resting_brightness: lighting.resting_brightness,
+                    active_boost: lighting.active_boost,
+                    _pad4: 0,
+                    _pad5: 0,
                 };
                 self.ctx
                     .queue
@@ -1190,8 +1331,50 @@ impl GpuBackend {
                 if segs > 0 {
                     pass.set_pipeline(pipe_morph);
                     pass.set_bind_group(0, mbg, &[]);
-                    // 6 verts per segment, one instance per segment.
-                    pass.draw(0..6, 0..segs);
+                    // tube_sides * 2 * 3 verts per segment (two rings, triangulated
+                    // as quads → 2 tris × 3 verts per side). v0.3.1: runtime value
+                    // kept in sync with the WGSL TUBE_SIDES override constant the
+                    // morph pipeline was built with.
+                    pass.draw(0..self.morph_tube_verts, 0..segs);
+                }
+            }
+        }
+
+        // ─── Morphology: soma sphere pass (Wave 2) ────────────────────────────
+        // One shader-generated UV sphere per neuron. Drawn AFTER the tube pass
+        // (order: manifold → far glow → morphology tubes → soma spheres → bloom).
+        // Gated on the same connection_layer condition as tubes (0 = off).
+        // Additive, no depth — same compositing as the tube pass.
+        if self.visual.connection_layer != 0 {
+            if let (Some(pipe_soma), Some(soma_bg), Some(mb)) = (
+                self.pipelines.render_soma_spheres.as_ref(),
+                bg.render_soma_spheres.as_ref(),
+                self.resources.morph_buffers.as_ref(),
+            ) {
+                let n_spheres = mb.sphere_count;
+                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("soma-sphere-pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: scene_view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                if n_spheres > 0 {
+                    pass.set_pipeline(pipe_soma);
+                    pass.set_bind_group(0, soma_bg, &[]);
+                    // slices * stacks * 2 * 3 verts per soma instance. v0.3.1:
+                    // runtime value kept in sync with the WGSL SPHERE_SLICES /
+                    // SPHERE_STACKS override constants.
+                    pass.draw(0..self.morph_sphere_verts, 0..n_spheres);
                 }
             }
         }

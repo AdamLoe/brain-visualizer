@@ -43,7 +43,7 @@ Consult before declaring a commit done. "If you changed X → update Y."
 | If you changed… | Update… |
 |---|---|
 | `crates/brain-visualizer/src/manifold/*` (icosphere, gyrify, placement), `crates/brain-visualizer/src/manifold/regions.rs` | `architecture/manifold.md`, `decisions/manifold.md` |
-| `crates/brain-visualizer/src/sim/morphology.rs` (`MorphSegment` layout/generation) | `architecture/manifold.md`, `architecture/gpu-rendering.md` (the render pass), and the WGSL `MorphSegment` in `render_morphology.wgsl` |
+| `crates/brain-visualizer/src/sim/morphology.rs` (`MorphSegment` layout/generation, `MorphSphereInstance` layout/`emit_soma_spheres`) | `architecture/manifold.md`, `architecture/gpu-rendering.md` (both morphology sub-passes), and the WGSL structs in `render_morphology.wgsl` |
 | `crates/brain-visualizer/src/buffers.rs`, the packed-word / mask helpers (`crates/brain-visualizer/src/sim/backend.rs`, `integrate.wgsl`) | `architecture/data-model.md`, `decisions/data-layout.md` |
 | `crates/brain-visualizer/src/connectivity/*` (hash, spatial grid, `target`/`weight`), `hash.wgsl` | `architecture/connectivity.md`, `decisions/connectivity.md`, regenerate/verify the determinism gates |
 | `crates/brain-visualizer/src/sim/cpu/core.rs`, `integrate.wgsl`, `scatter.wgsl`, `stimulate.wgsl` (LIF math, heterogeneity, weight norm, input modes) | `architecture/simulation.md`, `decisions/dynamics.md` |
@@ -55,6 +55,7 @@ Consult before declaring a commit done. "If you changed X → update Y."
 | `crates/brain-visualizer/src/sim/cpu/*`, `web/src/cpu/cpu-worker.ts`, `web/src/cpu/cpu-renderer.ts`, the `cpu-threads` feature | `architecture/cpu-backend.md`, `decisions/backends.md` |
 | `web/src/main.ts`, `camera.ts`, `controls.ts`, `renderer.ts`, `types.ts`, `sonification.ts` | `architecture/web-frontend.md`, `decisions/interaction.md` |
 | `web/src/ui/dev-panel.ts`, `settings.ts`, `setting-metadata.ts` (persistence, impact table) | `architecture/dev-panel.md`, `decisions/dev-tooling.md` |
+| `web/src/core/morph-config.ts` (`MorphologyConfig`, `MORPH_DESCRIPTORS`, `bv2_morph_v1`), `set_morphology_config` (`lib.rs` / `sim/gpu/mod.rs`), `MorphologyConfig`/`GeneratorConfig`/`RenderQualityConfig`/`LightingConfig` in `sim/morphology.rs` | `architecture/dev-panel.md`, `architecture/manifold.md`, `architecture/gpu-rendering.md`, `decisions/dev-tooling.md`, `decisions/manifold.md` |
 | `web/src/render/profiler.ts`, `hud.ts`, `crates/brain-visualizer/src/profiler.rs`, `metrics.wgsl`, the metrics readback | `architecture/profiling.md`, `decisions/profiling.md` |
 | `crates/brain-visualizer/src/sim/scaler.rs`, `crates/brain-visualizer/src/gpu_limits.rs`, tier presets in `web/src/core/types.ts` | `architecture/scaling.md`, `decisions/scaling.md` |
 | `web/package.json`, `web/*` (vite/vitest/playwright/tsconfig), `crates/brain-visualizer/Cargo.toml`, COOP/COEP shim, `crates/brain-visualizer/examples/*`, `crates/brain-visualizer/tests/*` | `architecture/build-and-deploy.md`, `agent-context/testing-how-to.md` |
@@ -67,8 +68,10 @@ Consult before declaring a commit done. "If you changed X → update Y."
 The doc-fix sweep verifies `path → symbol` pointers still resolve and
 spot-checks these against code:
 
-- The `MorphSegment` field order/size (Rust `crates/brain-visualizer/src/sim/morphology.rs` ↔ WGSL
+- The `MorphSegment` field order/size (48 B, branch-only; Rust `crates/brain-visualizer/src/sim/morphology.rs` ↔ WGSL
   `render_morphology.wgsl`) and any edge-event layout.
+- The `MorphSphereInstance` field order/size (32 B, soma-only; Rust `crates/brain-visualizer/src/sim/morphology.rs → MorphSphereInstance` ↔ the WGSL sphere struct in `render_morphology.wgsl`).
+- `MorphUniforms` size (192 B; Rust `crates/brain-visualizer/src/sim/gpu/resources.rs → MorphUniforms` ↔ WGSL `render_morphology.wgsl`; must update both sides atomically). Includes the v0.3.1 lighting/brightness fields `resting_brightness` and `active_boost`.
 - The `VisualSettings` Float32Array index contract (`web/src/core/settings.ts` ↔
   `crates/brain-visualizer/src/sim/gpu/mod.rs`).
 - The packed `last_spike` masks and the locked hash constants (Rust ↔ WGSL).

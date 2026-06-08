@@ -17,6 +17,9 @@
 // (version bumped 3→4: morphology readability tuning — defaults for connection
 //  width, bloom, and resting opacity were narrowed to reduce lattice clutter;
 //  old v3 data is ignored and defaults are applied.)
+// (version bumped 4→5: connectionLightPast removed — index 9 tombstoned as
+//  reserved_zero; upstream lighting on shared arbors was misleading and is
+//  deferred until whole-path semantics are redesigned. Old v4 data is discarded.)
 // On version mismatch → ignore saved data, use defaults (no migration for now).
 // Never persist runtime counters (there are none in this struct).
 
@@ -38,7 +41,7 @@ export interface VisualizerSettings {
   connectionVisualWidth:    number;   // 6  Morphology: branch-width multiplier (1.0 = raw radii)
   connectionCurveLift:      number;   // 7  Morphology: axon branch curl (rebuilds geometry)
   connectionLightNext:      number;   // 8  Morphology: light a firing neuron's downstream (outgoing) connections (0/1)
-  connectionLightPast:      number;   // 9  Morphology: light a firing neuron's upstream (incoming) connections (0/1)
+  // index 9: reserved_zero (connectionLightPast removed)
   bloomStrength:            number;   // 10 bloom post-process intensity (0=off)
   surfaceOpacity:           number;   // 11 manifold surface opacity
   // ── index 12–14: sim knobs ───────────────
@@ -71,7 +74,6 @@ export const DEFAULT_SETTINGS: VisualizerSettings = {
   connectionVisualWidth:    0.80,  // Morphology: width multiplier (1.0 = raw radii)
   connectionCurveLift:      0.15,
   connectionLightNext:      1,     // Morphology: downstream lighting on by default
-  connectionLightPast:      0,     // Morphology: upstream lighting off by default
   bloomStrength:            0.40,  // Morphology: bloom on by default so glow blooms
   surfaceOpacity:           1.0,
   iExt:                     0.055,
@@ -114,7 +116,6 @@ interface SavedDev {
   connectionVisualWidth:    number;
   connectionCurveLift:      number;
   connectionLightNext:      number;
-  connectionLightPast:      number;
   iExt:                     number;
   synapticScale:            number;
   heterogeneity:            number;
@@ -125,9 +126,9 @@ interface SavedDev {
   adaptiveScalerEnabled:    number;
 }
 
-/** Versioned localStorage schema.  version !== 3 → ignored (no migration). */
+/** Versioned localStorage schema.  version !== 5 → ignored (no migration). */
 interface SavedVisualizerSettings {
-  version: 4;
+  version: 5;
   public: SavedPublic;
   dev: SavedDev;
 }
@@ -139,7 +140,7 @@ const LS_KEY = "bv2_settings_v1";
 
 function settingsToSaved(s: VisualizerSettings): SavedVisualizerSettings {
   return {
-    version: 4,
+    version: 5,
     public: {
       glowTau:           s.glowTau,
       bloomStrength:     s.bloomStrength,
@@ -158,7 +159,6 @@ function settingsToSaved(s: VisualizerSettings): SavedVisualizerSettings {
       connectionVisualWidth:    s.connectionVisualWidth,
       connectionCurveLift:      s.connectionCurveLift,
       connectionLightNext:      s.connectionLightNext,
-      connectionLightPast:      s.connectionLightPast,
       iExt:                     s.iExt,
       synapticScale:            s.synapticScale,
       heterogeneity:            s.heterogeneity,
@@ -195,7 +195,6 @@ function mergeOver(base: VisualizerSettings, saved: SavedVisualizerSettings): Vi
     connectionVisualWidth:    d.connectionVisualWidth    ?? base.connectionVisualWidth,
     connectionCurveLift:      d.connectionCurveLift      ?? base.connectionCurveLift,
     connectionLightNext:      d.connectionLightNext      ?? base.connectionLightNext,
-    connectionLightPast:      d.connectionLightPast      ?? base.connectionLightPast,
     iExt:                     d.iExt                     ?? base.iExt,
     synapticScale:            d.synapticScale            ?? base.synapticScale,
     heterogeneity:            d.heterogeneity            ?? base.heterogeneity,
@@ -213,7 +212,7 @@ export function loadSettings(): VisualizerSettings {
     const raw = localStorage.getItem(LS_KEY);
     if (!raw) return { ...DEFAULT_SETTINGS };
     const parsed = JSON.parse(raw) as { version?: number };
-    if (parsed.version !== 4) return { ...DEFAULT_SETTINGS };
+    if (parsed.version !== 5) return { ...DEFAULT_SETTINGS };
     return mergeOver({ ...DEFAULT_SETTINGS }, parsed as SavedVisualizerSettings);
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -283,7 +282,7 @@ export function toFloat32Array(s: VisualizerSettings): Float32Array {
   a[6]  = s.connectionVisualWidth;
   a[7]  = s.connectionCurveLift;
   a[8]  = s.connectionLightNext;
-  a[9]  = s.connectionLightPast;
+  a[9]  = 0; // index 9: reserved_zero (connectionLightPast removed)
   a[10] = s.bloomStrength;
   a[11] = s.surfaceOpacity;
   a[12] = s.iExt;

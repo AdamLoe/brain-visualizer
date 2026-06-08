@@ -52,15 +52,20 @@ Six tabs are defined in the `TABS` constant in `web/src/ui/dev-panel.ts`:
 | Debug View | Read-only string labels for current visual-mode settings |
 | Storage | Reset-to-defaults button + localStorage key/size readout |
 
-The Rendering tab now includes a compact Morphology subsection that groups the
-accepted live render controls together: `connectionLayer`,
-`connectionLightNext`, `connectionLightPast`, `morphRestingOpacity`,
-`connectionVisualWidth`, and `connectionCurveLift`. That grouping is UI
-consolidation only; it does not add new Float32Array indices, but v0.2.1 did
-ship narrowed defaults for the existing render knobs and therefore bumped the
-localStorage schema sentinel. The branch-grammar inputs that shaped v0.2.0
-remain code-only / protected and are captured in morphology build artifacts and
-stats instead.
+The Rendering tab includes a compact Morphology subsection. The top of it groups
+the live render knobs that live in the `VisualSettings` Float32Array:
+`connectionLayer`, `connectionLightNext`, `morphRestingOpacity`,
+`connectionVisualWidth`, and `connectionCurveLift`. (`connectionLightPast` was
+removed; Float32Array index 9 is tombstoned as `reserved_zero`.) That grouping is
+UI consolidation only; it does not add new Float32Array indices.
+
+The `Color by` selector includes the additive identity-color mode; it reuses
+the existing `colorBy` setting and does not add a Float32Array index or a
+persistence key. Below those, the subsection renders the **morphology config** controls — a
+separate surface (see the Morphology config controls section below) that does
+**not** touch the Float32Array. These expose the generator/render-quality/lighting
+parameters of the procedural neuron geometry, backed by their own
+`bv2_morph_v1` localStorage key and a dedicated WASM entry point.
 
 ## Network-state classifier
 
@@ -116,6 +121,47 @@ The `brain-reset` pending-dot and Apply button exist in the API
 (`ApplyHandlers`, `setApplyHandlers`, `clearPendingBrainReset`) but are
 currently no-ops — kept for callers that still wire them.
 
+## Morphology config controls
+
+The morphology generator, render-quality, and lighting parameters of the
+procedural neuron geometry are exposed through a **descriptor-driven** surface
+that is independent of the `VisualizerSettings` Float32Array. The descriptor
+array is the single source of truth for the controls — `web/src/core/morph-config.ts → MORPH_DESCRIPTORS`.
+Each descriptor carries its json path, group, label, min/max/step, default,
+impact, and apply kind; the dev panel renders one row per descriptor
+(`web/src/ui/dev-panel.ts → _buildMorphConfigRows, _morphRow`) rather than
+hand-written rows. To change which controls exist, edit the descriptor array —
+not the panel.
+
+Three groups (the structure is the nested `MorphologyConfig` shape in
+`web/src/core/morph-config.ts → MorphologyConfig`):
+
+- **generator** — maps into the Rust `MorphologyParams` generator fields (branch
+  counts, reach, radius/taper fractions, socket placement). Impact
+  `renderer-rebuild`; applied by morphology regeneration.
+- **renderQuality** — `tubeSides` and soma sphere tessellation (`sphereSlices`,
+  `sphereStacks`). Impact `renderer-rebuild`; applied by a morph pipeline rebuild.
+- **lighting** — light direction x/y/z, ambient/diffuse/rim, plus the
+  resting/active brightness split (`restingBrightness`, `activeBoost`). Impact
+  `live`; applied by a uniform-only write.
+
+Ranges are deliberately **narrow bounds around the locked generator default**
+(`crates/brain-visualizer/src/sim/morphology.rs → MorphologyParams::locked_default`) —
+this is an exposure pass, not a retuning pass; a later tuning pass widens them.
+The protected budget/slack/salt fields are intentionally absent — see
+[`manifold.md`](manifold.md).
+
+**Apply model.** generator and renderQuality controls (red `renderer-rebuild`
+dot) edit a *pending* config and apply only when the **Rebuild Morphology** button
+is pressed — avoiding mid-drag regen/pipeline rebuilds. lighting controls (green
+`live` dot) apply immediately via the uniform-only path. The button and pending
+state live in `web/src/ui/dev-panel.ts → _buildMorphConfigRows`; the apply call
+crosses the wasm boundary through `set_morphology_config` (see
+[`web-frontend.md`](../architecture/web-frontend.md)), which diffs and runs the
+narrowest update. The impact-dot colors mean the same thing as in the table
+above; the only difference is that for morphology the red-dot controls are
+batched behind the Rebuild button instead of pushing on each change.
+
 ## Settings persistence contract
 
 **Key:** `bv2_settings_v1` (hardcoded in both `web/src/core/settings.ts → LS_KEY` and
@@ -143,10 +189,24 @@ bump.
 configuration knobs. Runtime metrics (`spikesPerSec`, `branchingRatio`, etc.)
 are on the separate `Metrics` interface and are never written to localStorage.
 
-**Reset:** `web/src/core/settings.ts → resetSettings` removes the localStorage key,
-restores `current` to `DEFAULT_SETTINGS`, and notifies all subscribers
-synchronously — which causes the dev panel's `_syncSliders` to restore all
-control positions.
+**Separate morphology config key.** The morphology config (see Morphology config
+controls above) persists under its **own** key `bv2_morph_v1`, independent of
+`bv2_settings_v1`. Same versioned + merge-over-defaults shape:
+`web/src/core/morph-config.ts → loadMorphConfig, saveMorphConfig, resetMorphConfig`,
+with a `version` sentinel and `MorphologyConfig` defaults. It is deliberately
+NOT folded into `bv2_settings_v1` because it does not cross the frozen
+Float32Array boundary — see [`../decisions/dev-tooling.md`](../decisions/dev-tooling.md).
+
+**Reset:** `web/src/core/settings.ts → resetSettings` removes the settings
+localStorage key, restores `current` to `DEFAULT_SETTINGS`, and notifies all
+subscribers synchronously — which causes the dev panel's `_syncSliders` to
+restore settings-backed control positions. The Storage reset handler also calls
+`web/src/core/types.ts → resetConfig`, updates `main.ts`'s in-memory
+`AppConfig`, and syncs the Network tab controls to `DEFAULT_CONFIG` without
+triggering a network rebuild. The same reset path also clears the morphology
+config key `bv2_morph_v1` via `web/src/core/morph-config.ts → resetMorphConfig`
+and re-syncs the morphology rows; any future app-owned persistence key should be
+cleared on this same path.
 
 ## Float32Array index contract (corruption risk)
 
@@ -175,6 +235,8 @@ stored as `_unsubSettings` and called in `destroy()`.
 - Any setting's impact level changes in `SETTING_IMPACT`.
 - The localStorage version sentinel changes, or a UI consolidation repurposes a
   saved setting without changing the underlying float-array contract.
+- A morphology control is added/removed/re-ranged (edit `MORPH_DESCRIPTORS`), or
+  the `MorphologyConfig` shape / `bv2_morph_v1` schema changes.
 - The instant-tooltip mechanism (`_buildTooltip` / `_attachTip` / `data-tip`) changes.
 
 ## See also

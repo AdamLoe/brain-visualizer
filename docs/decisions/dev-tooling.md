@@ -43,10 +43,11 @@
 
 ## Versioned localStorage with merge-over-defaults; no preset manager
 
-- **Decision.** Settings persist under a versioned key (`bv2_settings_v1`,
-  schema `version: 3`). On load, saved fields are merged over `DEFAULT_SETTINGS`
-  field-by-field with `?? base` guards. There is no preset manager — the
-  Reset button removes the key and reverts to defaults.
+- **Decision.** Dev-panel settings persist under a versioned key
+  (`bv2_settings_v1`) and app runtime config persists under `bv2_config_v1`. On
+  load, saved fields are merged over defaults field-by-field with `?? base`
+  guards. There is no preset manager — the Reset button removes both keys and
+  reverts their in-memory stores and visible controls to defaults.
 - **Why.** Merge-over-defaults means adding a new field is safe without a
   version bump and without migration logic: the new field simply falls back to
   its default for existing saves. A version bump is reserved for semantically
@@ -54,9 +55,37 @@
   actively mislead. A preset manager adds infrastructure complexity for a
   developer-facing tool; Reset covers the primary need.
 - **Applies to.** [`../architecture/dev-panel.md`](../architecture/dev-panel.md).
-- **Code anchors.** `web/src/core/settings.ts → loadSettings, mergeOver, resetSettings`.
+- **Code anchors.** `web/src/core/settings.ts → loadSettings, mergeOver, resetSettings`; `web/src/core/types.ts → loadConfig, resetConfig`.
 - **Tradeoffs.** No migration: users who had meaningful `dev` knob values set
   before a breaking change lose them silently. Acceptable for a dev panel.
+
+## Morphology config on a separate key + WASM entry point, not the Float32Array
+
+- **Decision.** The dev-panel morphology config (generator / render-quality /
+  lighting) persists under its own `bv2_morph_v1` localStorage key and reaches
+  the backend through a dedicated `set_morphology_config(json)` WASM entry point
+  that takes a JSON string — **not** by adding slots to the `VisualSettings`
+  Float32Array or to `bv2_settings_v1`. The dev panel renders its rows from a
+  typed descriptor array (`MORPH_DESCRIPTORS`) rather than bespoke per-control
+  code.
+- **Why.** The 24-slot Float32Array index contract is a frozen, corruption-prone
+  Rust↔TS boundary (see Float32Array decision below); the morphology config is a
+  larger, nested, evolving surface where adding/removing a field should not risk
+  silently shifting every other visual setting. A separate JSON channel lets the
+  Rust side deserialize by name (serde), diff incoming vs current, and run the
+  narrowest update (uniform-only for lighting; regenerate for generator; pipeline
+  rebuild for render-quality) — none of which fits a flat positional float array.
+  Descriptor-driven rows keep adding a control to a single array entry.
+- **Applies to.** [`../architecture/dev-panel.md`](../architecture/dev-panel.md),
+  [`../architecture/web-frontend.md`](../architecture/web-frontend.md),
+  [`../architecture/manifold.md`](../architecture/manifold.md).
+- **Code anchors.** `web/src/core/morph-config.ts → MORPH_DESCRIPTORS, MorphologyConfig, loadMorphConfig`;
+  `crates/brain-visualizer/src/lib.rs → WasmGpuBackend::set_morphology_config`;
+  `crates/brain-visualizer/src/sim/gpu/mod.rs → GpuBackend::set_morphology_config`.
+- **Tradeoffs.** Two persistence keys and two backend channels to keep coherent
+  (the reset path must clear both); a JSON round-trip per apply instead of a raw
+  byte slice. Acceptable — morphology config is applied on explicit edits, not
+  per-frame.
 
 ## Custom instant tooltips, not native `title=`
 

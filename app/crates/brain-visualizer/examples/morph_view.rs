@@ -25,7 +25,7 @@ fn main() {}
 async fn run() {
     use brain_visualizer::sim::backend::{SimBackend, SimConfig};
     use brain_visualizer::sim::gpu::{GpuBackend, VisualSettings};
-    use brain_visualizer::sim::morphology::{MorphologyParams, MorphologyStats};
+    use brain_visualizer::sim::morphology::{MorphologyConfig, MorphologyParams, MorphologyStats};
 
     const N: usize = 1_200;
     const K: usize = 16;
@@ -62,6 +62,7 @@ async fn run() {
                 base_visual: &default_visual,
                 final_visual: &default_visual,
                 morph_params: &default_params,
+                morph_config: &MorphologyConfig::default(),
                 morph_stats: &MorphologyStats::default(),
                 warmup_ticks: WARM_TICKS,
                 seed: config.seed,
@@ -234,29 +235,126 @@ async fn run() {
         );
     }
 
-    let morph_buffers = backend
-        .resources()
-        .morph_buffers
-        .as_ref()
-        .expect("morph buffers");
-    let artifact = MorphViewArtifact {
-        status: "pass",
-        adapter_status: &adapter_status,
-        timestamps_supported,
-        artifact_json_path: ARTIFACT_JSON,
-        config: &config,
-        base_visual: &default_visual,
-        final_visual: backend.visual(),
-        morph_params: &morph_buffers.params,
-        morph_stats: &morph_buffers.stats,
-        warmup_ticks: WARM_TICKS,
-        seed: config.seed,
-        n: config.n,
-        k: config.k,
-        frames: &frame_reports,
-    };
-    std::fs::write(ARTIFACT_JSON, artifact.to_json()).expect("write morph_view json");
-    std::fs::write(ARTIFACT_JSON_VERS, artifact.to_json()).expect("write morph_view json");
+    // Snapshot the DEFAULT-config artifact (full MorphologyConfig + legacy params).
+    {
+        let default_config = backend.morph_config().clone();
+        let morph_buffers = backend
+            .resources()
+            .morph_buffers
+            .as_ref()
+            .expect("morph buffers");
+        let artifact = MorphViewArtifact {
+            status: "pass",
+            adapter_status: &adapter_status,
+            timestamps_supported,
+            artifact_json_path: ARTIFACT_JSON,
+            config: &config,
+            base_visual: &default_visual,
+            final_visual: backend.visual(),
+            morph_params: &morph_buffers.params,
+            morph_config: &default_config,
+            morph_stats: &morph_buffers.stats,
+            warmup_ticks: WARM_TICKS,
+            seed: config.seed,
+            n: config.n,
+            k: config.k,
+            frames: &frame_reports,
+        };
+        std::fs::write(ARTIFACT_JSON, artifact.to_json()).expect("write morph_view json");
+        std::fs::write(ARTIFACT_JSON_VERS, artifact.to_json()).expect("write morph_view json");
+    }
+
+    // --- 7. v0.3.1 Stream 3: stronger active-only brightness variant. ---
+    // Apply a config with higher active_boost + lower restingBrightness through
+    // the real `set_morphology_config` JSON entry point (exercising the
+    // uniform-only apply path), render the zoomed view, and emit a SECOND stats
+    // file so the later tuning pass has a comparison point. Generator +
+    // renderQuality are left at defaults so this isolates the brightness split.
+    {
+        const VARIANT_JSON_PATH: &str = "/tmp/morph_view_active_bright_stats.json";
+        let variant_cfg_json = r#"{
+            "lighting": {
+                "lightDirX": -0.352, "lightDirY": 0.553, "lightDirZ": 0.755,
+                "ambient": 0.40, "diffuseIntensity": 0.55,
+                "rimIntensity": 0.40, "rimPower": 2.5,
+                "restingBrightness": 0.07, "activeBoost": 3.0
+            }
+        }"#;
+        backend
+            .set_morphology_config(variant_cfg_json)
+            .expect("apply active-bright variant config");
+        let variant_config = backend.morph_config().clone();
+        let visual_snapshot = backend.visual().clone();
+
+        let (az, el, dist) = (0.6f32, 0.3f32, 0.9f32);
+        let mvp = camera_mvp(az, el, dist, aspect);
+        let (camera_right, camera_up) = camera_vectors(az, el);
+        let cp = el.cos();
+        let camera_pos = [dist * cp * az.sin(), dist * el.sin(), dist * cp * az.cos()];
+        backend.render_full(
+            &color_view,
+            &mvp,
+            camera_right,
+            camera_up,
+            100.0,
+            0.012,
+            camera_pos,
+            dist,
+        );
+        let pixels =
+            readback_rgba(backend.device(), backend.queue(), &color_tex, WIDTH, HEIGHT).await;
+        let mut non_black = 0u32;
+        for chunk in pixels.chunks(4) {
+            if chunk[0] > 2 || chunk[1] > 2 || chunk[2] > 2 {
+                non_black += 1;
+            }
+        }
+        let total = WIDTH * HEIGHT;
+        let frac = non_black as f32 / total as f32 * 100.0;
+        let path = "/tmp/morph_active_bright.rgba".to_string();
+        std::fs::write(&path, &pixels).expect("write rgba");
+        let variant_frames = vec![FrameReport {
+            index: 4,
+            az,
+            el,
+            dist,
+            path: path.clone(),
+            non_black,
+            total,
+            non_black_pct: frac,
+            visual: visual_snapshot,
+        }];
+
+        let morph_buffers = backend
+            .resources()
+            .morph_buffers
+            .as_ref()
+            .expect("morph buffers");
+        let variant_artifact = MorphViewArtifact {
+            status: "pass",
+            adapter_status: &adapter_status,
+            timestamps_supported,
+            artifact_json_path: VARIANT_JSON_PATH,
+            config: &config,
+            base_visual: &default_visual,
+            final_visual: backend.visual(),
+            morph_params: &morph_buffers.params,
+            morph_config: &variant_config,
+            morph_stats: &morph_buffers.stats,
+            warmup_ticks: WARM_TICKS,
+            seed: config.seed,
+            n: config.n,
+            k: config.k,
+            frames: &variant_frames,
+        };
+        std::fs::write(VARIANT_JSON_PATH, variant_artifact.to_json())
+            .expect("write variant json");
+        println!(
+            "[morph_view] active-bright variant (restingBrightness=0.07, activeBoost=3.0) \
+             → /tmp/morph_active_bright.rgba non-black {non_black}/{total} ({frac:.2}%)"
+        );
+        println!("[morph_view] wrote {VARIANT_JSON_PATH}");
+    }
 
     println!("[morph_view] wrote /tmp/morph_0..3.rgba (1024×1024 RGBA8)");
     println!("[morph_view] wrote {ARTIFACT_JSON}");
@@ -395,6 +493,9 @@ struct MorphViewArtifact<'a> {
     base_visual: &'a brain_visualizer::sim::gpu::VisualSettings,
     final_visual: &'a brain_visualizer::sim::gpu::VisualSettings,
     morph_params: &'a brain_visualizer::sim::morphology::MorphologyParams,
+    /// v0.3.1: FULL MorphologyConfig snapshot (generator + renderQuality +
+    /// lighting incl. the new resting_brightness / active_boost fields).
+    morph_config: &'a brain_visualizer::sim::morphology::MorphologyConfig,
     morph_stats: &'a brain_visualizer::sim::morphology::MorphologyStats,
     warmup_ticks: u32,
     seed: u64,
@@ -419,7 +520,7 @@ impl<'a> MorphViewArtifact<'a> {
             .collect::<Vec<_>>()
             .join(",");
         format!(
-            "{{\"status\":\"{}\",\"adapter_status\":\"{}\",\"timestamps_supported\":{},\"artifact_json_path\":\"{}\",\"seed\":{},\"n\":{},\"k\":{},\"warmup_ticks\":{},\"config\":{{\"n\":{},\"k\":{},\"seed\":{},\"tier\":\"{:?}\",\"speed\":\"{:?}\",\"backend\":\"{:?}\",\"i_ext\":{:.6},\"fixed_point_scale\":{}}},\"base_visual_settings\":{},\"final_visual_settings\":{},\"morphology_config\":{},\"morphology_stats\":{},\"output_paths\":[{}],\"frames\":[{}]}}",
+            "{{\"status\":\"{}\",\"adapter_status\":\"{}\",\"timestamps_supported\":{},\"artifact_json_path\":\"{}\",\"seed\":{},\"n\":{},\"k\":{},\"warmup_ticks\":{},\"config\":{{\"n\":{},\"k\":{},\"seed\":{},\"tier\":\"{:?}\",\"speed\":\"{:?}\",\"backend\":\"{:?}\",\"i_ext\":{:.6},\"fixed_point_scale\":{}}},\"base_visual_settings\":{},\"final_visual_settings\":{},\"morphology_config\":{},\"morphology_params\":{},\"morphology_stats\":{},\"output_paths\":[{}],\"frames\":[{}]}}",
             self.status,
             json_escape(self.adapter_status),
             self.timestamps_supported,
@@ -438,6 +539,7 @@ impl<'a> MorphViewArtifact<'a> {
             self.config.fixed_point_scale,
             self.base_visual.to_json(),
             self.final_visual.to_json(),
+            self.morph_config.to_json(),
             self.morph_params.to_json(),
             self.morph_stats.to_json(),
             output_paths,

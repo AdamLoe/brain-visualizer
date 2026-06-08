@@ -22,7 +22,7 @@ life of the network.
 - Region assignment — `crates/brain-visualizer/src/manifold/regions.rs → RegionKind, assign_regions`
 - Spatial grid — `crates/brain-visualizer/src/manifold/mod.rs → DEFAULT_GRID_DIM`
 - Anterior–posterior axis constant — `crates/brain-visualizer/src/manifold/mod.rs → ANTERIOR_POSTERIOR_AXIS`
-- Per-neuron morphology geometry — `crates/brain-visualizer/src/sim/morphology.rs → Morphology, MorphSegment, generate`
+- Per-neuron morphology geometry — `crates/brain-visualizer/src/sim/morphology.rs → Morphology, MorphSegment, MorphSphereInstance, generate, emit_soma_spheres`
 - Manifold surface render shader — `crates/brain-visualizer/src/sim/gpu/shaders/render_manifold.wgsl`
 - Morphology render shader — `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl`
 
@@ -87,9 +87,13 @@ for ambient drive. **Do not reorder the `RegionKind` variants** without updating
 
 `crates/brain-visualizer/src/sim/morphology.rs → generate` builds a flat list of
 `MorphSegment` records, one per line segment, at `initialize()` time. The
-generator is driven by `MorphologyParams::locked_default()` and emits a
-matching `MorphologyStats` profile so review artifacts can read facts without
-scraping logs.
+generator is driven by `MorphologyParams` and emits a matching `MorphologyStats`
+profile so review artifacts can read facts without scraping logs. The shipped
+default is `MorphologyParams::locked_default`; a dev-panel-supplied
+`MorphologyConfig` layers its generator fields over that locked default via
+`crates/brain-visualizer/src/sim/morphology.rs → GeneratorConfig::apply_to` /
+`MorphologyConfig::to_params` before regeneration (see Exposed vs protected
+parameters below).
 
 Each neuron now gets a deterministic shared arbor, not K independent sin-bow
 curves:
@@ -120,27 +124,39 @@ generation, unique-target coverage is the acceptance target, and the shared
 arbor is budgeted with named segment classes plus slack rather than an opaque
 fixed cap.
 
-`MorphSegment` remains 48 bytes, std430, 16-aligned. The field order is still a
-hard contract between Rust and WGSL — see
-`crates/brain-visualizer/src/sim/morphology.rs → MorphSegment` and the matching
-WGSL struct in `render_morphology.wgsl`. The final 16-byte row is
-`neuron_id, path_len, kind, target_id`, and no layout change shipped for v0.2.0.
+`MorphSegment` is the **branch-only** contract: 48 bytes, std430, 16-aligned. It carries two endpoints (`a`, `b`), `radius_a`, `radius_b`, `neuron_id`, `path_len`, `kind` (0=dendrite, 1=axon), and `target_id`. Field order is a hard Rust ↔ WGSL contract — see `crates/brain-visualizer/src/sim/morphology.rs → MorphSegment` and the matching WGSL struct in `render_morphology.wgsl`. The size assert is `crates/brain-visualizer/src/sim/morphology.rs → segment_layout_is_48_bytes`.
 
-`path_len` is the cumulative path length from the soma to endpoint `a`,
-retained in the struct but no longer driving render timing. The
-connection-lighting model keys off spikes, not path position — see
-[`gpu-rendering.md`](gpu-rendering.md). A test in
-`crates/brain-visualizer/src/sim/morphology.rs → segment_layout_is_48_bytes`
-guards the size. All hash inputs use
-`crates/brain-visualizer/src/connectivity/hash.rs → mix_key, hash32` with salts
-defined in `crates/brain-visualizer/src/sim/morphology.rs → salt` so morphology
-draws stay disjoint from connectivity target/weight draws.
+`MorphSphereInstance` is the **soma-only** contract: 32 bytes, 16-aligned. One instance per neuron, emitted at `initialize()` time by `crates/brain-visualizer/src/sim/morphology.rs → emit_soma_spheres` from the neuron position arrays. Fields: `center: [f32; 3]`, `radius: f32` (= `params::R0`), `neuron_id: u32`, `kind: u32` (= 2 for soma), `_pad0`, `_pad1`. The size assert is `crates/brain-visualizer/src/sim/morphology.rs → sphere_instance_layout_is_32_bytes`.
+
+`path_len` is the cumulative path length from the soma to endpoint `a`, retained in `MorphSegment` but no longer driving render timing. The connection-lighting model keys off spikes, not path position — see [`gpu-rendering.md`](gpu-rendering.md). All hash inputs use `crates/brain-visualizer/src/connectivity/hash.rs → mix_key, hash32` with salts defined in `crates/brain-visualizer/src/sim/morphology.rs → salt` so morphology draws stay disjoint from connectivity target/weight draws.
 
 The buffer cap is `n * max_segs_per_neuron(k)`, where the per-neuron cap is
 derived from named dendrite/trunk/cluster/twig budgets plus slack
 (`crates/brain-visualizer/src/sim/morphology.rs → max_segs_per_neuron`) rather
 than a fixed constant. If the cap is hit, the excess is counted in
 `Morphology::dropped` and printed; no silent truncation.
+
+## Exposed vs protected parameters
+
+`MorphologyParams` (`crates/brain-visualizer/src/sim/morphology.rs → MorphologyParams`)
+splits into two classes:
+
+- **Exposed (tunable):** the generator shape fields — branch counts, reach,
+  socket placement, radius/taper fractions. These are surfaced to the hidden dev
+  panel as a `MorphologyConfig` (see [`dev-panel.md`](dev-panel.md)) and reach
+  the backend through the WASM entry point
+  `crates/brain-visualizer/src/lib.rs → WasmGpuBackend::set_morphology_config` →
+  `crates/brain-visualizer/src/sim/gpu/mod.rs → GpuBackend::set_morphology_config`,
+  which deserializes the config (serde, camelCase), diffs it against the current
+  config, and runs the narrowest update — generator changes trigger a full
+  morphology regeneration. This path is separate from the `VisualSettings`
+  Float32Array; see [`../decisions/manifold.md`](../decisions/manifold.md).
+- **Protected (never exposed):** the four allocation/safety budgets
+  (`dendrite_budget`, `trunk_cluster_budget`, `terminal_twig_budget`,
+  `cap_slack`) and the `salt::*` hash constants. These are re-locked by
+  `GeneratorConfig::apply_to` even when a config is applied, so the buffer cap
+  and determinism namespace cannot be moved from the UI. Exposing them risks
+  silent truncation/OOM or breaking seed reproducibility, with no visual upside.
 
 ## Rendering
 
@@ -151,21 +167,27 @@ shape reads through the glow layer. Gated by the `surface` setting
 Controlled by `surface_opacity` and `surface_mode` uniforms.
 
 **Neuron morphology** (`crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl`):
-instanced draw, one instance per `MorphSegment`, 6 vertices per instance
-forming a camera-facing tapered quad. The `last_spike` storage buffer is read
-per instance to drive whole-connection spike lighting for source-driven shared
-segments: when a neuron fires, its structure and downstream twigs light
-instantly and fade with the same `exp(-tick_diff/glow_tau)` curve as the
-far-glow dot. Resting structure is drawn at `base_brightness` (the
-`morph_resting_opacity` setting); setting it to zero hides resting structure and
-shows only lit connections. Axon color is E/I-tinted by default or region-tinted
-when `color_by == 0`. Additive blending, no depth write, bloom-friendly. The
-lighting model (downstream/source lighting and terminal-only upstream semantics
-for shared paths) is owned by [`gpu-rendering.md`](gpu-rendering.md).
+two separate draw sub-passes, both additive blend, no depth write, bloom-friendly.
+The *tube sub-pass* (`vs_main / fs_main`) draws one shader-generated tapered cylinder
+per `MorphSegment` — 36 vertices per instance. The *soma sphere sub-pass*
+(`vs_sphere / fs_sphere`) draws one UV-sphere per `MorphSphereInstance` — 288
+vertices per instance. Both sub-passes read `last_spike` to drive whole-connection
+spike lighting: when a neuron fires, its structure and downstream twigs light
+instantly and fade with the same `exp(-tick_diff/glow_tau)` curve as the far-glow
+dot. A simple ambient + diffuse + rim lighting model is applied via
+`MorphUniforms` (192 B, shared by both sub-passes); the lighting/brightness
+defaults are the dev-panel-tunable `MorphologyConfig` lighting group
+(`crates/brain-visualizer/src/sim/morphology.rs → LightingConfig`), not hardcoded
+shader constants. Resting structure is drawn at the config-owned
+`resting_brightness`; axon color is E/I-tinted by default or region-tinted when
+`color_by == 0`. The full lighting model and pass order are owned by
+[`gpu-rendering.md`](gpu-rendering.md).
 
 The `crates/brain-visualizer/examples/morph_view.rs` harness exercises the full pipeline: N=1200/K=16,
 250 warm-up ticks, three camera distances, plus a `morph_resting_opacity=0` frame
-to verify the lit-connections-only look.
+to verify the lit-connections-only look. Its artifact JSON now snapshots the full
+`MorphologyConfig` (all three groups) and emits a stronger-active-brightness
+variant to `/tmp/morph_view_active_bright_stats.json` for the tuning pass.
 
 ## Update when
 
@@ -175,8 +197,11 @@ to verify the lit-connections-only look.
   blocking instead of the current hash-shuffle.
 - `MorphologyParams`, `MorphologyStats`, or the source-type bytes contract
   change.
-- `MorphSegment` field order or size changes (update the layout table above and
-  cross-check `render_morphology.wgsl`).
+- The exposed-vs-protected split changes (a field is added to/removed from the
+  `MorphologyConfig` generator surface, or a budget/salt becomes exposed), or the
+  `set_morphology_config` apply path changes.
+- `MorphSegment` field order or size changes (update the layout contract description above and cross-check `render_morphology.wgsl`).
+- `MorphSphereInstance` field order or size changes (update the contract description above and cross-check the WGSL sphere struct).
 - `GyrifyParams` defaults change (the gyri/sulci frequencies and amplitudes).
 - `max_segs_per_neuron` or the segment-cap policy changes, or unique-target
   terminal coverage stops being the rendered contract.

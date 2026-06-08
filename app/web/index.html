@@ -38,6 +38,14 @@
       </div>
     </div>
 
+    <!-- Bottom-center transport: pause / resume the simulation. Rendering and
+         camera orbit continue while paused; only sim ticks are frozen. -->
+    <div id="controls-bottom">
+      <div class="btn-group">
+        <button id="pause-toggle" title="Pause simulation" aria-pressed="false">⏸</button>
+      </div>
+    </div>
+
     <!-- Full-bleed brain canvas — everything else overlaid via position:fixed -->
     <canvas id="brain-canvas"></canvas>
 

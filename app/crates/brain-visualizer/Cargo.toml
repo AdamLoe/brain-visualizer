@@ -1,6 +1,6 @@
 [package]
 name = "brain-visualizer"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 description = "Hardware-adaptive spiking-neural-network cortical visualizer"
 
@@ -22,6 +22,12 @@ cpu-threads = ["dep:rayon", "wasm-bindgen-rayon"]
 wgpu = { version = "29", features = ["wgsl"] }
 noise = "0.9"
 bytemuck = { version = "1", features = ["derive"] }
+# Morphology config JSON round-trip (v0.3.1). wasm32-friendly: serde derive only
+# (no std-specific features), serde_json with the `alloc` feature so it builds on
+# the no-default-features wasm target. Used by the `set_morphology_config` WASM
+# entry point and the morph_view artifact snapshot.
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
 # CPU-backend parallelism. Optional + opt-in via `cpu-threads`. Cross-platform:
 # host uses native rayon directly; wasm uses it through wasm-bindgen-rayon's
 # pool. Not pulled into the default (stable) build.

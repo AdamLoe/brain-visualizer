@@ -27,7 +27,7 @@ pub const SCATTER_WGSL: &str = include_str!("shaders/scatter.wgsl");
 /// it does not call the hash but shares the WGSL build path).
 pub const WRITE_SCATTER_DISPATCH_WGSL: &str = include_str!("shaders/write_scatter_dispatch.wgsl");
 
-/// Phase 3: far-LOD billboard glow pass.
+/// Phase 3: far-LOD billboard glow pass (prepended with HASH_WGSL for identity color).
 pub const RENDER_FAR_WGSL: &str = include_str!("shaders/render_far.wgsl");
 
 /// Phase 3: static dark manifold mesh pass.
@@ -62,8 +62,8 @@ pub const RENDER_RIBBON_WGSL: &str = include_str!("shaders/render_ribbon.wgsl");
 /// V2 Phase E: bloom post-process (bright/blur/composite fullscreen passes).
 pub const BLOOM_WGSL: &str = include_str!("shaders/bloom.wgsl");
 
-/// Morphology: procedural per-neuron geometry render (tapered tubes + outward
-/// signal pulse). Reads the segment buffer + last_spike; no hash needed.
+/// Morphology: procedural per-neuron geometry render (tapered tubes + soma spheres).
+/// Prepended with HASH_WGSL for identity color.
 pub const RENDER_MORPHOLOGY_WGSL: &str = include_str!("shaders/render_morphology.wgsl");
 
 /// Holds compiled compute pipelines for the per-tick sim passes.
@@ -94,8 +94,10 @@ pub struct GpuPipelines {
     pub emit_edges: Option<wgpu::ComputePipeline>,
     /// V2 Phase D: active-edge ribbon render pipeline.
     pub render_ribbon: Option<wgpu::RenderPipeline>,
-    /// Morphology: procedural neuron geometry render pipeline.
+    /// Morphology: procedural neuron geometry render pipeline (tubes).
     pub render_morphology: Option<wgpu::RenderPipeline>,
+    /// Morphology: soma sphere render pipeline (Wave 2).
+    pub render_soma_spheres: Option<wgpu::RenderPipeline>,
     // ─── V2 Phase E: bloom post-process pipelines ─────────────────────────────
     /// Bright-pass (threshold) → rgba16float.
     pub bloom_bright: Option<wgpu::RenderPipeline>,
@@ -133,6 +135,7 @@ impl GpuPipelines {
             render_ribbon: None,
             // Morphology
             render_morphology: None,
+            render_soma_spheres: None,
             // V2 Phase E
             bloom_bright: None,
             bloom_blur: None,
@@ -357,9 +360,10 @@ impl GpuPipelines {
         ));
 
         // --- Far-LOD billboard glow (additive blend, no depth write) ---
+        let far_src = format!("{HASH_WGSL}\n{RENDER_FAR_WGSL}");
         let far_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("render_far.wgsl"),
-            source: wgpu::ShaderSource::Wgsl(RENDER_FAR_WGSL.into()),
+            source: wgpu::ShaderSource::Wgsl(far_src.into()),
         });
         let far_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("render-far-pl"),
@@ -460,53 +464,17 @@ impl GpuPipelines {
             cache: None,
         }));
 
-        // ─── Morphology: procedural neuron geometry render (additive, no depth) ─
-        // One instance per segment, 6 verts each. Reuses the additive blend so
-        // overlapping tubes sum into a soft glow (bloom-friendly).
-        let morph_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("render_morphology.wgsl"),
-            source: wgpu::ShaderSource::Wgsl(RENDER_MORPHOLOGY_WGSL.into()),
-        });
-        let morph_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("render-morphology-pl"),
-            bind_group_layouts: &[Some(&layouts.render_morphology_bgl)],
-            immediate_size: 0,
-        });
-        self.render_morphology = Some(device.create_render_pipeline(
-            &wgpu::RenderPipelineDescriptor {
-                label: Some("render_morphology"),
-                layout: Some(&morph_pl),
-                vertex: wgpu::VertexState {
-                    module: &morph_module,
-                    entry_point: Some("vs_main"),
-                    buffers: &[], // all geometry from the segment_buffer storage binding
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &morph_module,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: color_format,
-                        blend: Some(additive_blend),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: None, // tubes are two-sided billboards
-                    polygon_mode: wgpu::PolygonMode::Fill,
-                    unclipped_depth: false,
-                    conservative: false,
-                },
-                depth_stencil: None, // additive layer, no depth interaction
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            },
-        ));
+        // ─── Morphology: tube + soma-sphere render pipelines ───────────────────
+        // v0.3.1: tessellation (TUBE_SIDES / SPHERE_SLICES / SPHERE_STACKS) is now
+        // driven by WGSL override constants, so the pipelines are built in a
+        // dedicated method that the backend can also re-invoke (pipeline-rebuild)
+        // when the render-quality config changes. Defaults match v0.3.0.
+        self.build_morph_pipelines(
+            device,
+            layouts,
+            color_format,
+            crate::sim::morphology::RenderQualityConfig::default(),
+        );
 
         // ─── V2 Phase E: bloom post-process pipelines ──────────────────────────
         // Fullscreen-triangle passes. bright/blur write rgba16float (HDR), the
@@ -575,6 +543,142 @@ impl GpuPipelines {
             Some(make_fullscreen("bloom_blur", &bloom_pass_pl, "fs_blur", hdr_format));
         self.bloom_composite =
             Some(make_fullscreen("bloom_composite", &composite_pl, "fs_composite", color_format));
+    }
+
+    /// Morphology tube + soma-sphere render pipelines (additive, no depth).
+    /// v0.3.1: tessellation comes in via WGSL override constants set through
+    /// `compilation_options.constants` (TUBE_SIDES / SPHERE_SLICES / SPHERE_STACKS).
+    /// The Rust draw vert-counts must be derived from the SAME `RenderQualityConfig`
+    /// (see `GpuBackend`). Re-invokable for a render-quality pipeline rebuild.
+    pub fn build_morph_pipelines(
+        &mut self,
+        device: &wgpu::Device,
+        layouts: &GpuLayouts,
+        color_format: wgpu::TextureFormat,
+        rq: crate::sim::morphology::RenderQualityConfig,
+    ) {
+        let additive_blend = wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+        };
+
+        let morph_src = format!("{HASH_WGSL}\n{RENDER_MORPHOLOGY_WGSL}");
+        let morph_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("render_morphology.wgsl"),
+            source: wgpu::ShaderSource::Wgsl(morph_src.into()),
+        });
+
+        // WGSL override constants. Keyed by the WGSL identifier; values are f64
+        // (wgpu casts to the override's declared type, u32 here).
+        let tube_consts: &[(&str, f64)] = &[("TUBE_SIDES", rq.tube_sides as f64)];
+        let sphere_consts: &[(&str, f64)] = &[
+            ("SPHERE_SLICES", rq.sphere_slices as f64),
+            ("SPHERE_STACKS", rq.sphere_stacks as f64),
+        ];
+
+        // ── Tube pipeline ──────────────────────────────────────────────────────
+        let morph_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("render-morphology-pl"),
+            bind_group_layouts: &[Some(&layouts.render_morphology_bgl)],
+            immediate_size: 0,
+        });
+        self.render_morphology = Some(device.create_render_pipeline(
+            &wgpu::RenderPipelineDescriptor {
+                label: Some("render_morphology"),
+                layout: Some(&morph_pl),
+                vertex: wgpu::VertexState {
+                    module: &morph_module,
+                    entry_point: Some("vs_main"),
+                    buffers: &[],
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: tube_consts,
+                        ..Default::default()
+                    },
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &morph_module,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: color_format,
+                        blend: Some(additive_blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: tube_consts,
+                        ..Default::default()
+                    },
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            },
+        ));
+
+        // ── Soma sphere pipeline (same module, vs_sphere/fs_sphere) ─────────────
+        let soma_sphere_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("render-soma-spheres-pl"),
+            bind_group_layouts: &[Some(&layouts.render_soma_spheres_bgl)],
+            immediate_size: 0,
+        });
+        self.render_soma_spheres = Some(device.create_render_pipeline(
+            &wgpu::RenderPipelineDescriptor {
+                label: Some("render_soma_spheres"),
+                layout: Some(&soma_sphere_pl),
+                vertex: wgpu::VertexState {
+                    module: &morph_module,
+                    entry_point: Some("vs_sphere"),
+                    buffers: &[],
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: sphere_consts,
+                        ..Default::default()
+                    },
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &morph_module,
+                    entry_point: Some("fs_sphere"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: color_format,
+                        blend: Some(additive_blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: sphere_consts,
+                        ..Default::default()
+                    },
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            },
+        ));
     }
 
     /// Build Phase 4 near-LOD compute + render pipelines.

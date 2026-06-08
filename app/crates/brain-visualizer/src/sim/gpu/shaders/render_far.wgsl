@@ -27,7 +27,7 @@ struct Uniforms {
     camera_pos: vec3<f32>,
     voltage_glow_strength: f32,  // V2 Phase B: debug glow on subthreshold |v| (0=off)
     // ─── V2 Phase E (offset 128): orthogonal color/visibility/radius ─────────
-    color_by: u32,                    // 0=region 1=E/I 2=spike-age 3=voltage 4=activity
+    color_by: u32,                    // 0=region 1=E/I 2=spike-age 3=voltage 4=activity 5=identity
     neuron_visibility: u32,           // 0=all 1=active-emphasis 2=active-only
     neuron_visual_radius: f32,        // base radius (world units)
     active_neuron_radius_boost: f32,  // radius mult at full glow
@@ -54,6 +54,7 @@ const ACTIVE_GLOW_THRESHOLD: f32 = 0.06;
 // V2 Phase E: optional sparse-stride for inactive neurons. 1 = render all (the
 // default look). Raise to thin the inactive cloud when visibility==1.
 const INACTIVE_STRIDE: u32 = 1u;
+const IDENTITY_SALT: u32 = 0x9f3ab7c2u;
 
 // UX fix (near-LOD / shadow line): close-up billboard size ramp. Below
 // NEAR_RADIUS_DIST world units from the camera a neuron's billboard radius grows
@@ -87,6 +88,33 @@ fn hue(h: f32) -> vec3<f32> {
     return vec3(r, g, b);
 }
 
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> vec3<f32> {
+    let c = (1.0 - abs(2.0 * l - 1.0)) * s;
+    let hp = fract(h) * 6.0;
+    let hp_mod2 = hp - floor(hp * 0.5) * 2.0;
+    let x = c * (1.0 - abs(hp_mod2 - 1.0));
+    var rgb: vec3<f32>;
+    if hp < 1.0 {
+        rgb = vec3<f32>(c, x, 0.0);
+    } else if hp < 2.0 {
+        rgb = vec3<f32>(x, c, 0.0);
+    } else if hp < 3.0 {
+        rgb = vec3<f32>(0.0, c, x);
+    } else if hp < 4.0 {
+        rgb = vec3<f32>(0.0, x, c);
+    } else if hp < 5.0 {
+        rgb = vec3<f32>(x, 0.0, c);
+    } else {
+        rgb = vec3<f32>(c, 0.0, x);
+    }
+    return rgb + vec3<f32>(l - 0.5 * c);
+}
+
+fn identity_color(id: u32) -> vec3<f32> {
+    let h = f32(mix_key(0u, id, 0u, IDENTITY_SALT)) / 4294967295.0;
+    return hsl_to_rgb(h, 0.75, 0.60);
+}
+
 // V2 Phase E: orthogonal color modes. `id` neuron id, `packed` last_spike word,
 // `vv` clamped membrane voltage, `glow` recency [0,1].
 fn color_for(mode: u32, id: u32, packed: u32, vv: f32, glow: f32) -> vec3<f32> {
@@ -105,6 +133,9 @@ fn color_for(mode: u32, id: u32, packed: u32, vv: f32, glow: f32) -> vec3<f32> {
     } else if mode == 4u {
         // activity: dim teal (inactive) → bright yellow-white (active).
         return mix(vec3(0.12, 0.20, 0.22), vec3(1.0, 0.95, 0.6), clamp(glow, 0.0, 1.0));
+    } else if mode == 5u {
+        // identity: stable per-neuron hue from the locked BV22 hash.
+        return identity_color(id);
     }
     // mode 0 (default) region: Input cool-blue, Assoc green, Output warm-orange.
     if region == 0u { return vec3(0.28, 0.55, 1.0); }

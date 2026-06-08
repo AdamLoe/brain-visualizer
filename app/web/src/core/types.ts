@@ -65,7 +65,7 @@ export const DEFAULT_CONFIG: AppConfig = {
 // Persists ONLY user-chosen scaling/runtime knobs (n, k, tier, backend, speed,
 // excitability). `seed` is a fixed constant and is NOT persisted; no runtime
 // counters are persisted. On missing/parse-error/version-mismatch → DEFAULT_CONFIG.
-const CONFIG_LS_KEY = "bv2_config_v1";
+export const CONFIG_LS_KEY = "bv2_config_v1";
 
 /** Subset of AppConfig persisted to localStorage (no seed, no runtime counters). */
 interface SavedConfig {
@@ -120,4 +120,14 @@ export function saveConfig(c: AppConfig): void {
   } catch {
     // localStorage unavailable (private browsing, quota, etc.) — silent.
   }
+}
+
+/** Clear persisted AppConfig and return a fresh default snapshot. */
+export function resetConfig(): AppConfig {
+  try {
+    localStorage.removeItem(CONFIG_LS_KEY);
+  } catch {
+    // localStorage unavailable (private browsing, quota, etc.) — silent.
+  }
+  return { ...DEFAULT_CONFIG };
 }

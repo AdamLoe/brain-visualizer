@@ -158,10 +158,27 @@ pub struct EdgeBuffers {
 
 // ─── Morphology: procedural neuron geometry render pipeline ───────────────────
 
-pub use crate::sim::morphology::MorphSegment;
+pub use crate::sim::morphology::{MorphSegment, MorphSphereInstance};
 
 /// Morphology: per-frame render uniform — layout MUST match `MorphUniforms` in
-/// render_morphology.wgsl verbatim. 144 B (mat4 = 64) + 5×16 = 144 B total.
+/// render_morphology.wgsl verbatim. 192 B total (mat4=64 + 8×16).
+///
+/// Byte map (offsets from struct start):
+///   0:   mvp: [f32;16]                  (64 B)
+///  64:   camera_right:[f32;3] + tick:u32 (16 B)
+///  80:   camera_up:[f32;3] + width_scale:f32 (16 B)
+///  96:   camera_pos:[f32;3] + light_next:u32 (16 B)
+/// 112:   light_past:u32 + glow_tau:f32 + base_brightness:f32 + connection_layer:u32 (16 B)
+/// 128:   color_by:u32 + _pad_a:u32 + _pad_b:u32 + _pad_c:u32 (16 B)
+/// 144:   light_dir:[f32;3] + ambient:f32 (16 B)
+/// 160:   diffuse_intensity:f32 + rim_intensity:f32 + rim_power:f32 + _pad3:u32 (16 B)
+/// 176:   resting_brightness:f32 + active_boost:f32 + _pad4:u32 + _pad5:u32 (16 B)
+/// Total = 192 B
+///
+/// v0.3.1: `resting_brightness` and `active_boost` are owned by the morphology
+/// config (`set_morphology_config`), NOT by the VisualSettings Float32Array.
+/// `resting_brightness` is the morph-config-owned resting structure brightness;
+/// `active_boost` replaces the former hardcoded WGSL `const BOOST = 1.8`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MorphUniforms {
@@ -181,9 +198,26 @@ pub struct MorphUniforms {
     pub base_brightness: f32,
     pub connection_layer: u32,
     pub color_by: u32,
-    pub _pad0: u32,
-    pub _pad1: u32,
-    pub _pad2: u32, // pad struct to 144 B (WGSL rounds size up to 16-B align)
+    pub _pad_a: u32, // pad block to 16-B boundary before light_dir
+    pub _pad_b: u32,
+    pub _pad_c: u32,
+    // ── Lighting preset (Stage 0 / v0.3.0) ────────────────────────────────────
+    // Defaults locked here; dev-panel exposure in v0.3.1.
+    pub light_dir: [f32; 3],   // world-space directional light direction (normalised)
+    pub ambient: f32,           // ambient term (fills the vec3's 16-B slot)
+    pub diffuse_intensity: f32,
+    pub rim_intensity: f32,
+    pub rim_power: f32,
+    pub _pad3: u32, // pad block to 16-B boundary before the brightness split
+    // ── Active/resting brightness split (v0.3.1, morph-config owned) ───────────
+    // resting_brightness: resting structure brightness (config-owned; supersedes
+    // the Float32Array morph_resting_opacity as the morph-config source).
+    // active_boost: multiplier on the lit (spiking) contribution — replaces the
+    // former hardcoded WGSL `const BOOST = 1.8`.
+    pub resting_brightness: f32,
+    pub active_boost: f32,
+    pub _pad4: u32,
+    pub _pad5: u32, // pad to 192 B (16-B aligned)
 }
 
 /// Morphology: GPU buffers. Allocated ONCE per network (re)build in
@@ -194,8 +228,12 @@ pub struct MorphBuffers {
     pub segment_buffer: wgpu::Buffer,
     /// Number of segments actually generated (= instance count).
     pub segment_count: u32,
-    /// Per-frame morphology render uniform.
+    /// Per-frame morphology render uniform (shared by tube pass AND soma-sphere pass).
     pub morph_uniform: wgpu::Buffer,
+    /// Soma sphere instances — one per neuron (Wave 2 / Stream 2).
+    pub sphere_buffer: wgpu::Buffer,
+    /// Number of soma sphere instances (= neuron count).
+    pub sphere_count: u32,
     /// Generation parameters used to build this buffer (for artifact capture).
     pub params: crate::sim::morphology::MorphologyParams,
     /// Build-time stats for this buffer (for artifact capture).
@@ -304,7 +342,7 @@ pub struct RenderUniforms {
     // ─── V2 Phase E: orthogonal color/visibility/radius controls ─────────────
     // New 16-byte block (offset 128). Field order MUST match `Uniforms` in
     // render_far.wgsl verbatim (#1 corruption source — do not reorder).
-    /// color_by mode: 0=region,1=E/I,2=spike-age,3=voltage,4=activity (default 0).
+    /// color_by mode: 0=region,1=E/I,2=spike-age,3=voltage,4=activity,5=identity (default 0).
     pub color_by: u32,
     /// neuron_visibility: 0=all,1=active-emphasis,2=active-only (default 0).
     pub neuron_visibility: u32,
@@ -498,6 +536,9 @@ pub struct GpuLayouts {
     /// morphology render group 0: segment_buffer (read) + last_spike (read) +
     /// morph uniform.
     pub render_morphology_bgl: wgpu::BindGroupLayout,
+    /// soma sphere render group 0: sphere_instances (read) + last_spike (read) +
+    /// morph uniform (shared with tube pass for same lighting/mvp).
+    pub render_soma_spheres_bgl: wgpu::BindGroupLayout,
     // ─── V2 Phase E: bloom post-process layouts ───────────────────────────────
     /// bright/blur group 0: sampler(0) + input tex(1) + bloom uniform(2).
     pub bloom_pass_bgl: wgpu::BindGroupLayout,
@@ -850,6 +891,19 @@ impl GpuLayouts {
                     render_vs_uniform(2), // MorphUniforms
                 ],
             });
+        // Soma sphere render layout (Wave 2). Uses binding slots 3/4/5 to avoid
+        // a WGSL name clash with the tube bindings (0/1/2) in the same shader
+        // module. vs_sphere/fs_sphere only touch 3/4/5; vs_main/fs_main only
+        // touch 0/1/2. WebGPU validates only reachable bindings per entry point.
+        let render_soma_spheres_bgl =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("render-soma-spheres-bgl"),
+                entries: &[
+                    render_vs_storage(3), // sphere_instances
+                    render_vs_storage(4), // last_spike (same buffer, slot 4)
+                    render_vs_uniform(5), // MorphUniforms (same buffer, slot 5)
+                ],
+            });
 
         // ─── V2 Phase E: bloom layouts ────────────────────────────────────────
         let frag_sampler = |binding: u32| wgpu::BindGroupLayoutEntry {
@@ -912,6 +966,7 @@ impl GpuLayouts {
             render_ribbon_bgl,
             // Morphology
             render_morphology_bgl,
+            render_soma_spheres_bgl,
             // V2 Phase E
             bloom_pass_bgl,
             bloom_composite_bgl,
@@ -965,6 +1020,9 @@ pub struct GpuBindGroups {
     /// morphology render group 0 (segment_buffer + last_spike + morph uniform).
     /// None until both morph buffers + neuron buffers are allocated.
     pub render_morphology: Option<wgpu::BindGroup>,
+    /// soma sphere render group 0 (sphere_instances + last_spike + morph uniform).
+    /// None until both sphere buffers + neuron buffers are allocated.
+    pub render_soma_spheres: Option<wgpu::BindGroup>,
 }
 
 /// Owns all GPU buffers/targets and tracks when bind groups must be rebuilt.
@@ -1544,6 +1602,9 @@ impl GpuResources {
     /// buffer is sized to the actual generated segment list; the generator caps
     /// at `n * max_segs_per_neuron(k)` and logs how many
     /// segments it had to drop if the cap is ever hit ("no silent caps").
+    ///
+    /// Wave 2: also builds the soma-sphere instance buffer (one entry per neuron)
+    /// using `crate::sim::morphology::emit_soma_spheres`.
     pub fn init_morph_resources(
         &mut self,
         device: &wgpu::Device,
@@ -1595,6 +1656,34 @@ impl GpuResources {
             usage: wgpu::BufferUsages::STORAGE,
         });
 
+        // Wave 2: soma sphere instances (one per neuron). Radius = params.base_radius
+        // (the soma-end R0 that anchors all dendrite/axon branches).
+        let spheres = crate::sim::morphology::emit_soma_spheres(positions, &source_types, params);
+        let sphere_count = spheres.len() as u32;
+        // Non-empty guard: wgpu rejects zero-sized buffers.
+        let sphere_data: Vec<MorphSphereInstance> = if spheres.is_empty() {
+            vec![MorphSphereInstance {
+                center: [0.0; 3],
+                radius: 0.0,
+                neuron_id: 0,
+                kind: 2,
+                _pad0: 0,
+                _pad1: 0,
+            }]
+        } else {
+            spheres
+        };
+        let sphere_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("morph_sphere_buffer"),
+            contents: bytemuck::cast_slice(&sphere_data),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        eprintln!(
+            "[morphology] soma spheres: {} instances ({} B)",
+            sphere_count,
+            sphere_count as usize * std::mem::size_of::<MorphSphereInstance>(),
+        );
+
         let morph_uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("morph_uniform"),
             size: std::mem::size_of::<MorphUniforms>() as u64,
@@ -1606,6 +1695,8 @@ impl GpuResources {
             segment_buffer,
             segment_count,
             morph_uniform,
+            sphere_buffer,
+            sphere_count,
             params: *params,
             stats,
         });
@@ -1941,7 +2032,7 @@ impl GpuResources {
                 (None, None, None)
             };
 
-        // ─── Morphology: render bind group ───────────────────────────────────
+        // ─── Morphology: tube render bind group ──────────────────────────────
         let render_morphology = if let Some(mb) = &self.morph_buffers {
             Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("render-morphology-bg"),
@@ -1950,6 +2041,23 @@ impl GpuResources {
                     entry(0, &mb.segment_buffer),
                     entry(1, last_spike),
                     entry(2, &mb.morph_uniform),
+                ],
+            }))
+        } else {
+            None
+        };
+        // ─── Morphology: soma sphere render bind group (Wave 2) ──────────────
+        // Uses binding slots 3/4/5 (matching render_soma_spheres_bgl).
+        // sphere_buffer and morph_uniform are from MorphBuffers; last_spike is
+        // the same NeuronBuffers buffer reused at slot 4.
+        let render_soma_spheres = if let Some(mb) = &self.morph_buffers {
+            Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("render-soma-spheres-bg"),
+                layout: &layouts.render_soma_spheres_bgl,
+                entries: &[
+                    entry(3, &mb.sphere_buffer),
+                    entry(4, last_spike),
+                    entry(5, &mb.morph_uniform),
                 ],
             }))
         } else {
@@ -1980,6 +2088,7 @@ impl GpuResources {
             render_ribbon,
             // Morphology
             render_morphology,
+            render_soma_spheres,
         });
         self.bind_groups_dirty = false;
     }
@@ -2250,11 +2359,12 @@ mod tests {
     #[test]
     fn morph_layouts_locked() {
         // Morphology: MorphSegment must be 48 B (Rust ⇄ WGSL parity); the render
-        // uniform must be 16-aligned AND exactly 144 B (WGSL rounds the trailing
-        // scalar block up to a 16-B multiple → the bind layout expects 144).
+        // uniform must be 16-aligned AND exactly 192 B (mat4=64 + 8×16 blocks;
+        // includes Stage 0 lighting fields plus the v0.3.1 active/resting
+        // brightness split: resting_brightness / active_boost).
         assert_eq!(std::mem::size_of::<MorphSegment>(), 48);
         assert_eq!(std::mem::size_of::<MorphSegment>() % 16, 0);
-        assert_eq!(std::mem::size_of::<MorphUniforms>(), 144);
+        assert_eq!(std::mem::size_of::<MorphUniforms>(), 192);
         assert_eq!(std::mem::size_of::<MorphUniforms>() % 16, 0);
     }
 
