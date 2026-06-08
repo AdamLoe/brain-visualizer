@@ -41,13 +41,10 @@ export interface AppConfig {
   ticksPerSec: number;
 }
 
-// V2 Phase 0 (beauty-first): default to 10k/16 — the beauty target.
-// Tiers and the adaptive scaler are demoted to opt-in (Phase F re-arms them).
-// V2 Phase F: tier "low" = 10k/16 — matches the default N so the highlighted
-// tier button is consistent with what actually boots.
-// Morphology (beauty-first): scaled DOWN to ~1200 neurons so each can be drawn
-// as real procedural morphology (soma + dendrite tree + axon arbor) and read
-// unmistakably as neurons. Sim stays K=16 (dynamics unchanged).
+// v0.4.0 review baseline: the clean first-load default stays at 1200/16 so the
+// procedural morphology reads as individual neurons without any dev-panel
+// tuning. The public tier controls remain explicit opt-in presets; the default
+// app config is the accepted-default source of truth for first load.
 export const DEFAULT_CONFIG: AppConfig = {
   n: 1_200,
   k: 16,

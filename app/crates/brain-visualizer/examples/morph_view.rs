@@ -347,8 +347,7 @@ async fn run() {
             k: config.k,
             frames: &variant_frames,
         };
-        std::fs::write(VARIANT_JSON_PATH, variant_artifact.to_json())
-            .expect("write variant json");
+        std::fs::write(VARIANT_JSON_PATH, variant_artifact.to_json()).expect("write variant json");
         println!(
             "[morph_view] active-bright variant (restingBrightness=0.07, activeBoost=3.0) \
              → /tmp/morph_active_bright.rgba non-black {non_black}/{total} ({frac:.2}%)"

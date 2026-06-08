@@ -7,12 +7,13 @@ last_updated:  2026-06-06
 # Dev Panel
 
 A hidden right-docked drawer (`PANEL_WIDTH_PX = 360 px`) that gives developers
-and power-users access to live metrics, all tunable settings, and storage
-diagnostics — without cluttering the public UI.
+and power-users access to live metrics, all tunable settings, hidden review
+presets, and storage diagnostics — without cluttering the public UI.
 
 ## What it owns
 
 - `DevPanel` class, open/close triggers, tab layout — `web/src/ui/dev-panel.ts → DevPanel`
+- Hidden review preset payloads — `web/src/ui/dev-panel.ts → HIDDEN_REVIEW_PRESETS`
 - `SysInfo` and `ApplyHandlers` / `SimHandlers` callback interfaces — `web/src/ui/dev-panel.ts`
 - Setting-impact classification system and colored dot rendering — `web/src/core/setting-metadata.ts → SETTING_IMPACT`
 - `VisualizerSettings` interface, persistence, `toFloat32Array` serialisation — `web/src/core/settings.ts → VisualizerSettings`
@@ -50,7 +51,7 @@ Six tabs are defined in the `TABS` constant in `web/src/ui/dev-panel.ts`:
 | Network | Rebuild controls (N/K/seed) + live Drive and Structure knobs |
 | Rendering | Visual knobs with impact dots |
 | Debug View | Read-only string labels for current visual-mode settings |
-| Storage | Reset-to-defaults button + localStorage key/size readout |
+| Storage | Reset-to-defaults button + hidden review presets + localStorage key/size readout |
 
 The Rendering tab includes a compact Morphology subsection. The top of it groups
 the live render knobs that live in the `VisualSettings` Float32Array:
@@ -105,9 +106,12 @@ is the **single source of truth** for every setting's impact level:
 | Yellow | `"brain-reset"` | Requires `reinitialize()` with the same seed |
 | Red | `"renderer-rebuild"` | Full pipeline rebuild required |
 
-As of the current codebase **all** `VisualizerSettings` fields are `"live"`;
+As of the current codebase, every `VisualizerSettings` field except
+`connectionCurveLift` is `"live"`. `connectionCurveLift` remains
+`"renderer-rebuild"` because it changes baked morphology geometry.
 `heterogeneity`, `weightNormalization`, and `inputMode` were downgraded from
-`"brain-reset"` to `"live"` once the integrate uniform was read every tick. N/K/seed live in `AppConfig` and are out of scope for `SETTING_IMPACT`.
+`"brain-reset"` to `"live"` once the integrate uniform was read every tick.
+N/K/seed live in `AppConfig` and are out of scope for `SETTING_IMPACT`.
 
 The `adaptiveScalerEnabled` field (Float32Array index 23) is **reserved/inert**:
 runtime auto-scaling was removed, so its "Adaptive scaler" select is gone from
@@ -120,6 +124,24 @@ reads it. Re-arming a scaler is deferred — see
 The `brain-reset` pending-dot and Apply button exist in the API
 (`ApplyHandlers`, `setApplyHandlers`, `clearPendingBrainReset`) but are
 currently no-ops — kept for callers that still wire them.
+
+## Hidden review presets
+
+The Storage tab exposes three **code-defined**, dev-only review presets:
+
+- `accepted-default`
+- `performance-review`
+- `hero-review`
+
+The preset table lives in `web/src/ui/dev-panel.ts → HIDDEN_REVIEW_PRESETS`.
+`accepted-default` is derived directly from `DEFAULT_CONFIG`,
+`DEFAULT_SETTINGS`, and `DEFAULT_MORPH_CONFIG`, so it matches the clean
+first-load values by construction rather than carrying a separate tuned payload.
+`performance-review` and `hero-review` keep the same app config but override the
+visual and morphology payloads for lower-cost and screenshot-oriented review.
+
+These presets are not a public preset manager: they are static buttons inside
+the already-hidden dev panel, intended only for review and comparison.
 
 ## Morphology config controls
 
@@ -164,14 +186,13 @@ batched behind the Rebuild button instead of pushing on each change.
 
 ## Settings persistence contract
 
-**Key:** `bv2_settings_v1` (hardcoded in both `web/src/core/settings.ts → LS_KEY` and
-`web/src/ui/dev-panel.ts → DevPanel.LS_KEY`).
+**Keys:** `bv2_settings_v1`, `bv2_morph_v1`, `bv2_config_v1`.
 
-**Schema:** `{ version: 4, public: {…}, dev: {…} }`. The `public` sub-object
+**Schema:** settings persist as `{ version: 5, public: {…}, dev: {…} }`. The `public` sub-object
 holds user-facing beauty knobs; `dev` holds tuning/debug knobs. The split is
 defined by the `SavedPublic` and `SavedDev` interfaces in `web/src/core/settings.ts`.
 
-**Version sentinel:** any saved object whose `version` field is not `4` is
+**Version sentinel:** any saved settings object whose `version` field is not `5` is
 silently discarded and defaults are used. No migration is attempted. (The
 sentinel is bumped whenever a Float32Array index is repurposed or a default
 changes so old saves cannot silently mislead.) The v0.2.1 Morphology tuning
@@ -200,13 +221,14 @@ Float32Array boundary — see [`../decisions/dev-tooling.md`](../decisions/dev-t
 **Reset:** `web/src/core/settings.ts → resetSettings` removes the settings
 localStorage key, restores `current` to `DEFAULT_SETTINGS`, and notifies all
 subscribers synchronously — which causes the dev panel's `_syncSliders` to
-restore settings-backed control positions. The Storage reset handler also calls
-`web/src/core/types.ts → resetConfig`, updates `main.ts`'s in-memory
-`AppConfig`, and syncs the Network tab controls to `DEFAULT_CONFIG` without
-triggering a network rebuild. The same reset path also clears the morphology
-config key `bv2_morph_v1` via `web/src/core/morph-config.ts → resetMorphConfig`
-and re-syncs the morphology rows; any future app-owned persistence key should be
-cleared on this same path.
+restore settings-backed control positions. The Storage reset handler also clears
+the morphology key via `web/src/core/morph-config.ts → resetMorphConfig`,
+re-syncs the morphology rows, calls `web/src/core/types.ts → resetConfig`, syncs
+the Network tab controls to `DEFAULT_CONFIG`, updates `main.ts`'s in-memory
+`AppConfig`, and schedules a rebuild back to the default N/K/seed. That means
+reset now restores the live network to the clean default values instead of only
+changing the stored controls. The storage readout shows all three app-owned
+keys, including `bv2_morph_v1`.
 
 ## Float32Array index contract (corruption risk)
 

@@ -12,16 +12,10 @@
 // The lighting multiplier modulates the existing glow/brightness so the additive
 // glow aesthetic is preserved (lit-active branches shine through).
 //
-// Each axon segment carries its SOURCE neuron_id and its synaptic TARGET
-// (target_id). Whole-connection lighting: when a neuron fires, its actual
-// connections light up INSTANTLY and fade with the SAME exp(-tick_diff/glow_tau)
-// curve the far-glow neuron dot uses — no spatial pulse travel. Two toggles:
-//   light_next (downstream): a segment lights when its SOURCE neuron fires.
-//   light_past (upstream, AXON ONLY): a segment lights when its TARGET fires.
-// Both may be on → take the max of the two contributions. Upstream lighting is
-// inter-neuron, so it applies only to axon segments (kind 1); dendrites
-// (kind 0) carry target_id = self and only respond to their own neuron's spike
-// via light_next. path_len is retained in the struct but no longer drives timing.
+// Each segment carries its SOURCE neuron_id and cumulative `path_len`. The first
+// pulse pass keeps the shared buffer layouts untouched and derives a traveling
+// packet directly from the source neuron's packed `last_spike` word plus the
+// local path interpolation along the segment.
 //
 // kind 0 = dendrite (cool, dim), kind 1 = axon (E/I tinted). E/I comes from the
 // SOURCE neuron's packed type bit (type & 1). Additive, bloom-friendly, no depth
@@ -125,6 +119,17 @@ const HAS_SPIKED_MASK: u32 = 0x80000000u;
 const TICK_MASK: u32 = 0x00FFFFFFu;
 const IDENTITY_SALT: u32 = 0x9f3ab7c2u;
 const IDENTITY_MORPH_BLEND: f32 = 0.62;
+const SOMA_FLASH_RATIO: f32 = 0.18;
+const SOMA_CORE_TICKS: f32 = 2.2;
+const SOMA_RADIUS_GLOW: f32 = 0.08;
+const SOMA_RADIUS_FLASH: f32 = 0.16;
+const LEGACY_WHOLE_GLOW: f32 = 0.10;
+const AXON_IMPULSE_SPEED: f32 = 0.018;
+const DENDRITE_ECHO_SPEED: f32 = 0.006;
+const IMPULSE_WIDTH: f32 = 0.028;
+const IMPULSE_TAIL_STRENGTH: f32 = 0.28;
+const DENDRITE_ECHO_STRENGTH: f32 = 0.28;
+const DENDRITE_ECHO_RANGE: f32 = 0.075;
 
 fn has_spiked(packed: u32) -> bool {
     return (packed & HAS_SPIKED_MASK) != 0u;
@@ -163,11 +168,169 @@ fn identity_color(id: u32) -> vec3<f32> {
     return hsl_to_rgb(h, 0.75, 0.60);
 }
 
-struct VertOut {
+fn safe_tau(tau: f32) -> f32 {
+    return max(tau, 1.0);
+}
+
+fn spike_age(now: u32, packed: u32) -> f32 {
+    return f32(tick_diff(now, packed & TICK_MASK));
+}
+
+fn spike_glow(now: u32, packed: u32, tau: f32) -> f32 {
+    if !has_spiked(packed) {
+        return 0.0;
+    }
+    return exp(-spike_age(now, packed) / safe_tau(tau));
+}
+
+fn soma_flash(age: f32, tau: f32) -> f32 {
+    return exp(-age / max(safe_tau(tau) * SOMA_FLASH_RATIO, 1.0));
+}
+
+fn soma_core(age: f32, glow: f32) -> f32 {
+    return (1.0 - smoothstep(0.0, SOMA_CORE_TICKS, age)) * glow;
+}
+
+fn soma_radius_scale(glow: f32, flash: f32) -> f32 {
+    return 1.0 + glow * SOMA_RADIUS_GLOW + flash * SOMA_RADIUS_FLASH;
+}
+
+fn material_hash(seed: u32) -> f32 {
+    return f32(hash32(seed)) / 4294967295.0;
+}
+
+fn material_noise3(p: vec3<f32>, seed: u32) -> f32 {
+    let phase = material_hash(seed) * 17.0;
+    let q = vec3<f32>(
+        dot(p, vec3<f32>(0.83, 1.31, 0.47)) + phase,
+        dot(p, vec3<f32>(1.11, 0.57, 0.89)) + phase * 1.37,
+        dot(p, vec3<f32>(0.61, 0.73, 1.27)) + phase * 1.79,
+    );
+    return fract(sin(dot(q, vec3<f32>(12.9898, 78.233, 37.719))) * 43758.5453);
+}
+
+fn branch_base_color(kind: u32, region: u32, ei: u32, color_by: u32, neuron_id: u32) -> vec3<f32> {
+    var color: vec3<f32>;
+    if kind == 0u {
+        color = vec3<f32>(0.22, 0.34, 0.5);
+    } else if color_by == 0u {
+        if region == 0u {
+            color = vec3<f32>(0.30, 0.55, 1.0);
+        } else if region == 1u {
+            color = vec3<f32>(0.34, 0.9, 0.5);
+        } else {
+            color = vec3<f32>(1.0, 0.55, 0.2);
+        }
+    } else {
+        color = select(vec3<f32>(0.55, 0.72, 1.0), vec3<f32>(1.0, 0.34, 0.28), ei == 1u);
+    }
+    if color_by == 5u {
+        color = mix(color, identity_color(neuron_id), IDENTITY_MORPH_BLEND);
+    }
+    return color;
+}
+
+fn soma_base_color(region: u32, ei: u32, color_by: u32, neuron_id: u32) -> vec3<f32> {
+    var color: vec3<f32>;
+    if color_by == 0u {
+        if region == 0u {
+            color = vec3<f32>(0.30, 0.55, 1.0);
+        } else if region == 1u {
+            color = vec3<f32>(0.34, 0.9, 0.5);
+        } else {
+            color = vec3<f32>(1.0, 0.55, 0.2);
+        }
+    } else {
+        color = select(vec3<f32>(0.55, 0.72, 1.0), vec3<f32>(1.0, 0.34, 0.28), ei == 1u);
+    }
+    if color_by == 5u {
+        color = mix(color, identity_color(neuron_id), IDENTITY_MORPH_BLEND);
+    }
+    return color;
+}
+
+fn tube_material(
+    base: vec3<f32>,
+    n: vec3<f32>,
+    world: vec3<f32>,
+    path: f32,
+    neuron_id: u32,
+    kind: u32,
+) -> vec3<f32> {
+    let seed = mix_key(0u, neuron_id, kind, IDENTITY_SALT ^ 0x2c79d31bu);
+    let striation = material_noise3(
+        vec3<f32>(
+            path * 10.0,
+            dot(world, vec3<f32>(0.42, 0.71, 0.33)) * 3.0,
+            dot(n, vec3<f32>(0.62, 0.21, 0.75)) * 2.0,
+        ),
+        seed,
+    );
+    let sheath = material_noise3(world * 7.0 + n * 1.1, seed ^ 0x68bc21ebu);
+    let neuron_shift = material_hash(seed ^ 0x9e3779b9u) - 0.5;
+    let shade = 0.93 + (striation - 0.5) * 0.14 + (sheath - 0.5) * 0.10 + neuron_shift * 0.05;
+    let kind_tint = select(vec3<f32>(0.95, 0.99, 1.04), vec3<f32>(1.02, 1.0, 0.98), kind == 1u);
+    return base * shade * kind_tint;
+}
+
+fn soma_material(
+    base: vec3<f32>,
+    n: vec3<f32>,
+    world: vec3<f32>,
+    neuron_id: u32,
+    glow: f32,
+    flash: f32,
+) -> vec3<f32> {
+    let seed = mix_key(0u, neuron_id, 1u, IDENTITY_SALT ^ 0x51a3f27du);
+    let membrane = material_noise3(world * 2.4 + n * 0.8, seed);
+    let mottle = material_noise3(world * 6.5 + n * 1.4, seed ^ 0x7f4a7c15u);
+    let speck = material_noise3(world * 18.0, seed ^ 0xa511e9b3u);
+    let speckle = smoothstep(0.86, 1.0, speck) * 0.08;
+    let shade = 0.92 + (membrane - 0.5) * 0.18 + (mottle - 0.5) * 0.12 + speckle;
+    return base * shade + vec3<f32>(flash * 0.10 + glow * 0.04);
+}
+
+fn impulse_packet(path_pos: f32, age: f32, glow: f32, kind: u32) -> f32 {
+    if glow <= 0.0 {
+        return 0.0;
+    }
+    let speed = select(DENDRITE_ECHO_SPEED, AXON_IMPULSE_SPEED, kind == 1u);
+    let travel = age * speed;
+    let width = IMPULSE_WIDTH;
+    let delta = path_pos - travel;
+    let head = exp(-(delta * delta) / max(width * width, 1e-4));
+    let behind = max(travel - path_pos, 0.0);
+    let tail = exp(-behind / max(width * 2.6, 1e-4)) * select(0.0, 1.0, path_pos <= travel);
+    var packet = (head + tail * IMPULSE_TAIL_STRENGTH) * glow;
+    if kind == 0u {
+        packet = packet * DENDRITE_ECHO_STRENGTH * exp(-path_pos / DENDRITE_ECHO_RANGE);
+    }
+    return packet;
+}
+
+struct TubeVertOut {
     @builtin(position) pos: vec4<f32>,
-    @location(0) color: vec3<f32>,
-    @location(1) normal: vec3<f32>, // world-space tube normal (ring radial direction)
-    @location(2) view_dir: vec3<f32>, // world-space unit vector toward camera
+    @location(0) base_color: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) view_dir: vec3<f32>,
+    @location(3) world_pos: vec3<f32>,
+    @location(4) path_pos: f32,
+    @location(5) spike_age: f32,
+    @location(6) glow: f32,
+    @location(7) @interpolate(flat) kind: u32,
+    @location(8) @interpolate(flat) neuron_id: u32,
+}
+
+struct SphereVertOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) base_color: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) view_dir: vec3<f32>,
+    @location(3) world_pos: vec3<f32>,
+    @location(4) glow: f32,
+    @location(5) flash: f32,
+    @location(6) core: f32,
+    @location(7) @interpolate(flat) neuron_id: u32,
 }
 
 // ── Tube vertex generation ────────────────────────────────────────────────────
@@ -192,16 +355,17 @@ struct VertOut {
 fn vs_main(
     @builtin(vertex_index) vid: u32,
     @builtin(instance_index) inst: u32,
-) -> VertOut {
+) -> TubeVertOut {
     let seg = segments[inst];
     let a = seg.a;
     let b = seg.b;
 
     // ── Build tube basis ─────────────────────────────────────────────────────
     let axis = b - a;
+    let seg_len = length(axis);
     var tube_axis = normalize(axis);
     // Guard near-zero-length segments: output degenerate (at-a) rather than NaN.
-    if length(axis) < 1e-9 {
+    if seg_len < 1e-9 {
         tube_axis = vec3<f32>(0.0, 1.0, 0.0);
     }
 
@@ -248,71 +412,38 @@ fn vs_main(
     let endpoint = select(a, b, ring == 1u);
     let radius = select(seg.radius_a, seg.radius_b, ring == 1u) * u.width_scale;
     let world = endpoint + radial * radius;
+    let path_pos = seg.path_len + select(0.0, seg_len, ring == 1u);
 
     // ── Normal and view direction for lighting ────────────────────────────────
     let N = radial; // unit outward normal = radial direction
     let world_to_cam = u.camera_pos - world;
     let V = normalize(world_to_cam);
 
-    // ── Spike brightness / glow calculation (unchanged from billboard pass) ──
+    // ── Source timing + structural color ─────────────────────────────────────
     let packed = last_spike[seg.neuron_id];
     let ty = neuron_type(packed);
-    let ei = ty & 1u;            // 0 = excitatory, 1 = inhibitory
+    let ei = ty & 1u;
     let region = (ty >> 2u) & 0x3u;
+    let glow = select(0.0, spike_glow(u.tick, packed, u.glow_tau), u.connection_layer >= 1u && u.light_next == 1u);
+    let age = select(0.0, spike_age(u.tick, packed), glow > 0.0);
+    let color = branch_base_color(seg.kind, region, ei, u.color_by, seg.neuron_id);
 
-    // Resting structure brightness (always visible). Morph-config owned (v0.3.1).
-    var brightness = u.resting_brightness;
-
-    // Morphology controls: whole-connection lighting (connection_layer >= 1).
-    let BOOST: f32 = u.active_boost;
-    if u.connection_layer >= 1u {
-        var lit = 0.0;
-        let src_packed = last_spike[seg.neuron_id];
-        if u.light_next == 1u && has_spiked(src_packed) {
-            lit = max(lit, exp(-f32(tick_diff(u.tick, src_packed & TICK_MASK)) / max(u.glow_tau, 1.0)));
-        }
-        if u.light_past == 1u && seg.kind == 1u {
-            let tgt_packed = last_spike[seg.target_id];
-            if has_spiked(tgt_packed) {
-                lit = max(lit, exp(-f32(tick_diff(u.tick, tgt_packed & TICK_MASK)) / max(u.glow_tau, 1.0)));
-            }
-        }
-        brightness = brightness + lit * BOOST;
-    }
-
-    // ── Color ────────────────────────────────────────────────────────────────
-    // Dendrites: cool dim tint. Axons: E/I tinted (exc cool blue-white, inh warm
-    // red). color_by overrides axon tint with region colors when requested, or
-    // blends per-neuron identity color into the structural tint.
-    var color: vec3<f32>;
-    if seg.kind == 0u {
-        color = vec3<f32>(0.22, 0.34, 0.5); // cool, dim dendrite
-    } else {
-        if u.color_by == 0u {
-            // region: Input cool-blue, Assoc green, Output warm-orange.
-            if region == 0u { color = vec3<f32>(0.30, 0.55, 1.0); }
-            else if region == 1u { color = vec3<f32>(0.34, 0.9, 0.5); }
-            else { color = vec3<f32>(1.0, 0.55, 0.2); }
-        } else {
-            // E/I tint (default axon look): excitatory cool blue-white,
-            // inhibitory warm red.
-            color = select(vec3<f32>(0.55, 0.72, 1.0), vec3<f32>(1.0, 0.34, 0.28), ei == 1u);
-        }
-    }
-    if u.color_by == 5u {
-        color = mix(color, identity_color(seg.neuron_id), IDENTITY_MORPH_BLEND);
-    }
-
-    var out: VertOut;
+    var out: TubeVertOut;
     out.pos = u.mvp * vec4<f32>(world, 1.0);
-    out.color = color * brightness;
+    out.base_color = color;
     out.normal = N;
     out.view_dir = V;
+    out.world_pos = world;
+    out.path_pos = path_pos;
+    out.spike_age = age;
+    out.glow = glow;
+    out.kind = seg.kind;
+    out.neuron_id = seg.neuron_id;
     return out;
 }
 
 @fragment
-fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
+fn fs_main(in: TubeVertOut) -> @location(0) vec4<f32> {
     // ── Lighting model ────────────────────────────────────────────────────────
     // Simple ambient + half-Lambert diffuse + Fresnel-approximation rim.
     // Modulates the glow brightness so active/lit tubes punch through.
@@ -320,12 +451,19 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
     let V = normalize(in.view_dir);
     let L = normalize(u.light_dir); // pre-normalised in CPU but normalize again for safety
 
+    let packet = impulse_packet(in.path_pos, in.spike_age, in.glow, in.kind);
+    let legacy = in.glow * select(0.04, LEGACY_WHOLE_GLOW, in.kind == 1u);
+    let activity = legacy + packet;
+    let material = tube_material(in.base_color, N, in.world_pos, in.path_pos, in.neuron_id, in.kind);
+    let tint = mix(material, vec3<f32>(1.0), clamp(packet * 0.18, 0.0, 0.18));
+    let brightness = u.resting_brightness + activity * u.active_boost;
+
     let lambert = max(dot(N, L), 0.0);
     let nv = max(dot(N, V), 0.0);
-    let rim = pow(1.0 - nv, u.rim_power) * u.rim_intensity;
+    let rim = pow(1.0 - nv, u.rim_power) * u.rim_intensity * (1.0 + clamp(activity, 0.0, 1.0) * 0.25);
     let lighting = u.ambient + u.diffuse_intensity * lambert + rim;
 
-    let c = in.color * lighting;
+    let c = tint * brightness * lighting;
     if c.r + c.g + c.b < 0.002 { discard; }
     return vec4<f32>(c, 1.0);
 }
@@ -432,74 +570,58 @@ fn decode_sphere_vertex(vid: u32) -> vec3<f32> {
     }
 }
 
-// ── Sphere vertex output (reuses VertOut) ─────────────────────────────────────
-
 @vertex
 fn vs_sphere(
     @builtin(vertex_index) vid: u32,
     @builtin(instance_index) inst: u32,
-) -> VertOut {
+) -> SphereVertOut {
     let sph = sphere_instances[inst];
 
     // Unit outward normal = radial direction on the unit sphere.
     let dir = decode_sphere_vertex(vid);
 
-    // World position: soma center + dir * scaled radius.
-    let world = sph.center + dir * (sph.radius * su.width_scale);
-
-    let N = dir;
-    let V = normalize(su.camera_pos - world);
-
-    // ── Spike brightness — same logic as tube pass (keyed by neuron_id) ──────
+    // ── Source timing + sphere radius pulse ──────────────────────────────────
     let packed = sphere_last_spike[sph.neuron_id];
     let ty = neuron_type(packed);
     let ei = ty & 1u;
     let region = (ty >> 2u) & 0x3u;
+    let glow = select(0.0, spike_glow(su.tick, packed, su.glow_tau), su.connection_layer >= 1u && su.light_next == 1u);
+    let age = select(0.0, spike_age(su.tick, packed), glow > 0.0);
+    let flash = select(0.0, soma_flash(age, su.glow_tau), glow > 0.0);
+    let core = soma_core(age, glow);
+    let world = sph.center + dir * (sph.radius * su.width_scale * soma_radius_scale(glow, flash));
+    let N = dir;
+    let V = normalize(su.camera_pos - world);
 
-    var brightness = su.resting_brightness;
-    let SOMA_BOOST: f32 = su.active_boost;
-    if su.connection_layer >= 1u {
-        let src_packed = sphere_last_spike[sph.neuron_id];
-        if su.light_next == 1u && has_spiked(src_packed) {
-            let glow = exp(-f32(tick_diff(su.tick, src_packed & TICK_MASK)) / max(su.glow_tau, 1.0));
-            brightness = brightness + glow * SOMA_BOOST;
-        }
-    }
-
-    // ── Soma color — E/I and region, same scheme as axon tubes ───────────────
-    var color: vec3<f32>;
-    if su.color_by == 0u {
-        if region == 0u      { color = vec3<f32>(0.30, 0.55, 1.0); }
-        else if region == 1u { color = vec3<f32>(0.34, 0.9, 0.5); }
-        else                 { color = vec3<f32>(1.0, 0.55, 0.2); }
-    } else {
-        color = select(vec3<f32>(0.55, 0.72, 1.0), vec3<f32>(1.0, 0.34, 0.28), ei == 1u);
-    }
-    if su.color_by == 5u {
-        color = mix(color, identity_color(sph.neuron_id), IDENTITY_MORPH_BLEND);
-    }
-
-    var out: VertOut;
+    var out: SphereVertOut;
     out.pos = su.mvp * vec4<f32>(world, 1.0);
-    out.color = color * brightness;
+    out.base_color = soma_base_color(region, ei, su.color_by, sph.neuron_id);
     out.normal = N;
     out.view_dir = V;
+    out.world_pos = world;
+    out.glow = glow;
+    out.flash = flash;
+    out.core = core;
+    out.neuron_id = sph.neuron_id;
     return out;
 }
 
 @fragment
-fn fs_sphere(in: VertOut) -> @location(0) vec4<f32> {
+fn fs_sphere(in: SphereVertOut) -> @location(0) vec4<f32> {
     // Reuse the IDENTICAL lighting model from fs_main (ambient + diffuse + rim).
     let N = normalize(in.normal);
     let V = normalize(in.view_dir);
     let L = normalize(su.light_dir);
+    let material = soma_material(in.base_color, N, in.world_pos, in.neuron_id, in.glow, in.flash);
+    let brightness = su.resting_brightness + (in.glow * 0.55 + in.flash * 1.15) * su.active_boost;
 
     let lambert = max(dot(N, L), 0.0);
     let nv = max(dot(N, V), 0.0);
-    let rim = pow(1.0 - nv, su.rim_power) * su.rim_intensity;
+    let rim = pow(1.0 - nv, su.rim_power) * su.rim_intensity * (1.0 + in.flash * 0.45);
     let lighting = su.ambient + su.diffuse_intensity * lambert + rim;
+    let core = mix(material, vec3<f32>(1.0), 0.70) * in.core * 0.85;
 
-    let c = in.color * lighting;
+    let c = (material * brightness + core) * lighting;
     if c.r + c.g + c.b < 0.002 { discard; }
     return vec4<f32>(c, 1.0);
 }

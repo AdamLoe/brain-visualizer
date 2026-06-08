@@ -158,6 +158,40 @@ Detailed plan must answer before code starts:
 - What shader-cost budget is acceptable after v0.3.1's segment count?
 - What artifact set proves material polish and moving pulse both pass?
 
+### Preflight result — 2026-06-08
+
+- `MorphSegment` does not need to change for the first implementation. It
+  already carries `neuron_id`, `target_id`, `kind`, and cumulative `path_len`.
+- `MorphUniforms` should not change for the first implementation unless review
+  proves hardcoded/default-derived controls are insufficient. Existing `tick`,
+  `glow_tau`, `resting_brightness`, `active_boost`, `light_dir`, and lighting
+  fields are enough to start.
+- If `MorphUniforms` changes later, update Rust, WGSL, per-frame uniform writes,
+  and size asserts atomically. Far-pass pulse controls would be a separate
+  `RenderUniforms` contract, not a free reuse of morphology uniforms.
+- Existing morphology config classes are: `lighting.*` as live uniform writes,
+  `renderQuality.*` as renderer-rebuild controls, and `generator.*` as geometry
+  regeneration controls. Hidden review preset defaults belong to v0.4.0, not to
+  this stream.
+- Far and morphology shaders can share the same conceptual timing model from
+  packed `last_spike` plus `tick`.
+- Traveling impulse position should be derived as:
+
+```text
+local_path = seg.path_len + t * length(seg.b - seg.a)
+```
+
+  where `seg.path_len` is the segment-start distance and `t` is the local
+  interpolant from endpoint `a` to endpoint `b`.
+- Current state: v0.3.2 has lighting/soma/resting-active groundwork but lacks
+  deterministic soma/tube material variation; v0.3.3 has `last_spike` glow and
+  cumulative path lengths but still lacks a moving impulse packet and dedicated
+  soma pulse semantics.
+- Recommended order: confirm v0.3.1 `path_len`; implement v0.3.3 pulse in
+  `render_morphology.wgsl` and `render_far.wgsl` without layout changes; reduce
+  legacy whole-arbor glow; then layer v0.3.2 material polish on top; only add
+  config knobs if visual review forces them.
+
 ## Agent D - v0.3.4 Camera/Pan Detail Plan
 
 Read:

@@ -67,14 +67,13 @@ impl GpuCaps {
             .min(256);
         let workgroup_size = prev_pow2(wg_ceiling).max(1);
 
-        let max_neurons_per_binding =
-            limits.max_storage_buffer_binding_size / FIELD_ELEMENT_BYTES;
+        let max_neurons_per_binding = limits.max_storage_buffer_binding_size / FIELD_ELEMENT_BYTES;
 
         // One flat dispatch can launch (workgroups_per_dim × workgroup_size)
         // threads in X. Beyond that, callers must use 2-D dispatch (as the
         // bench does to dodge the 65535 cap).
-        let max_dispatch_threads_x = limits.max_compute_workgroups_per_dimension as u64
-            * workgroup_size as u64;
+        let max_dispatch_threads_x =
+            limits.max_compute_workgroups_per_dimension as u64 * workgroup_size as u64;
 
         // A single 1-D scan/bin pass is bounded by what one dispatch can cover.
         let max_scan_items = max_dispatch_threads_x;

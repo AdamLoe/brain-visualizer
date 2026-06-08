@@ -42,13 +42,22 @@ async fn run() {
     };
 
     println!("=== Phase 6 CPU backend check ===");
-    println!("N={N} K={K}  seed=0x{:x}  i_ext={I_EXT:.3}  synaptic_scale={SYN_SCALE:.3}", cfg.seed);
+    println!(
+        "N={N} K={K}  seed=0x{:x}  i_ext={I_EXT:.3}  synaptic_scale={SYN_SCALE:.3}",
+        cfg.seed
+    );
     #[cfg(feature = "cpu-threads")]
     let threads = rayon::current_num_threads();
     #[cfg(not(feature = "cpu-threads"))]
     let threads = 1usize;
-    println!("rayon threads = {threads} ({})",
-        if cfg!(feature = "cpu-threads") { "cpu-threads ON" } else { "single-threaded fallback" });
+    println!(
+        "rayon threads = {threads} ({})",
+        if cfg!(feature = "cpu-threads") {
+            "cpu-threads ON"
+        } else {
+            "single-threaded fallback"
+        }
+    );
 
     // ── Gate 1: determinism parity ────────────────────────────────────────────
     determinism_parity(&cfg);
@@ -162,10 +171,17 @@ fn determinism_parity(cfg: &SimConfig) {
     let matches = cpu_targets == shared_targets;
     println!("\n--- Gate 1: determinism parity (neuron 0, first 100 targets) ---");
     println!("CPU  targets[0..10] = {:?}", &cpu_targets[..10]);
-    println!("Rust targets[0..10] = {:?}  (== WGSL via wgsl_target_determinism gate)", &shared_targets[..10]);
+    println!(
+        "Rust targets[0..10] = {:?}  (== WGSL via wgsl_target_determinism gate)",
+        &shared_targets[..10]
+    );
     println!(
         "first-100 targets match: {}",
-        if matches { "PASS (bit-identical)" } else { "FAIL (DIVERGENCE)" }
+        if matches {
+            "PASS (bit-identical)"
+        } else {
+            "FAIL (DIVERGENCE)"
+        }
     );
     assert!(matches, "CPU vs shared Rust target() diverged for neuron 0");
     let _ = SpatialGrid::cell_count; // keep import meaningful
@@ -174,8 +190,7 @@ fn determinism_parity(cfg: &SimConfig) {
 /// Gates 3 & 4: lazy decay + render decay correctness using the real core fns.
 fn decay_correctness(cfg: &SimConfig) {
     let manifold = brain_visualizer::build_manifold(cfg);
-    let mut bufs =
-        CpuNeuronBuffers::build(cfg, &manifold.neuron_regions, &manifold.spatial_grid);
+    let mut bufs = CpuNeuronBuffers::build(cfg, &manifold.neuron_regions, &manifold.spatial_grid);
     let params = LifParams {
         excitability: 0.0,
         ..LifParams::new(I_EXT, SYN_SCALE, cfg.fixed_point_scale as f32)
@@ -207,7 +222,11 @@ fn decay_correctness(cfg: &SimConfig) {
     );
     println!(
         "render decay: v_render of untouched neuron after 500 ticks = {render_v:.3e}  -> {}",
-        if render_v.abs() < 1e-6 { "PASS (~0, no stale glow)" } else { "FAIL" }
+        if render_v.abs() < 1e-6 {
+            "PASS (~0, no stale glow)"
+        } else {
+            "FAIL"
+        }
     );
     assert!(lazy_v.abs() < 1e-6, "lazy decay did not reach ~0");
     assert!(render_v.abs() < 1e-6, "render decay did not reach ~0");

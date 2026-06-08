@@ -134,7 +134,8 @@ interface SavedVisualizerSettings {
 }
 
 // ─── localStorage key ────────────────────────────────────────────────────────
-const LS_KEY = "bv2_settings_v1";
+export const SETTINGS_LS_KEY = "bv2_settings_v1";
+const LS_KEY = SETTINGS_LS_KEY;
 
 // ─── persistence helpers ─────────────────────────────────────────────────────
 
@@ -246,6 +247,13 @@ export function setSetting<K extends keyof VisualizerSettings>(
   value: VisualizerSettings[K],
 ): void {
   current = { ...current, [key]: value };
+  saveSettings(current);
+  notify();
+}
+
+/** Replace the full settings payload, persist once, and notify subscribers once. */
+export function replaceSettings(next: VisualizerSettings): void {
+  current = { ...next };
   saveSettings(current);
   notify();
 }

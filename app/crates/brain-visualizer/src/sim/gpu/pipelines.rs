@@ -177,14 +177,16 @@ impl GpuPipelines {
             ],
             immediate_size: 0,
         });
-        self.integrate = Some(device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("integrate"),
-            layout: Some(&integrate_pl),
-            module: &integrate_module,
-            entry_point: Some("integrate"),
-            compilation_options: Default::default(),
-            cache: None,
-        }));
+        self.integrate = Some(
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("integrate"),
+                layout: Some(&integrate_pl),
+                module: &integrate_module,
+                entry_point: Some("integrate"),
+                compilation_options: Default::default(),
+                cache: None,
+            }),
+        );
 
         let dispatch_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("write-dispatch-pl"),
@@ -213,14 +215,16 @@ impl GpuPipelines {
             ],
             immediate_size: 0,
         });
-        self.scatter = Some(device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("scatter"),
-            layout: Some(&scatter_pl),
-            module: &scatter_module,
-            entry_point: Some("scatter"),
-            compilation_options: Default::default(),
-            cache: None,
-        }));
+        self.scatter = Some(
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("scatter"),
+                layout: Some(&scatter_pl),
+                module: &scatter_module,
+                entry_point: Some("scatter"),
+                compilation_options: Default::default(),
+                cache: None,
+            }),
+        );
 
         // ─── V2 Phase A: metrics reduction compute pipeline ───────────────────
         let metrics_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -235,14 +239,16 @@ impl GpuPipelines {
             ],
             immediate_size: 0,
         });
-        self.metrics = Some(device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("reduce_metrics"),
-            layout: Some(&metrics_pl),
-            module: &metrics_module,
-            entry_point: Some("reduce_metrics"),
-            compilation_options: Default::default(),
-            cache: None,
-        }));
+        self.metrics = Some(
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("reduce_metrics"),
+                layout: Some(&metrics_pl),
+                module: &metrics_module,
+                entry_point: Some("reduce_metrics"),
+                compilation_options: Default::default(),
+                cache: None,
+            }),
+        );
 
         // ─── V2 Phase D: active-edge emit compute pipeline ─────────────────────
         // Prepend HASH_WGSL so the mirrored target_neuron has mix_key/hash32.
@@ -259,14 +265,16 @@ impl GpuPipelines {
             ],
             immediate_size: 0,
         });
-        self.emit_edges = Some(device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("emit_edges"),
-            layout: Some(&emit_pl),
-            module: &emit_module,
-            entry_point: Some("emit_edges"),
-            compilation_options: Default::default(),
-            cache: None,
-        }));
+        self.emit_edges = Some(
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("emit_edges"),
+                layout: Some(&emit_pl),
+                module: &emit_module,
+                entry_point: Some("emit_edges"),
+                compilation_options: Default::default(),
+                cache: None,
+            }),
+        );
     }
 
     /// Build the Phase 3 render + stimulate pipelines.
@@ -288,14 +296,16 @@ impl GpuPipelines {
             bind_group_layouts: &[Some(&layouts.stimulate_bgl)],
             immediate_size: 0,
         });
-        self.stimulate = Some(device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("stimulate"),
-            layout: Some(&stim_pl),
-            module: &stim_module,
-            entry_point: Some("stimulate"),
-            compilation_options: Default::default(),
-            cache: None,
-        }));
+        self.stimulate = Some(
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("stimulate"),
+                layout: Some(&stim_pl),
+                module: &stim_module,
+                entry_point: Some("stimulate"),
+                compilation_options: Default::default(),
+                cache: None,
+            }),
+        );
 
         // --- Manifold dark mesh ---
         let manifold_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -383,40 +393,42 @@ impl GpuPipelines {
                 operation: wgpu::BlendOperation::Add,
             },
         };
-        self.render_far = Some(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("render_far"),
-            layout: Some(&far_pl),
-            vertex: wgpu::VertexState {
-                module: &far_module,
-                entry_point: Some("vs_main"),
-                buffers: &[], // no vertex buffers; all data from storage bindings
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &far_module,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: color_format,
-                    blend: Some(additive_blend),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
+        self.render_far = Some(
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("render_far"),
+                layout: Some(&far_pl),
+                vertex: wgpu::VertexState {
+                    module: &far_module,
+                    entry_point: Some("vs_main"),
+                    buffers: &[], // no vertex buffers; all data from storage bindings
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &far_module,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: color_format,
+                        blend: Some(additive_blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                // No depth attachment — all neurons are visible from any angle.
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
             }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            // No depth attachment — all neurons are visible from any angle.
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        }));
+        );
 
         // ─── V2 Phase D: active-edge ribbon render (additive, no depth) ────────
         // Prepend HASH_WGSL so the seeded perpendicular curl can call hash32.
@@ -430,39 +442,41 @@ impl GpuPipelines {
             bind_group_layouts: &[Some(&layouts.render_ribbon_bgl)],
             immediate_size: 0,
         });
-        self.render_ribbon = Some(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("render_ribbon"),
-            layout: Some(&ribbon_pl),
-            vertex: wgpu::VertexState {
-                module: &ribbon_module,
-                entry_point: Some("vs_main"),
-                buffers: &[], // all geometry from the edge_buffer storage binding
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &ribbon_module,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: color_format,
-                    blend: Some(additive_blend),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
+        self.render_ribbon = Some(
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("render_ribbon"),
+                layout: Some(&ribbon_pl),
+                vertex: wgpu::VertexState {
+                    module: &ribbon_module,
+                    entry_point: Some("vs_main"),
+                    buffers: &[], // all geometry from the edge_buffer storage binding
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &ribbon_module,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: color_format,
+                        blend: Some(additive_blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None, // ribbons are two-sided
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: None, // additive bloom layer, no depth interaction
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
             }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None, // ribbons are two-sided
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None, // additive bloom layer, no depth interaction
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        }));
+        );
 
         // ─── Morphology: tube + soma-sphere render pipelines ───────────────────
         // v0.3.1: tessellation (TUBE_SIDES / SPHERE_SLICES / SPHERE_STACKS) is now
@@ -498,51 +512,61 @@ impl GpuPipelines {
             immediate_size: 0,
         });
 
-        let make_fullscreen = |label: &str,
-                               pl: &wgpu::PipelineLayout,
-                               fs_entry: &str,
-                               fmt: wgpu::TextureFormat| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(pl),
-                vertex: wgpu::VertexState {
-                    module: &bloom_module,
-                    entry_point: Some("vs_fullscreen"),
-                    buffers: &[],
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &bloom_module,
-                    entry_point: Some(fs_entry),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: fmt,
-                        blend: Some(wgpu::BlendState::REPLACE),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: None,
-                    polygon_mode: wgpu::PolygonMode::Fill,
-                    unclipped_depth: false,
-                    conservative: false,
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
+        let make_fullscreen =
+            |label: &str, pl: &wgpu::PipelineLayout, fs_entry: &str, fmt: wgpu::TextureFormat| {
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some(label),
+                    layout: Some(pl),
+                    vertex: wgpu::VertexState {
+                        module: &bloom_module,
+                        entry_point: Some("vs_fullscreen"),
+                        buffers: &[],
+                        compilation_options: Default::default(),
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &bloom_module,
+                        entry_point: Some(fs_entry),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: fmt,
+                            blend: Some(wgpu::BlendState::REPLACE),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                        compilation_options: Default::default(),
+                    }),
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleList,
+                        strip_index_format: None,
+                        front_face: wgpu::FrontFace::Ccw,
+                        cull_mode: None,
+                        polygon_mode: wgpu::PolygonMode::Fill,
+                        unclipped_depth: false,
+                        conservative: false,
+                    },
+                    depth_stencil: None,
+                    multisample: wgpu::MultisampleState::default(),
+                    multiview_mask: None,
+                    cache: None,
+                })
+            };
 
-        self.bloom_bright =
-            Some(make_fullscreen("bloom_bright", &bloom_pass_pl, "fs_bright", hdr_format));
-        self.bloom_blur =
-            Some(make_fullscreen("bloom_blur", &bloom_pass_pl, "fs_blur", hdr_format));
-        self.bloom_composite =
-            Some(make_fullscreen("bloom_composite", &composite_pl, "fs_composite", color_format));
+        self.bloom_bright = Some(make_fullscreen(
+            "bloom_bright",
+            &bloom_pass_pl,
+            "fs_bright",
+            hdr_format,
+        ));
+        self.bloom_blur = Some(make_fullscreen(
+            "bloom_blur",
+            &bloom_pass_pl,
+            "fs_blur",
+            hdr_format,
+        ));
+        self.bloom_composite = Some(make_fullscreen(
+            "bloom_composite",
+            &composite_pl,
+            "fs_composite",
+            color_format,
+        ));
     }
 
     /// Morphology tube + soma-sphere render pipelines (additive, no depth).
@@ -706,14 +730,16 @@ impl GpuPipelines {
             immediate_size: 0,
         });
 
-        self.cull_neurons = Some(device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("cull_neurons"),
-            layout: Some(&cull_pl),
-            module: &cull_module,
-            entry_point: Some("cull_neurons"),
-            compilation_options: Default::default(),
-            cache: None,
-        }));
+        self.cull_neurons = Some(device.create_compute_pipeline(
+            &wgpu::ComputePipelineDescriptor {
+                label: Some("cull_neurons"),
+                layout: Some(&cull_pl),
+                module: &cull_module,
+                entry_point: Some("cull_neurons"),
+                compilation_options: Default::default(),
+                cache: None,
+            },
+        ));
         self.cull_synapses = Some(device.create_compute_pipeline(
             &wgpu::ComputePipelineDescriptor {
                 label: Some("cull_synapses"),
@@ -759,8 +785,8 @@ impl GpuPipelines {
         // Alpha-blend for near-LOD (src=SrcAlpha, dst=OneMinusSrcAlpha) so
         // crossfade with far-LOD works via lod_alpha in the uniform.
         let alpha_blend = wgpu::BlendState::ALPHA_BLENDING;
-        self.render_sphere = Some(device.create_render_pipeline(
-            &wgpu::RenderPipelineDescriptor {
+        self.render_sphere = Some(
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("render_sphere"),
                 layout: Some(&sphere_pl),
                 vertex: wgpu::VertexState {
@@ -816,8 +842,8 @@ impl GpuPipelines {
                 multisample: wgpu::MultisampleState::default(),
                 multiview_mask: None,
                 cache: None,
-            },
-        ));
+            }),
+        );
 
         // ─── Cylinder render pipeline ─────────────────────────────────────────
         let cyl_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -886,9 +912,7 @@ impl GpuPipelines {
     }
 
     pub fn is_render_built(&self) -> bool {
-        self.render_far.is_some()
-            && self.render_manifold.is_some()
-            && self.stimulate.is_some()
+        self.render_far.is_some() && self.render_manifold.is_some() && self.stimulate.is_some()
     }
 
     pub fn is_near_lod_built(&self) -> bool {

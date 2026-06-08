@@ -93,11 +93,7 @@ impl CpuNeuronBuffers {
     /// Build silent-start buffers for `config.n` neurons from the manifold's
     /// region assignment and spatial grid. Same silent-start packing as the GPU
     /// path (`initial_last_spike`): HAS_SPIKED = 0, type bits set, tick = 0.
-    pub fn build(
-        config: &SimConfig,
-        regions: &[RegionKind],
-        grid: &SpatialGrid,
-    ) -> Self {
+    pub fn build(config: &SimConfig, regions: &[RegionKind], grid: &SpatialGrid) -> Self {
         let n = config.n;
         let seed_lo = config.seed_lo();
         let cell_of_neuron = grid.cell_of_neuron_map();
@@ -179,8 +175,7 @@ pub fn integrate_neuron(
         || tick_diff(current_tick, last_fire) > params.refractory_ticks;
     if new_v >= params.threshold && refractory_ok {
         buffers.v[i] = params.reset_potential;
-        buffers.last_spike[i] =
-            HAS_SPIKED_MASK | (ntype << 24) | (current_tick & TICK_MASK);
+        buffers.last_spike[i] = HAS_SPIKED_MASK | (ntype << 24) | (current_tick & TICK_MASK);
         return true;
     }
     false

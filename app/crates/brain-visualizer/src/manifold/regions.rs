@@ -37,7 +37,8 @@ pub fn assign_regions(positions: &[[f32; 3]], _axis: [f32; 3]) -> Vec<RegionKind
     let mut order: Vec<usize> = (0..n).collect();
     order.sort_by_key(|&i| {
         let i = i as u32;
-        i.wrapping_mul(2654435761).wrapping_add(i.wrapping_mul(1234567891) >> 4)
+        i.wrapping_mul(2654435761)
+            .wrapping_add(i.wrapping_mul(1234567891) >> 4)
     });
 
     let mut regions = vec![RegionKind::Association; n];
@@ -57,9 +58,7 @@ mod tests {
     #[test]
     fn split_is_roughly_30_40_30() {
         // 1000 points spread along the axis.
-        let positions: Vec<[f32; 3]> = (0..1000)
-            .map(|i| [0.0, 0.0, i as f32 / 1000.0])
-            .collect();
+        let positions: Vec<[f32; 3]> = (0..1000).map(|i| [0.0, 0.0, i as f32 / 1000.0]).collect();
         let regions = assign_regions(&positions, [0.0, 0.0, 1.0]);
 
         let count = |k: RegionKind| regions.iter().filter(|&&r| r == k).count();

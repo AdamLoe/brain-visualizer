@@ -5,10 +5,11 @@
 - **Decision.** All tuning controls, sim-drive knobs, and diagnostic readouts
   live in a hidden overlay (`?dev=1` / backtick / gear button) rather than the
   public UI.
-- **Why.** The public surface is intentionally minimal — just the visualisation
-  and a few beauty presets. Exposing dozens of sliders to all visitors adds
-  visual noise and invites accidental mis-tuning. The hidden panel gives
-  developers full access without polluting the product surface.
+- **Why.** The public surface is intentionally minimal — just the visualisation,
+  transport, and top-level toggles. Exposing dozens of sliders or review
+  presets to all visitors adds visual noise and invites accidental mis-tuning.
+  The hidden panel gives developers full access without polluting the product
+  surface.
 - **Applies to.** [`../architecture/dev-panel.md`](../architecture/dev-panel.md).
 - **Code anchors.** `web/src/ui/dev-panel.ts → DevPanel` (open triggers);
   `web/src/main.ts` (wires the gear button via `onVisibilityChange`).
@@ -28,34 +29,41 @@
   SettingImpact>`; it does not express per-value conditions (e.g. "live unless
   changing from 0"). That granularity has not been needed.
 
-## All settings currently live; brain-reset and renderer-rebuild slots preserved
+## Most settings are live; rebuild-only controls stay explicit
 
-- **Decision.** Every `VisualizerSettings` field is currently classified
-  `"live"` in `SETTING_IMPACT`. The `brain-reset` API slots
-  (`ApplyHandlers`, pending-dot, `clearPendingBrainReset`) are preserved as no-ops.
+- **Decision.** Most `VisualizerSettings` fields are `"live"`, but
+  `connectionCurveLift` stays `"renderer-rebuild"` and the descriptor-driven
+  morphology generator/render-quality groups are still rebuild-backed. The
+  `brain-reset` API slots (`ApplyHandlers`, pending-dot, `clearPendingBrainReset`)
+  are preserved as no-ops.
 - **Why.** `heterogeneity`, `weightNormalization`, and `inputMode` are `"live"`
   because the integrate uniform is read from GPU memory every tick rather than
-  cached at init. Keeping the API slots costs
-  nothing and avoids breaking callers.
+  cached at init. `connectionCurveLift` and the morphology generator/quality
+  controls still change baked geometry or WGSL overrides, so keeping them
+  explicit avoids pretending they are cheap live knobs.
 - **Applies to.** [`../architecture/dev-panel.md`](../architecture/dev-panel.md).
 - **Revisit when.** A truly structural setting is added (e.g. one that changes
   buffer sizes or requires re-uploading connectivity).
 
-## Versioned localStorage with merge-over-defaults; no preset manager
+## Versioned localStorage with merge-over-defaults; static hidden review presets only
 
 - **Decision.** Dev-panel settings persist under a versioned key
-  (`bv2_settings_v1`) and app runtime config persists under `bv2_config_v1`. On
-  load, saved fields are merged over defaults field-by-field with `?? base`
-  guards. There is no preset manager — the Reset button removes both keys and
-  reverts their in-memory stores and visible controls to defaults.
+  (`bv2_settings_v1`), morphology config persists under `bv2_morph_v1`, and app
+  runtime config persists under `bv2_config_v1`. On load, saved fields are
+  merged over defaults field-by-field with `?? base` guards. There is still no
+  public preset manager; the only presets are the static hidden review buttons
+  `accepted-default`, `performance-review`, and `hero-review` in the Storage tab.
 - **Why.** Merge-over-defaults means adding a new field is safe without a
   version bump and without migration logic: the new field simply falls back to
   its default for existing saves. A version bump is reserved for semantically
   breaking changes (repurposed indices, changed defaults) where old data would
-  actively mislead. A preset manager adds infrastructure complexity for a
-  developer-facing tool; Reset covers the primary need.
+  actively mislead. The review presets cover the reproducibility need without
+  growing a user-editable preset system.
 - **Applies to.** [`../architecture/dev-panel.md`](../architecture/dev-panel.md).
-- **Code anchors.** `web/src/core/settings.ts → loadSettings, mergeOver, resetSettings`; `web/src/core/types.ts → loadConfig, resetConfig`.
+- **Code anchors.** `web/src/core/settings.ts → loadSettings, mergeOver, resetSettings`;
+  `web/src/core/morph-config.ts → loadMorphConfig, resetMorphConfig`;
+  `web/src/core/types.ts → loadConfig, resetConfig`;
+  `web/src/ui/dev-panel.ts → HIDDEN_REVIEW_PRESETS`.
 - **Tradeoffs.** No migration: users who had meaningful `dev` knob values set
   before a breaking change lose them silently. Acceptable for a dev panel.
 

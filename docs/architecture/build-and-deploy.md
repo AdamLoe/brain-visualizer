@@ -18,7 +18,10 @@ SharedArrayBuffer both work.
 - The `cpu-threads` cargo feature and the two different thread backends it unlocks (`crates/brain-visualizer/Cargo.toml → [features]`).
 - COOP/COEP header strategy: dev/preview server headers (`web/vite.config.ts → crossOriginIsolation`) and the static-host service-worker shim (`web/public/coi-serviceworker.js`).
 - The offline verification surface: the `crates/brain-visualizer/examples/` harnesses (see below).
-- The test gates: `cargo test`, vitest unit tests, Playwright e2e (`web/package.json → scripts`).
+- The test gates: `cargo test -p brain-visualizer`,
+  `cargo run -p brain-visualizer --example render_check`,
+  `cargo run -p brain-visualizer --example morph_view`, vitest unit tests,
+  Playwright e2e, and the production bundle build (`web/package.json → scripts`).
 - The `wasmHotRebuild` Vite plugin that watches `crates/brain-visualizer/src/**/*.rs` and `crates/brain-visualizer/Cargo.toml` during `dev` and triggers debounced `wasm-pack build --dev` + full browser reload (`web/vite.config.ts → wasmHotRebuild`).
 
 ## What it does NOT own
@@ -51,7 +54,19 @@ spawns another `wasm-pack build --dev`, and sends `full-reload` to the browser.
 Rebuilds are serialized: a burst of saves collapses into one build.
 
 `npm run preview` serves the already-built `dist/` with the same COOP/COEP
-headers as `dev`, making it the closest local approximation of the deployed site.
+headers as `dev`, making it the closest local approximation of the deployed
+site. For showcase/defaults work, the local verification sequence is:
+
+1. `npm run build`
+2. `npm run preview`
+3. confirm `Cross-Origin-Opener-Policy: same-origin` and
+   `Cross-Origin-Embedder-Policy: require-corp`
+4. load the built page in Chromium and record whether a real WebGPU adapter was
+   available
+
+If Chromium can boot the page but `requestAdapter()` returns no adapter, that is
+an environment blocker for final beauty review, not evidence that the build path
+is broken.
 
 ## Cross-platform Rust crate
 
@@ -100,10 +115,11 @@ required for code-splitting inside the CPU coordinator worker and for
 
 ## Offline verification surface (the examples)
 
-The `crates/brain-visualizer/examples/` directory contains runnable host harnesses that exercise the
-production Rust code against the native wgpu device (llvmpipe on WSL2). They are
-the primary offline correctness gate because the browser is not available in the
-build environment.
+The `crates/brain-visualizer/examples/` directory contains runnable host
+harnesses that exercise the production Rust code against the native wgpu device
+(llvmpipe on WSL2). They are the primary offline correctness gate when browser
+WebGPU is unavailable or when a preview build needs native shader/render
+confirmation.
 
 **Key gotcha: llvmpipe is a CPU software rasteriser exposed as a Vulkan ICD.
 Numbers from these harnesses are software-emulation throughput, not real GPU
@@ -115,15 +131,15 @@ substitute for browser WebGPU numbers on real hardware.**
 | `cpu_check.rs` | `cargo run --release --example cpu_check --features cpu-threads` | CPU/GPU parity: first 100 synapse targets, firing-rate agreement within ±10%, lazy decay, render decay. |
 | `sim_check.rs` | `cargo run --release --example sim_check` | GPU dynamics: non-zero spikes, excitability sweep (sleep→seizure), no NaN/overflow under seizure, i32 accumulator range. |
 | `soc_sweep.rs` | `cargo run --release --example soc_sweep` | Criticality sweep: i_ext parameter sweep + five brain-state acceptance bands. |
-| `render_check.rs` | `cargo run --release --example render_check` | Render pipeline: offscreen render to 512×512 texture, non-black pixels, distinct region colours, stimulation response, zero Naga shader-compile errors. |
+| `render_check.rs` | `cargo run -p brain-visualizer --example render_check` | Render pipeline: offscreen render to 512×512 texture, non-black pixels, distinct region colours, stimulation response, morphology draw, bloom path, zero Naga shader-compile errors. |
 | `near_lod_check.rs` | `cargo run --release --example near_lod_check` | Near-LOD retirement: instance counts at close/far distance, clamp/overflow counters. |
-| `morph_view.rs` | `cargo run --example morph_view` | Morphology renderer: renders three camera views to `/tmp/morph_{0,1,2,3}.rgba` for manual visual inspection; asserts non-black pixels. |
+| `morph_view.rs` | `cargo run -p brain-visualizer --example morph_view` | Morphology renderer: renders the accepted-default review views to `/tmp/morph_{0,1,2,3}.rgba` plus JSON stats artifacts for manual/defaults inspection; asserts non-black pixels. |
 
 ## Test gates
 
-Three test surfaces, all runnable offline:
+Five verification surfaces are used regularly:
 
-**`cargo test`** — unit + integration tests on the host. Includes:
+**`cargo test -p brain-visualizer`** — unit + integration tests on the host. Includes:
 - `crates/brain-visualizer/src/gpu_limits.rs` — `GpuCaps::derive` correctness against fixture inputs.
 - `crates/brain-visualizer/src/sim/scaler.rs` — `propose` shrink/grow/clamp logic.
 - `crates/brain-visualizer/tests/wgsl_hash_determinism.rs` — runs the production `hash.wgsl` under
@@ -136,9 +152,15 @@ Three test surfaces, all runnable offline:
   sweep and asserts qualitative dynamics (non-zero spikes, seizure > focused,
   no NaN/overflow). Skips if no adapter available.
 
+**`cargo run -p brain-visualizer --example render_check`** — native production-render smoke gate for render, morphology, stimulation, and bloom.
+
+**`cargo run -p brain-visualizer --example morph_view`** — native review-artifact/defaults gate for the accepted-default morphology views and stats ledger.
+
 **`npm test` (vitest)** — pure-logic TypeScript unit tests (`web/**/*.test.ts`).
 Runs in Node without a browser. Covers `scalerDecide`, `tickExcitability`, and
 other pure functions.
+
+**`npm run build`** — production bundle gate (`wasm-pack` + `tsc --noEmit` + `vite build`). This is required for any change that can affect shipped WASM imports, bundle wiring, or first-load behavior.
 
 **`npm run test:e2e` (Playwright)** — browser integration tests
 (`web/e2e/brain_visualizer.spec.ts`). Covers: smoke/boot (WASM loads, no
@@ -150,6 +172,9 @@ automatically. The port is hard-coded: Vite falls back to 5174+ when 5173 is
 already held by a stale `npm run dev`, and a manual e2e run would then point at
 the wrong server. Stop the process on 5173 before starting (see
 [`../agent-context/dev-loop.md`](../agent-context/dev-loop.md) → "Run the app").
+
+When the task is specifically about shipping/defaults/build behavior, also run
+`npm run preview` against the built `dist/` and confirm the isolation headers.
 
 ## Update when
 

@@ -1,22 +1,25 @@
 # Manifold decisions
 
-## Procedurally folded brain surface (gyri/sulci), no external mesh assets
+## Procedural brain-shaped shell and shell-biased placement, no external mesh assets
 
 - **Decision.** The cortical surface is generated entirely in code via icosphere
-  subdivision followed by two-octave simplex noise gyrification; no external mesh
-  files are loaded or bundled. Neuron count may be reduced to preserve the
-  brain-like visual shape.
+  subdivision, a shared deterministic brain-envelope shaping pass, and
+  two-octave simplex-noise gyrification; no external mesh files are loaded or
+  bundled. Neuron placement uses that same envelope and is biased toward the
+  cortical shell rather than filling a uniform sphere.
 - **Why.** A flat patch or smooth blob does not read as a brain to a visitor. The
-  visual recognizability — folded gyri and sulci — is the point of the project.
-  Procedural generation keeps the repo asset-free, makes the surface deterministic
-  and seed-reproducible, and lets the subdivision level be tuned at runtime.
+  visual recognizability — silhouette first, folds second — is the point of the
+  project. Using one host-side envelope for both shell generation and placement
+  keeps the mesh and neuron cloud in agreement, while still preserving the
+  asset-free, deterministic, seed-reproducible generation route.
 - **Applies to.** [`../architecture/manifold.md`](../architecture/manifold.md)
 - **Code anchors.** `crates/brain-visualizer/src/manifold/icosphere.rs → icosphere`;
   `crates/brain-visualizer/src/manifold/gyrify.rs → GyrifyParams, gyrify`;
-  `crates/brain-visualizer/src/manifold/mod.rs → ManifoldParams`
+  `crates/brain-visualizer/src/manifold/mod.rs → ManifoldParams, brain_outer_radius, place_neurons`
 - **Tradeoffs.** The simplex noise approach produces plausible but not
-  anatomically accurate sulcal geometry. That is acceptable — the goal is
-  recognizable impression, not neuroscience fidelity.
+  anatomically accurate sulcal geometry, and the shell-biased placement is still
+  a stylized cortical volume rather than a real anatomical tissue model. That is
+  acceptable — the goal is recognizable impression, not neuroscience fidelity.
 - **Revisit when.** A specific gyral atlas is required for region-accurate
   stimulation experiments, or when a real mesh can be streamed without bundling
   a large asset.
@@ -44,8 +47,11 @@
   dendrite tree, a deterministic shared trunk/root, 2-5 cluster branches, and
   one terminal twig per unique non-self target. The generator uses a locked
   morphology preset plus build stats, source-type bytes derived from region+seed,
-  deterministic sockets, and named per-kind segment budgets with slack. The
-  branch grammar is cubic Bezier, not a sin-bow or Catmull-Rom.
+  deterministic sockets, and named per-kind segment budgets with slack. Every
+  biological branch is emitted as a sampled cubic-Bezier chain, and `path_len`
+  follows the actual emitted branch distance from the soma rather than a global
+  sequential cursor. The branch grammar is cubic Bezier, not a sin-bow or
+  Catmull-Rom.
 - **Why.** Independent per-target splines read like unrelated sticks; they do
   not show shared structure or terminal identity. A shared arbor with visible
   sockets gives the brain connected directional grain while still making the

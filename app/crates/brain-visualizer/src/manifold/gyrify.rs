@@ -32,18 +32,20 @@ impl Default for GyrifyParams {
     }
 }
 
-/// Displace unit-sphere vertices along their normal (which equals the position
-/// for a unit sphere) by the two-octave noise field. Returns folded vertices at
-/// roughly `radius`. Deterministic in `seed`.
-pub fn gyrify(unit_vertices: &[[f32; 3]], params: &GyrifyParams, seed: u32) -> Vec<[f32; 3]> {
+/// Displace base-envelope vertices along their outward direction by the
+/// two-octave noise field. The local envelope radius is preserved and the fold
+/// amplitudes are applied as a fraction of that radius, so the same noise
+/// params work for both the old sphere and the shaped brain shell.
+pub fn gyrify(base_vertices: &[[f32; 3]], params: &GyrifyParams, seed: u32) -> Vec<[f32; 3]> {
     // Two independent noise fields (different seeds) so octaves decorrelate.
     let gyri = OpenSimplex::new(seed);
     let sulci = OpenSimplex::new(seed.wrapping_add(0x9e37_79b9));
 
-    unit_vertices
+    base_vertices
         .iter()
         .map(|&p| {
-            let n = normalize(p); // outward normal == direction on unit sphere
+            let n = normalize(p);
+            let base_radius = length(p).max(1e-5);
             let gp = [
                 (n[0] as f64) * params.gyri_freq,
                 (n[1] as f64) * params.gyri_freq,
@@ -57,10 +59,11 @@ pub fn gyrify(unit_vertices: &[[f32; 3]], params: &GyrifyParams, seed: u32) -> V
             // Noise in [-1, 1] (OpenSimplex range is roughly [-1,1]).
             let g = gyri.get(gp) as f32;
             let s = sulci.get(sp) as f32;
-            let displacement = params.radius
-                + g * params.gyri_amp * params.radius
-                + s * params.sulci_amp * params.radius;
-            [n[0] * displacement, n[1] * displacement, n[2] * displacement]
+            let radius = base_radius
+                * (params.radius
+                    + g * params.gyri_amp * params.radius
+                    + s * params.sulci_amp * params.radius);
+            [n[0] * radius, n[1] * radius, n[2] * radius]
         })
         .collect()
 }
@@ -73,6 +76,11 @@ fn normalize(v: [f32; 3]) -> [f32; 3] {
     } else {
         [v[0] / len, v[1] / len, v[2] / len]
     }
+}
+
+#[inline]
+fn length(v: [f32; 3]) -> f32 {
+    (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
 }
 
 #[cfg(test)]
@@ -101,7 +109,11 @@ mod tests {
             .collect();
         let min = radii.iter().cloned().fold(f32::INFINITY, f32::min);
         let max = radii.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-        assert!(max - min > 0.05, "surface is too smooth: range {}", max - min);
+        assert!(
+            max - min > 0.05,
+            "surface is too smooth: range {}",
+            max - min
+        );
         // Within [1 - (0.15+0.05) - eps, 1 + (0.15+0.05) + eps].
         assert!(min > 0.70 && max < 1.30, "folds out of expected band");
     }

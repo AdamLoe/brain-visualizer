@@ -184,7 +184,11 @@ pub fn neuron_type_byte(neuron_id: u32, seed_lo: u32, region: crate::manifold::R
 /// Pack an initial silent-start `last_spike` word: `HAS_SPIKED = 0`, type bits
 /// set, tick = 0 (BV21).
 #[inline]
-pub fn initial_last_spike(neuron_id: u32, seed_lo: u32, region: crate::manifold::RegionKind) -> u32 {
+pub fn initial_last_spike(
+    neuron_id: u32,
+    seed_lo: u32,
+    region: crate::manifold::RegionKind,
+) -> u32 {
     ((neuron_type_byte(neuron_id, seed_lo, region) as u32) << 24) & TYPE_MASK
 }
 
@@ -256,7 +260,10 @@ mod tests {
         // Silent start: HAS_SPIKED clear, tick bits 0, type bits set.
         assert!(!has_spiked(w));
         assert_eq!(w & TICK_MASK, 0);
-        assert_eq!(neuron_type(w), neuron_type_byte(7, 0x5eed, RegionKind::Output));
+        assert_eq!(
+            neuron_type(w),
+            neuron_type_byte(7, 0x5eed, RegionKind::Output)
+        );
     }
 
     #[test]

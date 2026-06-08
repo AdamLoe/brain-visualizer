@@ -11,21 +11,34 @@ itself is owned by
 
 Run `cargo` from `app/` (workspace root) and `npm` from `app/web/`.
 
-- **`cargo test`** — host unit tests plus the integration gates in `crates/brain-visualizer/tests/`:
+- **`cargo test -p brain-visualizer`** — host unit tests plus the integration gates in `crates/brain-visualizer/tests/`:
   the CPU/GPU hash + target determinism gates
   (`crates/brain-visualizer/tests/wgsl_hash_determinism.rs`, `crates/brain-visualizer/tests/wgsl_target_determinism.rs`) and the
   sim-dynamics check (`crates/brain-visualizer/tests/gpu_sim_dynamics.rs`). These run under **llvmpipe**
   in headless/WSL2 — no real GPU needed (a software Vulkan adapter validates the
   WGSL).
+- **`cargo run -p brain-visualizer --example render_check`** — native render-path smoke gate:
+  offscreen render, stimulation path, morphology draw, and bloom path.
+- **`cargo run -p brain-visualizer --example morph_view`** — native artifact/review harness:
+  regenerates the accepted-default morphology views and writes the current `/tmp/morph_*`
+  stats artifacts for manual/defaults verification.
 - **`npm run typecheck`** — `tsc --noEmit` over `web/`.
 - **`npm test`** — vitest unit tests (e.g. `web/controls.test.ts`).
+- **`npm run build`** — production-equivalent `wasm-pack build` + TypeScript check +
+  Vite bundle. This is the shipping static-bundle gate, not just a dev-server check.
 - **`npm run test:e2e`** — Playwright e2e (`web/e2e/`). Needs a browser.
+
+When the change touches first-load defaults, reset behavior, presets, or build wiring,
+also run a production preview check (`npm run preview`) and verify the built page loads
+with COOP/COEP headers. If Chromium can load the page but `navigator.gpu.requestAdapter()`
+returns no adapter, report that as an environment limitation; do not claim a real WebGPU
+beauty pass from that run.
 
 ## Offline verification surface (examples)
 
 The `crates/brain-visualizer/examples/*.rs` are runnable host checks that validate behavior without
-a browser — the primary way to confirm sim/render changes offline. What each
-covers is owned by
+a browser or when browser WebGPU is unavailable — the primary way to confirm sim/render
+changes offline. What each covers is owned by
 [`../architecture/build-and-deploy.md`](../architecture/build-and-deploy.md)
 (e.g. `cpu_check` = CPU/GPU parity, `soc_sweep` = criticality sweep). Run with
 `cargo run --release --example <name>`.

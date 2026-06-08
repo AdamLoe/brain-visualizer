@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-06
+last_updated:  2026-06-08
 ---
 
 # Web Frontend
@@ -17,7 +17,7 @@ avoid wasm-bindgen reentrancy panics.
   plumbing (`pendingResize`, `pendingStim`, `pendingSettingsPush`,
   `pendingNetworkRebuild`), `CpuCoordinator`, `startGpuBackend`,
   `restartWithBackend`, `computeStimulation`, `raySphereIntersect`
-- `web/src/render/camera.ts → Camera` — orbit/zoom state machine; produces MVP matrix,
+- `web/src/render/camera.ts → Camera` — orbit/zoom/pan state machine; produces MVP matrix,
   billboard right/up vectors, and unprojection rays
 - `web/src/ui/controls.ts` — `BRAIN_STATES`, `tickExcitability`, `setExcitabilityTarget`,
   `TIER_PRESETS`, `scalerDecide`, `ticksThisFrame`, `isMobile`, `Controls`
@@ -99,12 +99,14 @@ see [`../decisions/dev-tooling.md`](../decisions/dev-tooling.md).
 
 ## Camera
 
-`web/src/render/camera.ts → Camera` is a pure orbit camera: azimuth/elevation/distance →
-`mvpMatrix()`, `cameraRight()`, `cameraUp()`, `eye()`. Left-drag updates
-azimuth/elevation; wheel/pinch updates distance. Touch is one-finger orbit,
-two-finger pinch zoom. The camera has no readback path and no coupling to the
-sim — it computes vectors on the JS side and hands them to `render_frame` each
-frame.
+`web/src/render/camera.ts → Camera` is a pure orbit camera with a movable
+target: azimuth/elevation/distance plus `target` feed `mvpMatrix()`,
+`cameraRight()`, `cameraUp()`, `eye()`. Left-drag updates azimuth/elevation;
+right-drag and Shift-left-drag pan the target in screen space; wheel/pinch
+updates distance. A keyboard `R` shortcut recenters the target. Touch remains
+one-finger orbit and two-finger pinch zoom. The camera has no readback path and
+no coupling to the sim — it computes vectors on the JS side and hands them to
+`render_frame` each frame.
 
 `Camera.unproject()` produces world-space rays for cursor stimulation; the
 ray-sphere intersection (`raySphereIntersect`, manifold radius `MANIFOLD_SPHERE_RADIUS = 1.4`)

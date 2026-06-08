@@ -19,7 +19,7 @@ import {
   tickExcitability,
 } from "./ui/controls";
 import { CpuRenderer } from "./cpu/cpu-renderer";
-// CornerHud is no longer mounted in the main view (UX overhaul — moved to panel).
+import { CornerHud } from "./ui/hud";
 import { Profiler } from "./render/profiler";
 import { Renderer } from "./render/renderer";
 import { SonificationEngine, deriveRegionFractions } from "./audio/sonification";
@@ -190,7 +190,8 @@ async function boot(): Promise<void> {
   // 7. Profiler.
   const profiler = new Profiler(config.backend, config.tier, config.n, config.k);
 
-  // 7b. Corner HUD removed from main view (UX overhaul — metrics now in panel Monitor tab).
+  // 7b. Public corner HUD: still always-on, independent of the hidden dev panel.
+  const cornerHud = new CornerHud();
 
   // 7c. Sonification engine (BV11 — Phase 7). Disabled on mobile.
   const sonification = new SonificationEngine();
@@ -631,13 +632,19 @@ async function boot(): Promise<void> {
     // HUD + sonification — all run once per second.
     // (0.1.1: runtime auto-scaling removed — N is fixed at startup / user-driven.)
     if (dumped) {
-      // UX overhaul: corner HUD removed from main view; metrics now flow into the
-      // settings panel Monitor tab (see devPanel.update call below).
+      const snap = profiler.getLastSnapshot();
+      if (snap) {
+        cornerHud.update({
+          fps: snap.fps,
+          n: config.n,
+          backend: config.backend,
+          synapticEventsPerSec: snap.synapticEventsPerSec,
+        });
+      }
 
       // Sonification — update at 1/sec from profiler stats, off the hot path.
       // Disabled on mobile (spec).
       if (!mobile && sonification.enabled) {
-        const snap = profiler.getLastSnapshot();
         if (snap && snap.ticksPerSec > 0) {
           const fractions = deriveRegionFractions(
             snap.spikesPerSec,
@@ -653,7 +660,6 @@ async function boot(): Promise<void> {
       // Passes Metrics (GPU readback) + SysInfo (n, k, fps, ticksPerSec, maxTicksPerSec).
       // Only compute when panel is open; guard avoids unnecessary work.
       if (devPanel && config.backend === "gpu" && gpuBackend) {
-        const snap = profiler.getLastSnapshot();
         if (snap) {
           if (snap.ticksPerSec > maxTicksPerSec) maxTicksPerSec = snap.ticksPerSec;
         }

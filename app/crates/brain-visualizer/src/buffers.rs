@@ -35,7 +35,10 @@ impl ChunkLayout {
     /// Same as [`ChunkLayout::new`] with an explicit byte budget (testable).
     pub fn with_budget(total: usize, element_bytes: usize, max_chunk_bytes: usize) -> Self {
         assert!(element_bytes > 0, "element_bytes must be > 0");
-        assert!(max_chunk_bytes >= element_bytes, "budget smaller than one element");
+        assert!(
+            max_chunk_bytes >= element_bytes,
+            "budget smaller than one element"
+        );
         let chunk_size = (max_chunk_bytes / element_bytes).max(1);
         Self {
             chunk_size,

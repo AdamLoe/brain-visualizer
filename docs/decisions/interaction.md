@@ -9,19 +9,21 @@
   and auditory richness carry the page on their own.
 - **Applies to.** [`../architecture/web-frontend.md`](../architecture/web-frontend.md).
 
-## Input scheme: hover=stimulate, drag=orbit, scroll=zoom; click does nothing
+## Input scheme: hover=stimulate, left-drag=orbit, right-drag=pan, scroll=zoom; click does nothing
 
 - **Decision.** Hover (no button held) over the canvas injects current into
   neurons within a world-space radius of the ray hit point. Left-drag orbits.
-  Scroll/pinch zooms. Click has no MVP action. Disabled on mobile (no
+  Right-drag pans in screen space, with Shift-left-drag as the desktop
+  fallback. Scroll/pinch zooms. Click has no MVP action. Hover stimulation is
+  suppressed while any button drag is active. Disabled on mobile (no
   stimulation, one-finger orbit, two-finger pinch zoom).
 - **Why.** Click-to-inspect (neuron selection, incoming/outgoing connections)
   requires GPU id-buffer picking or CPU ray tests plus near-LOD
   materialization — non-trivial complexity for a post-MVP feature. The experience
   does not depend on it.
 - **Applies to.** [`../architecture/web-frontend.md`](../architecture/web-frontend.md).
-- **Code anchors.** `web/src/render/camera.ts → Camera.onPointerMove` (returns `true` when
-  orbit, `false` when hover); `web/src/main.ts → computeStimulation`,
+- **Code anchors.** `web/src/render/camera.ts → Camera.onPointerMove`, `Camera.pan`;
+  `web/src/main.ts → pointerdown/pointermove handlers, computeStimulation`,
   `raySphereIntersect`.
 - **Revisit when.** Neuron inspection is revived post-MVP.
 

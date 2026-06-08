@@ -7,6 +7,4 @@ pub mod gpu;
 pub mod morphology;
 pub mod scaler;
 
-pub use backend::{
-    BackendKind, RenderState, SimBackend, SimConfig, SpeedPreset, TickStats, Tier,
-};
+pub use backend::{BackendKind, RenderState, SimBackend, SimConfig, SpeedPreset, TickStats, Tier};

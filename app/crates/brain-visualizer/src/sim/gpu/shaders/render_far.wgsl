@@ -55,6 +55,10 @@ const ACTIVE_GLOW_THRESHOLD: f32 = 0.06;
 // default look). Raise to thin the inactive cloud when visibility==1.
 const INACTIVE_STRIDE: u32 = 1u;
 const IDENTITY_SALT: u32 = 0x9f3ab7c2u;
+const SOMA_FLASH_RATIO: f32 = 0.18;
+const SOMA_CORE_TICKS: f32 = 2.2;
+const SOMA_RADIUS_GLOW: f32 = 0.08;
+const SOMA_RADIUS_FLASH: f32 = 0.16;
 
 // UX fix (near-LOD / shadow line): close-up billboard size ramp. Below
 // NEAR_RADIUS_DIST world units from the camera a neuron's billboard radius grows
@@ -115,6 +119,18 @@ fn identity_color(id: u32) -> vec3<f32> {
     return hsl_to_rgb(h, 0.75, 0.60);
 }
 
+fn safe_tau(tau: f32) -> f32 {
+    return max(tau, 1.0);
+}
+
+fn soma_flash(age: f32, tau: f32) -> f32 {
+    return exp(-age / max(safe_tau(tau) * SOMA_FLASH_RATIO, 1.0));
+}
+
+fn soma_core(age: f32, glow: f32) -> f32 {
+    return (1.0 - smoothstep(0.0, SOMA_CORE_TICKS, age)) * glow;
+}
+
 // V2 Phase E: orthogonal color modes. `id` neuron id, `packed` last_spike word,
 // `vv` clamped membrane voltage, `glow` recency [0,1].
 fn color_for(mode: u32, id: u32, packed: u32, vv: f32, glow: f32) -> vec3<f32> {
@@ -151,6 +167,8 @@ struct VertOut {
     @location(3) dist_fade: f32,
     @location(4) vglow: f32,
     @location(5) opacity: f32,  // V2 Phase E: inactive dimming / hide
+    @location(6) flash: f32,
+    @location(7) core: f32,
 }
 
 @vertex
@@ -161,11 +179,13 @@ fn vs_main(
     let packed    = last_spike[neuron_id];
     let last_tick = packed & TICK_MASK;
 
-    let ticks_since = tick_diff(u.tick, last_tick);
-    let glow = select(0.0, exp(-f32(ticks_since) / u.glow_tau), has_spiked(packed));
+    let ticks_since = f32(tick_diff(u.tick, last_tick));
+    let glow = select(0.0, exp(-ticks_since / safe_tau(u.glow_tau)), has_spiked(packed));
+    let flash = select(0.0, soma_flash(ticks_since, u.glow_tau), has_spiked(packed));
+    let core = select(0.0, soma_core(ticks_since, glow), has_spiked(packed));
     let vv = clamp(v[neuron_id], 0.0, 1.0);
 
-    let is_active = glow >= ACTIVE_GLOW_THRESHOLD;
+    let is_active = max(glow, flash) >= ACTIVE_GLOW_THRESHOLD;
 
     // V2 Phase E: visibility. 0=all visible; 1=active-emphasis (inactive dimmed
     // by opacity + optional sparse stride); 2=active-only (inactive hidden).
@@ -207,7 +227,10 @@ fn vs_main(
     let cam_dist_c = length(center - u.camera_pos);
     let near_t = clamp((NEAR_RADIUS_DIST - cam_dist_c) / NEAR_RADIUS_DIST, 0.0, 1.0);
     let near_scale = 1.0 + near_t * (NEAR_RADIUS_MAX - 1.0);
-    let radius = base * (1.0 + glow * (u.active_neuron_radius_boost - 1.0)) * near_scale;
+    let pulse_scale = 1.0 + glow * (u.active_neuron_radius_boost - 1.0)
+        + glow * SOMA_RADIUS_GLOW
+        + flash * SOMA_RADIUS_FLASH;
+    let radius = base * pulse_scale * near_scale;
     let world_pos = center
         + u.camera_right * corner.x * radius
         + u.camera_up    * corner.y * radius;
@@ -234,6 +257,8 @@ fn vs_main(
     out.dist_fade = dist_fade;
     out.vglow     = vglow;
     out.opacity   = opacity;
+    out.flash     = flash;
+    out.core      = core;
     return out;
 }
 
@@ -243,14 +268,15 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
     if d > 1.0 { discard; }
     let falloff = exp(-d * d * 6.0);
     // Gray for resting neurons (fades to zero near camera to avoid fog inside).
-    // Colored flash when firing.
+    // Colored flash when firing, with a short bright core on the youngest spikes.
     let gray  = vec3(0.18) * in.dist_fade * falloff;
-    let spike = in.color * in.glow * falloff;
+    let spike = in.color * (in.glow * 0.42 + in.flash * 1.08) * falloff;
+    let core = mix(in.color, vec3(1.0), 0.65) * in.core * falloff * 0.85;
     // V2 Phase B: voltage glow (debug) — adds brightness from membrane |v|.
     let vglow = in.color * in.vglow * falloff;
     // V2 Phase E: scale the resting/gray contribution by inactive opacity so the
     // active flash always reads at full strength, but resting fog can be dimmed.
-    let contrib = (gray * in.opacity) + spike + (vglow * in.opacity);
+    let contrib = (gray * in.opacity) + spike + core + (vglow * in.opacity);
     if contrib.r + contrib.g + contrib.b < 0.002 { discard; }
     return vec4(contrib, 1.0);
 }

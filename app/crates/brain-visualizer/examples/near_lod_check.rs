@@ -60,7 +60,11 @@ async fn run() {
     // --- 4. Create offscreen colour texture ---
     let color_tex = backend.device().create_texture(&wgpu::TextureDescriptor {
         label: Some("offscreen-color-near"),
-        size: wgpu::Extent3d { width: WIDTH, height: HEIGHT, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: WIDTH,
+            height: HEIGHT,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -76,8 +80,14 @@ async fn run() {
         backend.tick(1, 0.55);
     }
     let stats = backend.tick(1, 0.55);
-    println!("[near_lod_check] post-warmup: spikes/tick = {}", stats.spikes);
-    assert!(stats.spikes > 0, "Expected some spikes after warm-up at focused");
+    println!(
+        "[near_lod_check] post-warmup: spikes/tick = {}",
+        stats.spikes
+    );
+    assert!(
+        stats.spikes > 0,
+        "Expected some spikes after warm-up at focused"
+    );
 
     // --- 6. Test: FAR camera (distance = 3.0 > 1.5) → near-LOD must be skipped ---
     println!("[near_lod_check] FAR camera test (distance=3.0, should skip near-LOD) …");
@@ -88,19 +98,33 @@ async fn run() {
 
     // Set far distance — near-LOD should NOT run.
     backend.set_lod_camera_distance(far_dist);
-    backend.render_full(&color_view, &far_mvp, cr, cu, 100.0, 0.012, far_eye, far_dist);
+    backend.render_full(
+        &color_view,
+        &far_mvp,
+        cr,
+        cu,
+        100.0,
+        0.012,
+        far_eye,
+        far_dist,
+    );
 
     let far_stats = backend.near_lod_stats();
     println!(
         "[near_lod_check] FAR: emitted_neurons={}, emitted_synapses={}",
-        far_stats.emitted_neuron_instances,
-        far_stats.emitted_synapse_instances,
+        far_stats.emitted_neuron_instances, far_stats.emitted_synapse_instances,
     );
     // At FAR distance the near-LOD run_near_lod == false so profiler_staging is never
     // populated by the current frame. Stats should be default (0 from init, or from a
     // prior frame). We just assert that the frame didn't crash and no overflow.
-    assert_eq!(far_stats.neuron_overflow, 0, "unexpected overflow at far dist");
-    assert_eq!(far_stats.synapse_overflow, 0, "unexpected overflow at far dist");
+    assert_eq!(
+        far_stats.neuron_overflow, 0,
+        "unexpected overflow at far dist"
+    );
+    assert_eq!(
+        far_stats.synapse_overflow, 0,
+        "unexpected overflow at far dist"
+    );
     println!("[near_lod_check] FAR camera test: PASS (no crash, no overflow)");
 
     // --- 7. Test: CLOSE camera (distance = 0.3 < 0.8) → near-LOD must run ---
@@ -111,7 +135,16 @@ async fn run() {
     let (cr2, cu2) = camera_vectors(0.3, 0.1);
 
     backend.set_lod_camera_distance(close_dist);
-    backend.render_full(&color_view, &close_mvp, cr2, cu2, 100.0, 0.012, close_eye, close_dist);
+    backend.render_full(
+        &color_view,
+        &close_mvp,
+        cr2,
+        cu2,
+        100.0,
+        0.012,
+        close_eye,
+        close_dist,
+    );
 
     let close_stats = backend.near_lod_stats();
     println!(
@@ -231,13 +264,17 @@ fn camera_vectors(azimuth: f32, elevation: f32) -> ([f32; 3], [f32; 3]) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn vec3_norm(v: [f32; 3]) -> [f32; 3] {
-    let l = (v[0]*v[0] + v[1]*v[1] + v[2]*v[2]).sqrt().max(1e-9);
-    [v[0]/l, v[1]/l, v[2]/l]
+    let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-9);
+    [v[0] / l, v[1] / l, v[2] / l]
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn vec3_cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[1]*b[2] - a[2]*b[1], a[2]*b[0] - a[0]*b[2], a[0]*b[1] - a[1]*b[0]]
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -245,24 +282,48 @@ fn perspective(fovy: f32, aspect: f32, near: f32, far: f32) -> [f32; 16] {
     let f = 1.0 / (fovy / 2.0).tan();
     let nf = 1.0 / (near - far);
     [
-        f / aspect, 0.0,  0.0,             0.0,
-        0.0,        f,    0.0,             0.0,
-        0.0,        0.0,  (far+near)*nf,  -1.0,
-        0.0,        0.0,  2.0*far*near*nf, 0.0,
+        f / aspect,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        f,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        (far + near) * nf,
+        -1.0,
+        0.0,
+        0.0,
+        2.0 * far * near * nf,
+        0.0,
     ]
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn look_at(eye: [f32; 3], center: [f32; 3], up: [f32; 3]) -> [f32; 16] {
-    let z = vec3_norm([eye[0]-center[0], eye[1]-center[1], eye[2]-center[2]]);
+    let z = vec3_norm([eye[0] - center[0], eye[1] - center[1], eye[2] - center[2]]);
     let x = vec3_norm(vec3_cross(up, z));
     let y = vec3_cross(z, x);
-    let dot = |a: [f32;3], b: [f32;3]| a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
     [
-        x[0], y[0], z[0], 0.0,
-        x[1], y[1], z[1], 0.0,
-        x[2], y[2], z[2], 0.0,
-        -dot(x,eye), -dot(y,eye), -dot(z,eye), 1.0,
+        x[0],
+        y[0],
+        z[0],
+        0.0,
+        x[1],
+        y[1],
+        z[1],
+        0.0,
+        x[2],
+        y[2],
+        z[2],
+        0.0,
+        -dot(x, eye),
+        -dot(y, eye),
+        -dot(z, eye),
+        1.0,
     ]
 }
 
@@ -273,9 +334,9 @@ fn mat4_mul(a: [f32; 16], b: [f32; 16]) -> [f32; 16] {
         for r in 0..4 {
             let mut s = 0.0;
             for k in 0..4 {
-                s += a[k*4+r] * b[c*4+k];
+                s += a[k * 4 + r] * b[c * 4 + k];
             }
-            out[c*4+r] = s;
+            out[c * 4 + r] = s;
         }
     }
     out
@@ -313,19 +374,28 @@ async fn readback_rgba(
                 rows_per_image: Some(height),
             },
         },
-        wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
     );
     queue.submit([enc.finish()]);
     let slice = staging.slice(..);
     let (tx, rx) = std::sync::mpsc::channel();
-    slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
-    let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+    slice.map_async(wgpu::MapMode::Read, move |r| {
+        let _ = tx.send(r);
+    });
+    let _ = device.poll(wgpu::PollType::Wait {
+        submission_index: None,
+        timeout: None,
+    });
     rx.recv().expect("map").expect("map ok");
     let data = slice.get_mapped_range();
     let mut out = Vec::with_capacity((width * height * 4) as usize);
     for row in 0..height {
         let row_start = (row * bytes_per_row) as usize;
-        out.extend_from_slice(&data[row_start .. row_start + (width * 4) as usize]);
+        out.extend_from_slice(&data[row_start..row_start + (width * 4) as usize]);
     }
     drop(data);
     staging.unmap();

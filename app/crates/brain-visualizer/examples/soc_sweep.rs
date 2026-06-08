@@ -70,7 +70,10 @@ async fn run() {
 
     // ── i_ext sweep at excitability=0.55 (focused) ────────────────────────────
     println!("--- i_ext sweep (excitability=0.55, focused) ---");
-    println!("{:>8}  {:>14}  {:>12}", "i_ext", "mean_rate (Hz)", "target 5–15 Hz");
+    println!(
+        "{:>8}  {:>14}  {:>12}",
+        "i_ext", "mean_rate (Hz)", "target 5–15 Hz"
+    );
 
     let i_ext_values: &[f32] = &[0.01, 0.02, 0.03, 0.04, 0.05];
     let mut best_i_ext = I_EXT_LOCKED;
@@ -92,7 +95,9 @@ async fn run() {
     println!("  Phase 2 used i_ext=0.040; this sweep confirms or adjusts.\n");
 
     // ── Five-preset acceptance check ──────────────────────────────────────────
-    println!("--- Five-preset acceptance check (i_ext={best_i_ext:.3}, synaptic_scale={SYN_SCALE}) ---");
+    println!(
+        "--- Five-preset acceptance check (i_ext={best_i_ext:.3}, synaptic_scale={SYN_SCALE}) ---"
+    );
     println!(
         "{:>16}  {:>8}  {:>14}  {:>20}  {:>8}",
         "preset", "excit", "mean_rate (Hz)", "acceptance band", "verdict"
@@ -101,11 +106,11 @@ async fn run() {
     backend.set_i_ext(best_i_ext);
 
     let presets: &[(&str, f32, f64, f64, &str)] = &[
-        ("deep_sleep",      0.10, f64::NEG_INFINITY,  0.5, "< 0.5 Hz"),
-        ("relaxed",         0.30, 1.0,                3.0, "1–3 Hz"),
-        ("focused",         0.55, 5.0,               15.0, "5–15 Hz"),
-        ("hyperstimulated", 0.80, 20.0,              40.0, "20–40 Hz"),
-        ("seizure",         1.00, 50.0,              f64::INFINITY, "> 50 Hz"),
+        ("deep_sleep", 0.10, f64::NEG_INFINITY, 0.5, "< 0.5 Hz"),
+        ("relaxed", 0.30, 1.0, 3.0, "1–3 Hz"),
+        ("focused", 0.55, 5.0, 15.0, "5–15 Hz"),
+        ("hyperstimulated", 0.80, 20.0, 40.0, "20–40 Hz"),
+        ("seizure", 1.00, 50.0, f64::INFINITY, "> 50 Hz"),
     ];
 
     for &(name, excit, lo, hi, band) in presets {

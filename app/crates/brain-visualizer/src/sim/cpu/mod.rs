@@ -99,11 +99,8 @@ impl CpuBackend {
     pub fn initialize(&mut self, config: &SimConfig) {
         self.config = config.clone();
         let manifold = crate::build_manifold(config);
-        let buffers = CpuNeuronBuffers::build(
-            config,
-            &manifold.neuron_regions,
-            &manifold.spatial_grid,
-        );
+        let buffers =
+            CpuNeuronBuffers::build(config, &manifold.neuron_regions, &manifold.spatial_grid);
         // Seed the active list with the input neurons so activity starts from
         // ambient drive (everything else is silent and decays lazily).
         self.active.clear();
@@ -121,7 +118,11 @@ impl CpuBackend {
     fn lif_params(&self, excitability: f32) -> LifParams {
         LifParams {
             excitability,
-            ..LifParams::new(self.i_ext, self.synaptic_scale, self.config.fixed_point_scale as f32)
+            ..LifParams::new(
+                self.i_ext,
+                self.synaptic_scale,
+                self.config.fixed_point_scale as f32,
+            )
         }
     }
 }
@@ -325,7 +326,10 @@ mod tests {
         b.initialize(&small_config(2000));
         let bufs = b.buffers().unwrap();
         assert_eq!(bufs.len(), 2000);
-        assert!(!bufs.input_neurons.is_empty(), "input region must be non-empty");
+        assert!(
+            !bufs.input_neurons.is_empty(),
+            "input region must be non-empty"
+        );
         // Silent start: nothing has spiked yet.
         assert!(bufs.last_spike.iter().all(|&w| !has_spiked(w)));
     }
@@ -365,7 +369,11 @@ mod tests {
         bufs.last_updated[probe] = 0;
         // Integrate once at tick 500 → lazy decay applies 0.95^499 then one more.
         core::integrate_neuron(probe, 500, bufs, &params);
-        assert!(bufs.v[probe].abs() < 1e-6, "v not decayed: {}", bufs.v[probe]);
+        assert!(
+            bufs.v[probe].abs() < 1e-6,
+            "v not decayed: {}",
+            bufs.v[probe]
+        );
     }
 
     #[test]

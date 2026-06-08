@@ -216,7 +216,8 @@ export function setMorphValue(
 
 // ─── Persistence (mirrors loadSettings/saveSettings/resetSettings) ─────────────
 
-const LS_KEY = "bv2_morph_v1";
+export const MORPH_CONFIG_LS_KEY = "bv2_morph_v1";
+const LS_KEY = MORPH_CONFIG_LS_KEY;
 const MORPH_VERSION = 1;
 
 interface SavedMorphConfig {

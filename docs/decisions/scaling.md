@@ -11,6 +11,9 @@
   exists, which is not representative). Shipping the manual switch now lets
   all three tiers be exercised and verified before committing to selection
   logic.
+- **Current default note.** This tier decision is separate from the clean
+  first-load `DEFAULT_CONFIG`, which currently boots the morphology-first
+  accepted-default review baseline at `n=1200`, `k=16`, `tier="low"`.
 - **Applies to.** [`../architecture/scaling.md`](../architecture/scaling.md).
 - **Code anchors.** `web/src/ui/controls.ts → TIER_PRESETS`; `crates/brain-visualizer/src/sim/scaler.rs → TierRange::for_tier`.
 - **Revisit when.** Real-hardware browser WebGPU benchmark data is collected.

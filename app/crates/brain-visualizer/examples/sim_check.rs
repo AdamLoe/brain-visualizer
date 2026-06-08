@@ -182,7 +182,11 @@ async fn run() {
     );
     println!(
         "no i32 overflow at seizure: {} (max|I|={max_abs}, i32_max={i32_max})",
-        if max_abs < i32_max { "PASS (safe)" } else { "FAIL (overflow)" }
+        if max_abs < i32_max {
+            "PASS (safe)"
+        } else {
+            "FAIL (overflow)"
+        }
     );
 }
 
@@ -236,7 +240,11 @@ async fn scan_membrane(backend: &GpuBackend) -> (usize, f32, usize) {
     (nan, (sum / n as f64) as f32, spiked)
 }
 
-fn read_mapped<T: bytemuck::Pod>(device: &wgpu::Device, staging: &wgpu::Buffer, count: usize) -> Vec<T> {
+fn read_mapped<T: bytemuck::Pod>(
+    device: &wgpu::Device,
+    staging: &wgpu::Buffer,
+    count: usize,
+) -> Vec<T> {
     let slice = staging.slice(..);
     let (tx, rx) = std::sync::mpsc::channel();
     slice.map_async(wgpu::MapMode::Read, move |r| {

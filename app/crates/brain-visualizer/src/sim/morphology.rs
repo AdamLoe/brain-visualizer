@@ -24,7 +24,7 @@ use crate::connectivity::spatial::SpatialGrid;
 use crate::connectivity::{self};
 use crate::manifold::RegionKind;
 use crate::sim::backend::neuron_type_byte;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
@@ -566,7 +566,7 @@ pub struct MorphSphereInstance {
     pub center: [f32; 3],
     pub radius: f32,
     pub neuron_id: u32,
-    pub kind: u32,   // 2 = soma
+    pub kind: u32, // 2 = soma
     pub _pad0: u32,
     pub _pad1: u32,
 }
@@ -906,17 +906,6 @@ pub fn generate(
     // network-rebuild time at high N. The CPU/GPU paths already cache this map.
     let cell_of_neuron = grid.cell_of_neuron_map();
 
-    // Local helper: push a segment unless the cap is hit (count drops instead).
-    let push = |segments: &mut Vec<MorphSegment>, seg: MorphSegment, dropped: &mut usize| {
-        if segments.len() < cap {
-            segments.push(seg);
-            true
-        } else {
-            *dropped += 1;
-            false
-        }
-    };
-
     let setup_ms = setup_start.elapsed_ms();
     let mut dendrite_ms = 0.0f32;
     let mut axon_ms = 0.0f32;
@@ -1005,11 +994,7 @@ pub fn generate(
                 ));
                 let twig_len = (reach - stem_len).max(reach * 0.25)
                     * lerp(0.88, 1.08, unit(hash32(child_seed ^ 0x2468_ace0)));
-                let twig_bend = bend_vector(
-                    child_dir,
-                    child_seed,
-                    twig_len * 0.38,
-                );
+                let twig_bend = bend_vector(child_dir, child_seed, twig_len * 0.38);
                 let tip = add(
                     add(stem_tip, scale(child_dir, twig_len)),
                     scale(twig_bend, 0.24),
@@ -1439,6 +1424,10 @@ mod tests {
             .collect()
     }
 
+    fn point_bits(p: [f32; 3]) -> [u32; 3] {
+        [p[0].to_bits(), p[1].to_bits(), p[2].to_bits()]
+    }
+
     #[test]
     fn locked_default_matches_current_constants() {
         let p = MorphologyParams::locked_default();
@@ -1696,6 +1685,79 @@ mod tests {
             assert_eq!(x.a, y.a);
             assert_eq!(x.b, y.b);
             assert_eq!(x.path_len, y.path_len);
+        }
+    }
+
+    #[test]
+    fn dendrite_segment_budget_matches_sampled_branch_grammar() {
+        let (pos, g) = small_grid();
+        let seed = 31337u32;
+        let regions = small_regions(pos.len());
+        let source_types = build_source_types(seed, &regions);
+        let params = MorphologyParams::locked_default();
+        let m = generate(&pos, &g, 16, seed, &params, &source_types);
+        assert_eq!(m.dropped, 0);
+
+        let per_primary = DENDRITE_STEM_SAMPLES + 2 * DENDRITE_TWIG_SAMPLES;
+        let max_primaries =
+            params.dendrite_primary_min + params.dendrite_primary_span.saturating_sub(1);
+        assert!(params.dendrite_budget >= max_primaries as usize * per_primary);
+
+        for nid in 0..pos.len() {
+            let expected_primaries = params.dendrite_primary_min
+                + (mix_key(seed, nid as u32, 0, salt::DENDRITE_COUNT)
+                    % params.dendrite_primary_span);
+            let actual = m
+                .segments
+                .iter()
+                .filter(|s| s.kind == 0 && s.neuron_id == nid as u32)
+                .count();
+            assert_eq!(
+                actual,
+                expected_primaries as usize * per_primary,
+                "unexpected dendrite segment count for neuron {nid}"
+            );
+        }
+    }
+
+    #[test]
+    fn path_lengths_match_parent_branch_endpoints() {
+        let (pos, g) = small_grid();
+        let seed = 8080u32;
+        let regions = small_regions(pos.len());
+        let source_types = build_source_types(seed, &regions);
+        let params = MorphologyParams::locked_default();
+        let m = generate(&pos, &g, 16, seed, &params, &source_types);
+
+        let mut branch_end_paths: std::collections::HashMap<(u32, u32, [u32; 3]), Vec<f32>> =
+            std::collections::HashMap::new();
+        for s in &m.segments {
+            let end_path = s.path_len + len(sub(s.b, s.a));
+            branch_end_paths
+                .entry((s.neuron_id, s.kind, point_bits(s.b)))
+                .or_default()
+                .push(end_path);
+        }
+
+        for s in &m.segments {
+            if s.path_len == 0.0 {
+                assert_eq!(
+                    s.a, pos[s.neuron_id as usize],
+                    "zero path_len must start at the soma"
+                );
+                continue;
+            }
+
+            let parent_key = (s.neuron_id, s.kind, point_bits(s.a));
+            let Some(candidates) = branch_end_paths.get(&parent_key) else {
+                panic!("missing parent path for segment {s:?}");
+            };
+            assert!(
+                candidates
+                    .iter()
+                    .any(|end_path| (end_path - s.path_len).abs() < 1e-5),
+                "segment path_len does not match any parent end path: {s:?}"
+            );
         }
     }
 

@@ -15,7 +15,7 @@ import "./dev-panel.css";
 // Tabs: Monitor · Dynamics · Network · Rendering · Debug View · Storage
 //   - Monitor has live metrics content (Phase A) + System section (UX overhaul).
 //   - Rendering has live visual-knob controls (Phase B).
-//   - Storage has reset + localStorage readout (Phase B).
+//   - Storage has reset + hidden review presets + localStorage readout.
 //   - Dynamics has live E/I, branching-ratio, cascade readouts (Phase C).
 //   - Network has Simulation controls (UX overhaul — brain state, speed, scale).
 //   - Debug View shows current visual mode readout.
@@ -30,10 +30,17 @@ import "./dev-panel.css";
 // Architecture note: update(m, sys?) is called from the once-per-second block
 // in rafLoop (main.ts) ONLY when isOpen() is true — avoids unnecessary work.
 
-import type { Metrics } from "../core/settings";
-import { getSettings, resetSettings, setSetting } from "../core/settings";
+import type { Metrics, VisualizerSettings } from "../core/settings";
+import {
+  DEFAULT_SETTINGS,
+  SETTINGS_LS_KEY,
+  getSettings,
+  replaceSettings,
+  resetSettings,
+  setSetting,
+} from "../core/settings";
 import { subscribe } from "../core/settings";
-import { CONFIG_LS_KEY, resetConfig, type AppConfig } from "../core/types";
+import { CONFIG_LS_KEY, DEFAULT_CONFIG, resetConfig, type AppConfig } from "../core/types";
 import {
   impactColor,
   impactLabel,
@@ -41,7 +48,9 @@ import {
 } from "../core/setting-metadata";
 // v0.3.1: morphology-local descriptor-driven config surface.
 import {
+  DEFAULT_MORPH_CONFIG,
   MORPH_DESCRIPTORS,
+  MORPH_CONFIG_LS_KEY,
   getMorphValue,
   loadMorphConfig,
   resetMorphConfig,
@@ -50,8 +59,8 @@ import {
   type MorphDescriptor,
   type MorphologyConfig,
 } from "../core/morph-config";
-// UX round 2: BRAIN_STATES / TIER_PRESETS no longer used in the panel
-// (presets removed). Controls.ts exports are kept for external consumers.
+// UX round 2: BRAIN_STATES / TIER_PRESETS no longer used in the panel.
+// Public presets stay removed; static hidden review presets live below.
 
 // ── UX overhaul: SysInfo interface (exported — main.ts uses it) ──────────────
 
@@ -81,6 +90,99 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "debugview",  label: "Debug View"},
   { id: "storage",    label: "Storage"   },
 ];
+
+export type HiddenReviewPresetId =
+  | "accepted-default"
+  | "performance-review"
+  | "hero-review";
+
+export interface HiddenReviewPreset {
+  id: HiddenReviewPresetId;
+  appConfig: AppConfig;
+  visualSettings: VisualizerSettings;
+  morphologyConfig: MorphologyConfig;
+  notes: string;
+  payloadSource: string;
+}
+
+function cloneAppConfig(config: AppConfig): AppConfig {
+  return { ...config };
+}
+
+function cloneVisualSettings(settings: VisualizerSettings): VisualizerSettings {
+  return { ...settings };
+}
+
+function cloneMorphologyConfig(config: MorphologyConfig): MorphologyConfig {
+  return structuredClone(config);
+}
+
+function buildHiddenReviewPresets(): Record<HiddenReviewPresetId, HiddenReviewPreset> {
+  const acceptedDefault: HiddenReviewPreset = {
+    id: "accepted-default",
+    appConfig: cloneAppConfig(DEFAULT_CONFIG),
+    visualSettings: cloneVisualSettings(DEFAULT_SETTINGS),
+    morphologyConfig: cloneMorphologyConfig(DEFAULT_MORPH_CONFIG),
+    notes: "Exact clean first-load defaults. Derived directly from DEFAULT_CONFIG, DEFAULT_SETTINGS, and DEFAULT_MORPH_CONFIG.",
+    payloadSource: "DEFAULT_CONFIG + DEFAULT_SETTINGS + DEFAULT_MORPH_CONFIG",
+  };
+
+  const performanceVisual = cloneVisualSettings(DEFAULT_SETTINGS);
+  performanceVisual.glowTau = 50.0;
+  performanceVisual.connectionVisualWidth = 0.65;
+  performanceVisual.bloomStrength = 0.20;
+  performanceVisual.morphRestingOpacity = 0.14;
+
+  const performanceMorph = cloneMorphologyConfig(DEFAULT_MORPH_CONFIG);
+  performanceMorph.renderQuality.tubeSides = 4;
+  performanceMorph.renderQuality.sphereSlices = 6;
+  performanceMorph.renderQuality.sphereStacks = 4;
+  performanceMorph.lighting.ambient = 0.52;
+  performanceMorph.lighting.diffuseIntensity = 0.30;
+  performanceMorph.lighting.rimIntensity = 0.20;
+  performanceMorph.lighting.rimPower = 1.8;
+  performanceMorph.lighting.restingBrightness = 0.16;
+  performanceMorph.lighting.activeBoost = 1.55;
+
+  const heroVisual = cloneVisualSettings(DEFAULT_SETTINGS);
+  heroVisual.glowTau = 72.0;
+  heroVisual.connectionVisualWidth = 0.95;
+  heroVisual.bloomStrength = 0.65;
+  heroVisual.morphRestingOpacity = 0.24;
+
+  const heroMorph = cloneMorphologyConfig(DEFAULT_MORPH_CONFIG);
+  heroMorph.renderQuality.tubeSides = 8;
+  heroMorph.renderQuality.sphereSlices = 10;
+  heroMorph.renderQuality.sphereStacks = 8;
+  heroMorph.lighting.ambient = 0.40;
+  heroMorph.lighting.diffuseIntensity = 0.55;
+  heroMorph.lighting.rimIntensity = 0.40;
+  heroMorph.lighting.rimPower = 2.5;
+  heroMorph.lighting.restingBrightness = 0.07;
+  heroMorph.lighting.activeBoost = 3.0;
+
+  return {
+    "accepted-default": acceptedDefault,
+    "performance-review": {
+      id: "performance-review",
+      appConfig: cloneAppConfig(DEFAULT_CONFIG),
+      visualSettings: performanceVisual,
+      morphologyConfig: performanceMorph,
+      notes: "Lower-cost comparison preset. Keeps the default network config but reduces bloom and morphology tessellation.",
+      payloadSource: "DEFAULT_* baseline with explicit lower-cost visual + renderQuality overrides",
+    },
+    "hero-review": {
+      id: "hero-review",
+      appConfig: cloneAppConfig(DEFAULT_CONFIG),
+      visualSettings: heroVisual,
+      morphologyConfig: heroMorph,
+      notes: "Screenshot-oriented review preset. Keeps the default network config, raises tessellation, and uses the active-bright morphology-lighting split from /tmp/morph_view_active_bright_stats.json.",
+      payloadSource: "DEFAULT_* baseline + hero bloom/quality overrides + /tmp/morph_view_active_bright_stats.json lighting split",
+    },
+  };
+}
+
+export const HIDDEN_REVIEW_PRESETS = buildHiddenReviewPresets();
 
 // ── Classifier ────────────────────────────────────────────────────────────────
 
@@ -301,9 +403,6 @@ export class DevPanel {
   // V2 Phase B: unsubscribe function returned by subscribe().
   // Called in destroy() to clean up when the panel is removed.
   private readonly _unsubSettings: () => void;
-
-  // V2 Phase B: localStorage key (from settings.ts — kept in sync manually).
-  private static readonly LS_KEY = "bv2_settings_v1";
 
   // v0.1.2: instant-tooltip floating element (appended to <body>, not the panel,
   // so the panel's scroll overflow can't clip it). Shown with ZERO delay on
@@ -1500,6 +1599,40 @@ export class DevPanel {
     d.signalSource.textContent     = SIGNAL_SRC_LABELS[s.signalSource]     ?? String(s.signalSource);
   }
 
+  private _loadAcceptedDefaultBase(): void {
+    resetSettings();
+    this.morphConfig = resetMorphConfig();
+    this.morphPending = structuredClone(this.morphConfig);
+    this._syncMorphRows();
+    this.morphHandlers?.onMorphRebuild(JSON.stringify(this.morphConfig));
+
+    const defaultConfig = resetConfig();
+    this._syncNetworkControls(defaultConfig);
+    this.simHandlers?.onConfigReset?.(defaultConfig);
+    this.simHandlers?.onNetwork({
+      n: defaultConfig.n,
+      k: defaultConfig.k,
+      seed: defaultConfig.seed,
+    });
+  }
+
+  private _applyHiddenReviewPreset(id: HiddenReviewPresetId): void {
+    const preset = HIDDEN_REVIEW_PRESETS[id];
+    this._loadAcceptedDefaultBase();
+
+    if (id !== "accepted-default") {
+      replaceSettings(cloneVisualSettings(preset.visualSettings));
+      this.morphConfig = cloneMorphologyConfig(preset.morphologyConfig);
+      this.morphPending = cloneMorphologyConfig(preset.morphologyConfig);
+      this._syncMorphRows();
+      saveMorphConfig(this.morphConfig);
+      this.morphHandlers?.onMorphRebuild(JSON.stringify(this.morphConfig));
+    }
+
+    this._syncNetworkControls(preset.appConfig);
+    this._refreshStorageReadout();
+  }
+
   // ── V2 Phase B: Storage tab DOM ────────────────────────────────────────────
 
   private _buildStorageTab(root: HTMLDivElement): void {
@@ -1509,16 +1642,7 @@ export class DevPanel {
     resetBtn.className = "dp-action-btn";
     resetBtn.textContent = "Reset settings to defaults";
     resetBtn.addEventListener("click", () => {
-      resetSettings();
-      // v0.3.1: clear bv2_morph_v1 on the SAME reset path and re-sync morph rows.
-      this.morphConfig = resetMorphConfig();
-      this.morphPending = structuredClone(this.morphConfig);
-      this._syncMorphRows();
-      // Push defaults to the backend (uniform + rebuild) so the live view resets.
-      this.morphHandlers?.onMorphRebuild(JSON.stringify(this.morphConfig));
-      const defaultConfig = resetConfig();
-      this._syncNetworkControls(defaultConfig);
-      this.simHandlers?.onConfigReset?.(defaultConfig);
+      this._loadAcceptedDefaultBase();
       this._refreshStorageReadout();
     });
 
@@ -1526,6 +1650,23 @@ export class DevPanel {
     btnRow.className = "dp-btn-row";
     btnRow.appendChild(resetBtn);
     root.appendChild(btnRow);
+
+    root.appendChild(this._sep("Hidden review presets"));
+    this._caption(root, "Dev-only review helpers. accepted-default matches the clean first-load defaults.");
+
+    const presetRow = document.createElement("div");
+    presetRow.className = "dp-btn-row";
+    for (const id of Object.keys(HIDDEN_REVIEW_PRESETS) as HiddenReviewPresetId[]) {
+      const btn = document.createElement("button");
+      btn.className = "dp-action-btn";
+      btn.textContent = id;
+      this._attachTip(btn, HIDDEN_REVIEW_PRESETS[id].notes);
+      btn.addEventListener("click", () => {
+        this._applyHiddenReviewPreset(id);
+      });
+      presetRow.appendChild(btn);
+    }
+    root.appendChild(presetRow);
 
     root.appendChild(this._sep("localStorage"));
 
@@ -1725,7 +1866,8 @@ export class DevPanel {
     if (!el) return;
     try {
       el.textContent = [
-        this._storageLine(DevPanel.LS_KEY),
+        this._storageLine(SETTINGS_LS_KEY),
+        this._storageLine(MORPH_CONFIG_LS_KEY),
         this._storageLine(CONFIG_LS_KEY),
       ].join("\n");
     } catch {

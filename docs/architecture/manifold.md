@@ -1,13 +1,14 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-06
+last_updated:  2026-06-08
 ---
 
 # Cortical Manifold
 
-Procedural generation of a brain-shaped surface, placement of neurons on/in
-that surface, assignment of cortical region class to each neuron, and the
+Procedural generation of a brain-shaped surface, placement of neurons in a
+cortical-shell-biased brain volume, assignment of cortical region class to each
+neuron, and the
 host-side morphology geometry that gives each neuron a visible soma + dendrite
 tree + axon arbor. All of this runs on the CPU at `initialize()` time; the
 resulting buffers are uploaded once to the GPU and remain static for the
@@ -18,6 +19,7 @@ life of the network.
 - `Manifold` + `ManifoldParams` — `crates/brain-visualizer/src/manifold/mod.rs → Manifold`
 - Icosphere mesh generation — `crates/brain-visualizer/src/manifold/icosphere.rs → icosphere`
 - Gyrification noise — `crates/brain-visualizer/src/manifold/gyrify.rs → GyrifyParams, gyrify`
+- Brain-envelope shaping primitive — `crates/brain-visualizer/src/manifold/mod.rs → brain_outer_radius, brain_surface_point`
 - Neuron volume placement — `crates/brain-visualizer/src/manifold/mod.rs → place_neurons`
 - Region assignment — `crates/brain-visualizer/src/manifold/regions.rs → RegionKind, assign_regions`
 - Spatial grid — `crates/brain-visualizer/src/manifold/mod.rs → DEFAULT_GRID_DIM`
@@ -34,7 +36,7 @@ life of the network.
 
 ## Surface generation pipeline
 
-The five-step pipeline runs synchronously in `crates/brain-visualizer/src/manifold/mod.rs → Manifold::generate`:
+The six-step pipeline runs synchronously in `crates/brain-visualizer/src/manifold/mod.rs → Manifold::generate`:
 
 1. **Icosphere subdivision** (`crates/brain-visualizer/src/manifold/icosphere.rs → icosphere`): starts
    from a 12-vertex/20-face base icosahedron and subdivides `levels` times, each
@@ -42,24 +44,34 @@ The five-step pipeline runs synchronously in `crates/brain-visualizer/src/manifo
    unit sphere. Level 5 (the default) yields a near-uniform mesh. Vertex count
    follows `10 * 4^level + 2`; a CI test guards this formula.
 
-2. **Gyrification** (`crates/brain-visualizer/src/manifold/gyrify.rs → gyrify`): two octaves of
-   OpenSimplex noise displace each unit-sphere vertex along its outward normal
-   (normal = position on a unit sphere). Large-scale noise (gyri, ridges) uses
-   `gyri_freq ≈ 1.5` at `gyri_amp ≈ 15%` of radius; fine-scale noise (sulci,
-   folds) uses `sulci_freq ≈ 4.0` at `sulci_amp ≈ 5%`. The two octaves use
-   independent noise instances (different seeds derived from the network seed)
-   so they decorrelate. Total radius variation stays within roughly ±20%, keeping
-   all neurons inside the unit volume. See `crates/brain-visualizer/src/manifold/gyrify.rs → GyrifyParams`
+2. **Brain-envelope shaping** (`crates/brain-visualizer/src/manifold/mod.rs → brain_outer_radius`):
+   each icosphere direction is converted into a reusable host-side brain
+   envelope. The envelope is star-convex and deterministic: an elongated
+   ellipsoid base is modulated by lobe-like anterior/posterior fullness, a
+   ventral flattening term, temporal-side fullness, and a dorsal midline
+   indentation that reads as the longitudinal fissure. This same primitive is
+   used by both the surface mesh and neuron placement, so those two views of the
+   arena cannot drift.
+
+3. **Gyrification** (`crates/brain-visualizer/src/manifold/gyrify.rs → gyrify`): two octaves of
+   OpenSimplex noise displace each shaped envelope vertex along its outward
+   direction. Large-scale noise (gyri, ridges) uses `gyri_freq ≈ 1.5` at
+   `gyri_amp ≈ 15%` of local radius; fine-scale noise (sulci, folds) uses
+   `sulci_freq ≈ 4.0` at `sulci_amp ≈ 5%`. The two octaves use independent
+   noise instances (different seeds derived from the network seed) so they
+   decorrelate. See `crates/brain-visualizer/src/manifold/gyrify.rs → GyrifyParams`
    for all tunable defaults.
 
-3. **Neuron placement** (`crates/brain-visualizer/src/manifold/mod.rs → place_neurons`): neurons are
-   placed with uniform volume density inside a sphere of radius 1.0 using
-   spherical coordinates (cos θ uniform, φ uniform, r ∝ cbrt(uniform)). The
-   function signature accepts vertices/faces but does not use them — placement is
-   purely volumetric, not surface-pinned. This is the current code behavior.
-   All randomness comes from the `hash32` function keyed on `seed ^ (i * salt)`.
+4. **Neuron placement** (`crates/brain-visualizer/src/manifold/mod.rs → place_neurons`): neurons are
+   sampled from the same deterministic hash namespace as the rest of the app.
+   Direction comes from spherical coordinates (cos θ uniform, φ uniform), then
+   the shared brain envelope supplies the local outer radius for that direction.
+   Depth is shell-biased rather than full-volume uniform: most neurons are
+   placed in the outer cortical band (`~0.72..1.0` of the local envelope
+   radius), with a small deterministic interior-fill fraction (`~8%`) so the
+   cloud keeps some depth instead of becoming a perfectly hollow rind.
 
-4. **Region assignment** (`crates/brain-visualizer/src/manifold/regions.rs → assign_regions`): the
+5. **Region assignment** (`crates/brain-visualizer/src/manifold/regions.rs → assign_regions`): the
    30/40/30 split (Input/Association/Output) is applied by shuffling neuron
    indices with a deterministic hash and slicing the result, so the split is
    spatially random rather than spatially blocked. The `_axis` parameter is
@@ -68,7 +80,7 @@ The five-step pipeline runs synchronously in `crates/brain-visualizer/src/manifo
    assignment is hash-driven. The region fractions (30/40/30) are tested by
    `crates/brain-visualizer/src/manifold/mod.rs → region_split_approx_30_40_30`.
 
-5. **Spatial grid** (`crates/brain-visualizer/src/manifold/mod.rs`): after placement, a uniform integer
+6. **Spatial grid** (`crates/brain-visualizer/src/manifold/mod.rs`): after placement, a uniform integer
    grid (`DEFAULT_GRID_DIM = 16`, giving 4096 cells) is built over the neuron
    positions for O(1) neighborhood lookup during connectivity generation and
    cursor stimulation.
@@ -99,8 +111,11 @@ Each neuron now gets a deterministic shared arbor, not K independent sin-bow
 curves:
 
 - **Dendrites** (kind 0): a stable local tree of primary branches and twigs
-  around the soma, used as visible landing context for sockets. Reach, count,
-  and taper come from named morphology budgets rather than hidden constants.
+  around the soma, used as visible landing context for sockets. Each stem/twig
+  is emitted as a short sampled cubic-Bezier chain rather than a single chord,
+  so close-up branches curve through multiple `MorphSegment`s while keeping the
+  same 48-byte layout. Reach, count, and taper come from named morphology
+  budgets rather than hidden constants.
 - **Shared root / cluster branches** (kind 1): a source-driven trunk and 2-5
   deterministic cluster branches fan out from the soma before the terminal
   twigs. These shared segments use the source neuron id as their `target_id` so
@@ -128,7 +143,15 @@ fixed cap.
 
 `MorphSphereInstance` is the **soma-only** contract: 32 bytes, 16-aligned. One instance per neuron, emitted at `initialize()` time by `crates/brain-visualizer/src/sim/morphology.rs → emit_soma_spheres` from the neuron position arrays. Fields: `center: [f32; 3]`, `radius: f32` (= `params::R0`), `neuron_id: u32`, `kind: u32` (= 2 for soma), `_pad0`, `_pad1`. The size assert is `crates/brain-visualizer/src/sim/morphology.rs → sphere_instance_layout_is_32_bytes`.
 
-`path_len` is the cumulative path length from the soma to endpoint `a`, retained in `MorphSegment` but no longer driving render timing. The connection-lighting model keys off spikes, not path position — see [`gpu-rendering.md`](gpu-rendering.md). All hash inputs use `crates/brain-visualizer/src/connectivity/hash.rs → mix_key, hash32` with salts defined in `crates/brain-visualizer/src/sim/morphology.rs → salt` so morphology draws stay disjoint from connectivity target/weight draws.
+`path_len` is the cumulative path length from the soma to endpoint `a`. The
+generator computes it from the emitted sampled chain distance, and sibling
+branches start from their parent's endpoint path instead of accumulating across
+unrelated siblings. The morphology renderer uses it again in v0.3.3 by adding a
+local segment interpolant (`t * length(b-a)`) to recover per-fragment path
+position for the traveling packet in `render_morphology.wgsl`. All hash inputs use
+`crates/brain-visualizer/src/connectivity/hash.rs → mix_key, hash32` with salts
+defined in `crates/brain-visualizer/src/sim/morphology.rs → salt` so
+morphology draws stay disjoint from connectivity target/weight draws.
 
 The buffer cap is `n * max_segs_per_neuron(k)`, where the per-neuron cap is
 derived from named dendrite/trunk/cluster/twig budgets plus slack
@@ -171,16 +194,20 @@ two separate draw sub-passes, both additive blend, no depth write, bloom-friendl
 The *tube sub-pass* (`vs_main / fs_main`) draws one shader-generated tapered cylinder
 per `MorphSegment` — 36 vertices per instance. The *soma sphere sub-pass*
 (`vs_sphere / fs_sphere`) draws one UV-sphere per `MorphSphereInstance` — 288
-vertices per instance. Both sub-passes read `last_spike` to drive whole-connection
-spike lighting: when a neuron fires, its structure and downstream twigs light
-instantly and fade with the same `exp(-tick_diff/glow_tau)` curve as the far-glow
-dot. A simple ambient + diffuse + rim lighting model is applied via
-`MorphUniforms` (192 B, shared by both sub-passes); the lighting/brightness
-defaults are the dev-panel-tunable `MorphologyConfig` lighting group
-(`crates/brain-visualizer/src/sim/morphology.rs → LightingConfig`), not hardcoded
+vertices per instance. Both sub-passes read `last_spike`, but they now use it
+in different ways: the soma sphere shares the far-body soma pulse timing
+(`glow` + short `flash` + white-core lift), while the tube pass turns
+`path_len + local_segment_t * length(b-a)` into a moving source-owned packet.
+Axons carry the full outward packet; dendrites get only a weak near-soma echo so
+the renderer does not imply false outgoing dendrite signaling. A simple ambient + diffuse + rim
+lighting model is applied via `MorphUniforms` (192 B, shared by both
+sub-passes); the lighting/brightness defaults are the dev-panel-tunable
+`MorphologyConfig` lighting group (`crates/brain-visualizer/src/sim/morphology.rs → LightingConfig`), not hardcoded
 shader constants. Resting structure is drawn at the config-owned
-`resting_brightness`; axon color is E/I-tinted by default or region-tinted when
-`color_by == 0`. The full lighting model and pass order are owned by
+`resting_brightness`; branch and soma color get low-amplitude deterministic
+procedural material variation from world position, normal, `path_len`, `kind`,
+and `neuron_id`, with no texture assets or new layout fields. The full lighting
+model and pass order are owned by
 [`gpu-rendering.md`](gpu-rendering.md).
 
 The `crates/brain-visualizer/examples/morph_view.rs` harness exercises the full pipeline: N=1200/K=16,
@@ -191,8 +218,9 @@ variant to `/tmp/morph_view_active_bright_stats.json` for the tuning pass.
 
 ## Update when
 
-- `place_neurons` is changed to surface-pinned or barycentric placement (the doc
-  currently describes volumetric placement — the code wins).
+- `brain_outer_radius` / `brain_surface_point` changes in a way that materially
+  alters the silhouette or placement volume.
+- `place_neurons` changes away from the current shell-biased envelope sampler.
 - `assign_regions` is changed to use the anterior–posterior axis for spatial
   blocking instead of the current hash-shuffle.
 - `MorphologyParams`, `MorphologyStats`, or the source-type bytes contract

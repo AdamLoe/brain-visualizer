@@ -87,8 +87,8 @@ export class Camera {
   }
 
   /** Translate the camera target in screen space. */
-  pan(dxPx: number, dyPx: number, viewportWidth: number, viewportHeight: number): void {
-    if (viewportWidth <= 0 || viewportHeight <= 0) return;
+  pan(dxPx: number, dyPx: number, _viewportWidth: number, viewportHeight: number): void {
+    if (_viewportWidth <= 0 || viewportHeight <= 0) return;
     const worldPerPixel = (2 * this.distance * Math.tan(this.fov / 2)) / viewportHeight;
     const right = this.cameraRight();
     const up = this.cameraUp();

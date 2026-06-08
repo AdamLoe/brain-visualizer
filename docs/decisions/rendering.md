@@ -51,29 +51,50 @@
   `connection_curve_lift` changes force a full `regenerate_morphology` call.
   The cylinders and ribbon required no such bake step.
 
-## Whole-connection spike lighting, τ-synced (no traveling pulse)
+## Source-owned soma pulse + traveling morphology impulse
 
-- **Decision.** When a neuron fires, its connections light **instantly** and
-  fade with the *same* `exp(-tick_diff/glow_tau)` curve as the far-glow neuron
-  dot — there is no pulse band that races outward over a `signal_speed` and
-  fades over a separate `lifetime`. One active toggle: `light_next` (downstream
-  — a firing neuron's own segments/outgoing connections, default ON). The
-  `light_past` toggle (upstream / incoming connections) has been removed from
-  the settings surface; Float32Array index 9 is tombstoned as `reserved_zero`
-  and the uniform field is always passed as `0`. The retired `signal_speed` /
-  `lifetime` knobs are gone and their settings-array indices were repurposed.
-- **Why.** Upstream lighting on shared arbors is misleading: shared root/cluster
-  segments are source-owned structure (they carry `target_id = neuron_id`), so
-  target-keyed lighting only resolves correctly on terminal twigs. Lighting the
-  whole upstream path from a firing target gives a visually false impression that
-  the entire path was driven by that target. Syncing `light_next` fade to the
-  neuron's own glow τ reads as one coherent event ("this neuron fired, and
-  *these* are its synapses"). Upstream lighting is deferred until whole-path
-  shared-arbor semantics are redesigned.
-- **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md)
-- **Code anchors.** `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl →
-  vs_main` (the `light_next`/`glow_tau` brightness model);
+- **Decision.** When a neuron fires, the body visual now reads as a short soma
+  pulse first and a traveling morphology impulse second. `render_far.wgsl` and
+  `render_morphology.wgsl → vs_sphere / fs_sphere` derive a slower `glow`
+  envelope plus a faster `flash` and brief white-core lift from the existing
+  packed `last_spike` word and `tick`. `render_morphology.wgsl → vs_main /
+  fs_main` derives a traveling packet from that same source `last_spike` plus
+  `MorphSegment.path_len + t * length(b-a)`; axons carry the full outward
+  packet, dendrites carry only a weak near-soma echo. The first pass keeps
+  `MorphSegment`, `MorphUniforms`, `RenderUniforms`, and the
+  `VisualSettings` Float32Array unchanged; pulse defaults live in shader
+  constants and existing `glow_tau` / `resting_brightness` / `active_boost`.
+  `light_past` stays removed from the settings surface (Float32Array index 9 is
+  still `reserved_zero`, uniform field passed as `0`).
+- **Why.** The whole-arbor instant glow made firing read as a state change
+  rather than a causal event. Driving the pulse from `last_spike` keeps the
+  effect fully GPU-side and simulation-honest, while using `path_len` restores
+  branch-local motion without forcing a layout migration. Keeping dendrites to a
+  local echo avoids implying false outgoing signaling on source-owned dendrite
+  geometry. Upstream lighting remains deferred because shared arbors are still
+  source-owned structure.
+- **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md), [`../architecture/manifold.md`](../architecture/manifold.md), [`../architecture/data-model.md`](../architecture/data-model.md)
+- **Code anchors.** `crates/brain-visualizer/src/sim/gpu/shaders/render_far.wgsl`;
+  `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl`;
   `crates/brain-visualizer/src/sim/gpu/resources.rs → MorphUniforms`.
+
+## Morphology material stays procedural, deterministic, and asset-free
+
+- **Decision.** The first morphology material pass stays entirely in
+  `render_morphology.wgsl`: no external textures, samplers, new bind groups, or
+  public beauty controls. Soma spheres and branch tubes use deterministic hash /
+  noise helpers keyed from world position, normal, `path_len`, `kind`, and
+  `neuron_id`. The first pass also keeps the shared uniform/layout surface
+  unchanged; material strengths are shader constants until review proves that
+  extra config fields are necessary.
+- **Why.** The beauty target was restrained surface life, not a new asset
+  system. Procedural material variation improves close-up anatomy and still
+  preserves the existing region/E-I/identity color modes, while avoiding a
+  second shared-layout migration on the same implementation surface as the pulse
+  work.
+- **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md), [`../architecture/manifold.md`](../architecture/manifold.md)
+- **Code anchors.** `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl →
+  material_hash / material_noise3 / tube_material / soma_material`.
 
 ## Draw all K outgoing connections per neuron
 
@@ -90,10 +111,17 @@
 - **Applies to.** [`../architecture/manifold.md`](../architecture/manifold.md)
 - **Code anchors.** `crates/brain-visualizer/src/sim/morphology.rs → generate` (`SEGS`, `BOW_GAIN`).
 
-## Bloom is opt-in; direct path is the validated baseline
+## Bloom ships on by default; the direct path remains the validated fallback
 
-- **Decision.** `bloom_strength == 0` (the default) routes the scene directly to the surface `target_view` — no offscreen indirection. `bloom_strength > 0` enables an HDR offscreen render + bright-pass + separable blur + composite. Both paths share all scene render passes unchanged.
-- **Why.** The direct path is the validated baseline (pixel-exact against the pre-bloom baseline). The opt-in design ensures the default look is never broken by the bloom code path, and the overhead is zero when bloom is off. The additive scene cooperates with bloom naturally because energy accumulates in the HDR buffer without premature clamping.
+- **Decision.** `bloom_strength > 0` enables the HDR offscreen render +
+  bright-pass + separable blur + composite path, and the current shipped web
+  default keeps bloom on at `0.4`. `bloom_strength == 0` still routes the scene
+  directly to the surface `target_view` with no offscreen indirection. Both
+  paths share all scene render passes unchanged.
+- **Why.** The direct path remains the validated fallback and zero-overhead
+  baseline, but the cohesive-defaults pass deliberately ships with moderate
+  bloom enabled so the default first-load morphology glow reads as the accepted
+  product look rather than a dev-only tuned state.
 - **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md)
 - **Code anchors.** `crates/brain-visualizer/src/sim/gpu/mod.rs → bloom_on` guard; `crates/brain-visualizer/src/sim/gpu/shaders/bloom.wgsl → fs_bright / fs_blur / fs_composite`
 

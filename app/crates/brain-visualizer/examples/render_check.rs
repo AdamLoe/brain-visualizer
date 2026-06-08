@@ -89,11 +89,11 @@ async fn run() {
         backend.tick(1, 0.55);
     }
     let stats = backend.tick(1, 0.55);
-    println!(
-        "[render_check] post-warmup: spikes/tick = {}",
-        stats.spikes
+    println!("[render_check] post-warmup: spikes/tick = {}", stats.spikes);
+    assert!(
+        stats.spikes > 0,
+        "Expected some spikes after warm-up at focused"
     );
-    assert!(stats.spikes > 0, "Expected some spikes after warm-up at focused");
 
     // --- 6. Render one frame ---
     // Fixed camera: azimuth=0.3, elevation=0.4, distance=3.0 (spec defaults).
@@ -105,8 +105,8 @@ async fn run() {
         &mvp,
         camera_right,
         camera_up,
-        100.0,  // glow_tau (ticks)
-        0.012,  // point_radius (world units — small for 5k neurons)
+        100.0, // glow_tau (ticks)
+        0.012, // point_radius (world units — small for 5k neurons)
     );
 
     // --- 7. Read back pixels ---
@@ -134,9 +134,7 @@ async fn run() {
         "[render_check] non-black pixels: {non_black}/{total} ({:.2}%)",
         frac_non_black * 100.0
     );
-    println!(
-        "[render_check] max channel values: R={max_r} G={max_g} B={max_b}"
-    );
+    println!("[render_check] max channel values: R={max_r} G={max_g} B={max_b}");
     println!("[render_check] device: {device_name}");
 
     // Some glow should be visible.
@@ -190,8 +188,14 @@ async fn run() {
 
     // Stimulation should either keep activity up or produce at least one spike.
     // (At low N the effect may be subtle, but stimulate should run without panic.)
-    println!("[render_check] stimulate() path: executed without panic (active={}) → PASS",
-        if stim_tick.spikes > 0 { "spikes present" } else { "spikes=0 but no crash" });
+    println!(
+        "[render_check] stimulate() path: executed without panic (active={}) → PASS",
+        if stim_tick.spikes > 0 {
+            "spikes present"
+        } else {
+            "spikes=0 but no crash"
+        }
+    );
 
     // --- 10. Morphology check -----------------------------------------------
     // The Phase-D ribbon is retired. The connection layer now drives the
@@ -203,14 +207,7 @@ async fn run() {
     for _ in 0..50 {
         backend.tick(1, 0.55);
     }
-    backend.render(
-        &color_view,
-        &mvp,
-        camera_right,
-        camera_up,
-        100.0,
-        0.012,
-    );
+    backend.render(&color_view, &mvp, camera_right, camera_up, 100.0, 0.012);
     let morph_pixels =
         readback_rgba(backend.device(), backend.queue(), &color_tex, WIDTH, HEIGHT).await;
     let mut morph_non_black = 0u32;
@@ -244,14 +241,7 @@ async fn run() {
     for _ in 0..50 {
         backend.tick(1, 0.55);
     }
-    backend.render(
-        &color_view,
-        &mvp,
-        camera_right,
-        camera_up,
-        100.0,
-        0.012,
-    );
+    backend.render(&color_view, &mvp, camera_right, camera_up, 100.0, 0.012);
     let bloom_pixels =
         readback_rgba(backend.device(), backend.queue(), &color_tex, WIDTH, HEIGHT).await;
     let mut bloom_non_black = 0u32;
@@ -288,7 +278,9 @@ async fn run() {
         direct_non_black > 0,
         "Bloom-off direct path produced an all-black frame"
     );
-    println!("[render_check] bloom check PASS: HDR+blur+composite drew, bloom-off direct path intact");
+    println!(
+        "[render_check] bloom check PASS: HDR+blur+composite drew, bloom-off direct path intact"
+    );
 
     println!("=== render_check PASSED ===");
 }
@@ -315,11 +307,7 @@ fn camera_vectors(azimuth: f32, elevation: f32) -> ([f32; 3], [f32; 3]) {
     // Camera right = cross(forward, world_up) normalised.
     // forward = normalize(center - eye) = -normalize(eye).
     let cp = elevation.cos();
-    let eye = [
-        cp * azimuth.sin(),
-        elevation.sin(),
-        cp * azimuth.cos(),
-    ];
+    let eye = [cp * azimuth.sin(), elevation.sin(), cp * azimuth.cos()];
     // right = cross([0,1,0], eye_dir_normalised) ... actually easier:
     // right is the camera X axis = (view matrix row 0).
     // Compute from azimuth only (elevation doesn't rotate right around Y).
@@ -351,25 +339,49 @@ fn perspective(fovy: f32, aspect: f32, near: f32, far: f32) -> [f32; 16] {
     let nf = 1.0 / (near - far);
     // Column-major
     [
-        f / aspect, 0.0,  0.0,            0.0,
-        0.0,        f,    0.0,            0.0,
-        0.0,        0.0,  (far+near)*nf, -1.0,
-        0.0,        0.0,  2.0*far*near*nf,0.0,
+        f / aspect,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        f,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        (far + near) * nf,
+        -1.0,
+        0.0,
+        0.0,
+        2.0 * far * near * nf,
+        0.0,
     ]
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn look_at(eye: [f32; 3], center: [f32; 3], up: [f32; 3]) -> [f32; 16] {
-    let z = vec3_norm([eye[0]-center[0], eye[1]-center[1], eye[2]-center[2]]);
+    let z = vec3_norm([eye[0] - center[0], eye[1] - center[1], eye[2] - center[2]]);
     let x = vec3_norm(vec3_cross(up, z));
     let y = vec3_cross(z, x);
-    let dot = |a: [f32;3], b: [f32;3]| a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
     // Column-major
     [
-        x[0],  y[0],  z[0], 0.0,
-        x[1],  y[1],  z[1], 0.0,
-        x[2],  y[2],  z[2], 0.0,
-        -dot(x,eye), -dot(y,eye), -dot(z,eye), 1.0,
+        x[0],
+        y[0],
+        z[0],
+        0.0,
+        x[1],
+        y[1],
+        z[1],
+        0.0,
+        x[2],
+        y[2],
+        z[2],
+        0.0,
+        -dot(x, eye),
+        -dot(y, eye),
+        -dot(z, eye),
+        1.0,
     ]
 }
 
@@ -424,7 +436,11 @@ async fn readback_rgba(
                 rows_per_image: Some(height),
             },
         },
-        wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
     );
     queue.submit([enc.finish()]);
 

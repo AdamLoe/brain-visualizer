@@ -104,7 +104,13 @@ mod wasm_entry {
         /// Create + initialize the CPU backend for `n`/`k`/`seed`. Same seed as
         /// the GPU backend → identical network (BV16 restart semantics).
         #[wasm_bindgen(constructor)]
-        pub fn new(n: usize, k: usize, seed: u32, i_ext: f32, synaptic_scale: f32) -> WasmCpuBackend {
+        pub fn new(
+            n: usize,
+            k: usize,
+            seed: u32,
+            i_ext: f32,
+            synaptic_scale: f32,
+        ) -> WasmCpuBackend {
             let config = SimConfig {
                 n,
                 k,
@@ -159,7 +165,9 @@ mod wasm_entry {
         /// Pointer to neuron positions (`f32` xyz triples, len = 3*neuron_count).
         pub fn positions_ptr(&self) -> *const f32 {
             match self.inner.render_state() {
-                crate::sim::backend::RenderState::Cpu { positions, .. } => positions.as_ptr().cast(),
+                crate::sim::backend::RenderState::Cpu { positions, .. } => {
+                    positions.as_ptr().cast()
+                }
                 _ => std::ptr::null(),
             }
         }
@@ -192,11 +200,11 @@ mod wasm_entry {
     /// the native-tested GpuBackend.  Created by the async `WasmGpuBackend.create()`.
     #[wasm_bindgen]
     pub struct WasmGpuBackend {
-        inner:          GpuBackend,
-        surface:        wgpu::Surface<'static>,
+        inner: GpuBackend,
+        surface: wgpu::Surface<'static>,
         surface_format: wgpu::TextureFormat,
-        width:          u32,
-        height:         u32,
+        width: u32,
+        height: u32,
     }
 
     #[wasm_bindgen]
@@ -208,19 +216,18 @@ mod wasm_entry {
         /// const app = await WasmGpuBackend.create(canvas, n, k, seed, iExt, synScale);
         /// ```
         pub fn create(
-            canvas:         web_sys::HtmlCanvasElement,
-            n:              usize,
-            k:              usize,
-            seed:           u32,
-            i_ext:          f32,
+            canvas: web_sys::HtmlCanvasElement,
+            n: usize,
+            k: usize,
+            seed: u32,
+            i_ext: f32,
             synaptic_scale: f32,
         ) -> js_sys::Promise {
             future_to_promise(async move {
                 // Acquire WebGPU device + configure canvas surface.
-                let (ctx, surface, fmt) =
-                    GpuBackend::acquire_web(canvas)
-                        .await
-                        .map_err(|e| JsValue::from_str(&format!("[gpu] acquire_web: {e}")))?;
+                let (ctx, surface, fmt) = GpuBackend::acquire_web(canvas)
+                    .await
+                    .map_err(|e| JsValue::from_str(&format!("[gpu] acquire_web: {e}")))?;
 
                 // Retrieve surface dimensions from the already-committed config.
                 let surf_config = surface.get_configuration();
@@ -252,8 +259,7 @@ mod wasm_entry {
                 inner.resize_render_targets(w, h);
 
                 web_sys::console::log_1(
-                    &format!("[gpu] WasmGpuBackend ready: N={n} K={k} size={w}×{h}")
-                        .into(),
+                    &format!("[gpu] WasmGpuBackend ready: N={n} K={k} size={w}×{h}").into(),
                 );
 
                 let backend = WasmGpuBackend {
@@ -331,35 +337,45 @@ mod wasm_entry {
         #[allow(clippy::too_many_arguments)]
         pub fn render_frame(
             &mut self,
-            mvp:          &[f32],
-            right_x: f32, right_y: f32, right_z: f32,
-            up_x:    f32, up_y:    f32, up_z:    f32,
-            eye_x:   f32, eye_y:   f32, eye_z:   f32,
-            camera_dist:  f32,
+            mvp: &[f32],
+            right_x: f32,
+            right_y: f32,
+            right_z: f32,
+            up_x: f32,
+            up_y: f32,
+            up_z: f32,
+            eye_x: f32,
+            eye_y: f32,
+            eye_z: f32,
+            camera_dist: f32,
         ) {
             // Acquire surface texture.
             let surface_tex = match self.surface.get_current_texture() {
-                wgpu::CurrentSurfaceTexture::Success(t) |
-                wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
+                wgpu::CurrentSurfaceTexture::Success(t)
+                | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
                 _ => return, // surface lost / timeout
             };
-            let view = surface_tex.texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let view = surface_tex
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
 
             // Copy the MVP slice into a fixed-size array.
-            if mvp.len() < 16 { return; }
+            if mvp.len() < 16 {
+                return;
+            }
             let mut mvp_arr = [0f32; 16];
             mvp_arr.copy_from_slice(&mvp[..16]);
 
             // V2 Phase 0: source glow_tau and point_radius from VisualSettings
             // (pushed via update_settings) rather than per-frame scalar args.
-            let glow_tau     = self.inner.visual().glow_tau;
+            let glow_tau = self.inner.visual().glow_tau;
             let point_radius = self.inner.visual().point_radius;
 
             self.inner.render_full(
                 &view,
                 &mvp_arr,
                 [right_x, right_y, right_z],
-                [up_x,    up_y,    up_z   ],
+                [up_x, up_y, up_z],
                 glow_tau,
                 point_radius,
                 [eye_x, eye_y, eye_z],
@@ -378,20 +394,22 @@ mod wasm_entry {
         pub fn resize(&mut self, width: u32, height: u32) {
             let w = width.max(1);
             let h = height.max(1);
-            if w == self.width && h == self.height { return; }
-            self.width  = w;
+            if w == self.width && h == self.height {
+                return;
+            }
+            self.width = w;
             self.height = h;
 
             // Reconfigure the surface at the new size.
             self.surface.configure(
                 self.inner.device(),
                 &wgpu::SurfaceConfiguration {
-                    usage:   wgpu::TextureUsages::RENDER_ATTACHMENT,
-                    format:  self.surface_format,
-                    width:   w,
-                    height:  h,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    format: self.surface_format,
+                    width: w,
+                    height: h,
                     present_mode: wgpu::PresentMode::Fifo,
-                    alpha_mode:   wgpu::CompositeAlphaMode::Auto,
+                    alpha_mode: wgpu::CompositeAlphaMode::Auto,
                     view_formats: vec![],
                     desired_maximum_frame_latency: 2,
                 },
@@ -403,7 +421,14 @@ mod wasm_entry {
 
         /// Reinitialize with a new neuron/connectivity count (adaptive scaler).
         /// Keeps the same surface; rebuilds all GPU buffers.
-        pub fn reinitialize(&mut self, n: usize, k: usize, seed: u32, i_ext: f32, synaptic_scale: f32) {
+        pub fn reinitialize(
+            &mut self,
+            n: usize,
+            k: usize,
+            seed: u32,
+            i_ext: f32,
+            synaptic_scale: f32,
+        ) {
             let config = SimConfig {
                 n,
                 k,
@@ -441,8 +466,10 @@ mod wasm_entry {
     #[wasm_bindgen]
     pub fn log_cross_origin_isolation(isolated: bool) {
         web_sys::console::log_1(
-            &format!("[coi] crossOriginIsolated={isolated} (SharedArrayBuffer {})",
-                if isolated { "available" } else { "UNAVAILABLE" })
+            &format!(
+                "[coi] crossOriginIsolated={isolated} (SharedArrayBuffer {})",
+                if isolated { "available" } else { "UNAVAILABLE" }
+            )
             .into(),
         );
     }
