@@ -132,7 +132,31 @@
 - **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md), [`../architecture/manifold.md`](../architecture/manifold.md)
 - **Alternatives considered.** Pre-built indexed mesh per neuron arbor (Q1=B) — correct junctions and caps, but requires a new mesh-buffer layout and a much more complex generator; deferred. Depth writes for correct self-occlusion (Q2=B) — requires sorting render passes and manifold-after-morphology ordering; deferred as a render pipeline rework.
 - **Code anchors.** `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl → vs_main / fs_main / vs_sphere / fs_sphere` (`TUBE_SIDES` / `SPHERE_SLICES` / `SPHERE_STACKS` override consts); `crates/brain-visualizer/src/sim/gpu/pipelines.rs → build_morph_pipelines`; `crates/brain-visualizer/src/sim/morphology.rs → LightingConfig, RenderQualityConfig`; `crates/brain-visualizer/src/sim/gpu/resources.rs → MorphUniforms`. The dev-panel exposure decision lives in [`dev-tooling.md`](dev-tooling.md) and [`manifold.md`](manifold.md).
-- **Revisit when.** True depth compositing is a separate future rework if screenshots demonstrate the additive interpenetration reads poorly at typical zoom distances.
+- **Revisit when.** True depth compositing is a separate future rework if screenshots demonstrate the additive interpenetration reads poorly at typical zoom distances. (Partially superseded: the active-opacity layer below now adds a depth-correct redraw for *firing* geometry; the resting additive layer stays additive/no-depth.)
+
+## True opacity for active geometry, layered over the additive resting passes
+
+- **Decision.** Firing geometry gets a genuine depth-tested, alpha-blended redraw (active tube + active soma passes) on top of the unchanged additive resting passes, so it occludes. Opacity is keyed off `last_spike` recency (`active_alpha = mix(inactive_opacity_floor, active_opacity, activity)`), not brightness. The additive resting layer is kept exactly as-is for the translucent background; only the active layer is depth-correct.
+- **Why.** Additive blending physically cannot occlude — it can only make things brighter, so everything read as uniformly muddy translucency. A real depth + alpha path lets active neurons read as solid and inactive structure drop to near-invisible. Layering the active redraw over the additive passes (rather than converting them) avoids reworking the whole bloom/HDR compositing pipeline: the active passes write the same HDR `scene_view` color, so bloom composes over them with zero bloom-path edits, and at `active_opacity == 0` the frame is bit-for-bit the old additive look.
+- **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md)
+- **Alternatives considered.** Fake opacity by making active geometry brighter-additive — rejected because additive cannot occlude, which was the actual defect. Convert the resting passes to depth-tested too — rejected: needs pass sorting and breaks the bloom-friendly additive resting glow; resting self-occlusion stays deferred.
+- **Tradeoffs.** The active passes redraw the same tube/soma geometry a second time (one extra draw each), and the active layer owns its own depth clear because the surface/near-LOD depth users are off by default. The two new opacity knobs ride repurposed `MorphUniforms` pads, so the 192 B layout is unchanged.
+- **Code anchors.** `crates/brain-visualizer/src/sim/gpu/mod.rs → render_full` (`active_opaque_on`, the two active passes); `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl → fs_main_active / fs_sphere_active`; `crates/brain-visualizer/src/sim/gpu/pipelines.rs → build_morph_pipelines` (`render_morphology_active` / `render_soma_spheres_active`).
+
+## "Active" = firing, not click-selection (no picking)
+
+- **Decision.** The opaque active layer is driven by *firing* (spike-keyed `last_spike` recency), reusing the same activity signal the additive lighting already uses. Click-to-select / GPU picking is not built; the opacity pass is shaped so a click-selected set *could* feed it later, but no picking subsystem is revived.
+- **Why.** Keeps the opacity feature self-contained and avoids reviving the deferred picking subsystem (which stays in `future_roadmap.md`). Firing is already the renderer's universal activity key, so "opaque if active" needs no new buffer, selection state, or readback.
+- **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md)
+- **Code anchors.** `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl → fs_main_active / fs_sphere_active` (alpha from the spike-driven `activity`).
+- **Revisit when.** Click-to-inspect / picking is built — the active layer's alpha source can then accept a selected-set input.
+
+## Active-layer opacity knobs live in LightingConfig, not the VisualSettings Float32Array
+
+- **Decision.** `active_opacity` (ceiling, default 1.0) and `inactive_opacity_floor` (floor, default 0.0) live in the morph-config-owned `LightingConfig` and ride two repurposed trailing `MorphUniforms` pad slots — the locked `VisualSettings` Float32Array index contract is untouched.
+- **Why.** `LightingConfig` is the established, contract-light path for morphology beauty knobs (it already carries `resting_brightness` / `active_boost` through `MorphUniforms`). Growing the Float32Array would touch the locked Rust↔TS index contract and the persistence schema for no benefit; repurposing reserved `MorphUniforms` pads keeps the 192 B layout assert green.
+- **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md)
+- **Code anchors.** `crates/brain-visualizer/src/sim/morphology.rs → LightingConfig` (`active_opacity`, `inactive_opacity_floor`); `crates/brain-visualizer/src/sim/gpu/resources.rs → MorphUniforms` (the two trailing fields, formerly `_pad4`/`_pad5`).
 
 ## See also
 

@@ -46,6 +46,16 @@ all tiers for the current beauty-first phase; the `TierRange` table in
 `crates/brain-visualizer/src/sim/scaler.rs` carries wider K ranges for when a scaler is
 re-armed.
 
+**High-N morphology init cost.** Since the branching-tree morphology generator
+(`crates/brain-visualizer/src/sim/morphology.rs → generate`), per-neuron build cost
+rose ~5× over the old fan and the segment allocation cap grew ~1.5×, so a high-N
+tier pays a noticeably longer one-time `initialize()` and approaches the GPU
+storage-buffer ceiling sooner. The "degrade gracefully at high N" guard
+(e.g. dropping `edge_subsegments` / skipping relaxation above a budget threshold)
+was deferred — see [`../decisions/manifold.md`](../decisions/manifold.md) and
+[`future_roadmap.md`](../plans/future_roadmap.md). This is why the default stays
+`low` at N=1 200.
+
 Auto-selection of a tier based on measured device performance is deferred: the
 benchmarks needed to calibrate those heuristics require real browser/GPU numbers
 that were not available in the WSL2 development environment (only llvmpipe

@@ -4,7 +4,7 @@
 
 - **Decision.** The cortical surface is generated entirely in code via icosphere
   subdivision, a shared deterministic brain-envelope shaping pass, and
-  two-octave simplex-noise gyrification; no external mesh files are loaded or
+  multi-octave simplex-noise gyrification; no external mesh files are loaded or
   bundled. Neuron placement uses that same envelope and is biased toward the
   cortical shell rather than filling a uniform sphere.
 - **Why.** A flat patch or smooth blob does not read as a brain to a visitor. The
@@ -41,31 +41,89 @@
 - **Revisit when.** Spatial blocking is needed for the cursor-stimulation
   "click posterior to activate input region" UX to work reliably.
 
-## Shared arbor, not K independent splines
+## Axon arbor grown by Prim-like tree + relaxation, not a hand-tuned fan
 
-- **Decision.** Each neuron is rendered as a real cell with a soma, a local
-  dendrite tree, a deterministic shared trunk/root, 2-5 cluster branches, and
-  one terminal twig per unique non-self target. The generator uses a locked
-  morphology preset plus build stats, source-type bytes derived from region+seed,
-  deterministic sockets, and named per-kind segment budgets with slack. Every
-  biological branch is emitted as a sampled cubic-Bezier chain, and `path_len`
-  follows the actual emitted branch distance from the soma rather than a global
-  sequential cursor. The branch grammar is cubic Bezier, not a sin-bow or
-  Catmull-Rom.
-- **Why.** Independent per-target splines read like unrelated sticks; they do
-  not show shared structure or terminal identity. A shared arbor with visible
-  sockets gives the brain connected directional grain while still making the
-  actual target terminals legible. Using the same source-type bytes as
-  production connectivity keeps the morphology honest.
+- **Decision.** The axon arbor is a single tree grown by **Prim-like greedy
+  attach plus local relaxation**: leaves are the unique non-self targets, each
+  greedy step adds the globally-best `(leaf, attach-point)` edge (which may split
+  an existing edge into a shared internal node), and a local ancestor-window
+  pass relaxes internal nodes while holding the soma root and leaf sockets fixed.
+  This replaces the earlier hand-tuned "shared trunk + 2-5 cluster branches +
+  terminal twigs" three-tier fan. The dendrite tree, source-type bytes from
+  region+seed, deterministic sockets, cubic-Bezier emission, per-branch `path_len`,
+  and named segment budgets with slack are all retained.
+- **Why.** A fixed trunk→cluster→twig fan reads as a flat spray with no organic
+  shared structure; the Prim+relax grammar grows real shared trunks that fork
+  smoothly toward targets, so the arbor reads as a root/tree. Determinism is
+  preserved because the greedy loop and relaxation use only ordered `Vec`
+  structures and `(target_id, node index)` tie-breaks — no `HashMap` iteration,
+  no float-equality dependence — and the `salt::TREE_*` draws are disjoint from
+  connectivity.
 - **Applies to.** [`../architecture/manifold.md`](../architecture/manifold.md)
 - **Code anchors.** `crates/brain-visualizer/src/sim/morphology.rs → generate,
-  MorphologyParams::locked_default, MorphologyStats, MorphSegment,
-  max_segs_per_neuron`; `crates/brain-visualizer/src/connectivity/hash.rs →
+  ArborNode, MorphologyParams::locked_default, MorphologyStats, MorphSegment,
+  segment_cap, max_segs_per_neuron`; `crates/brain-visualizer/src/connectivity/hash.rs →
   mix_key, hash32`; `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl → vs_main`
-- **Tradeoffs.** The shared trunk/cluster segments do not carry a distinct real
-  target id; they use the source id and defer upstream lighting to the terminal
-  twigs. The 48-byte `MorphSegment` layout remains the hard binary contract
-  between Rust and WGSL.
+- **Tradeoffs.** Internal trunk/fork edges carry the source id (shared paths stay
+  source-lit); only leaf edges carry the real target id. The 48-byte
+  `MorphSegment` layout remains the hard Rust ↔ WGSL contract — the tree ships
+  inside it, with `radius_a`/`radius_b` carrying width and no new fields. The
+  generator is also ~5× slower to initialize than the old fan (see the known
+  limitation below).
+
+## Area-preserving √-width over literal-linear weight→width
+
+- **Decision.** Branch radius encodes signal-carrying capacity via
+  `radius = R_trunk · √(subtree_weight / total_weight)`, computed bottom-up after
+  the tree is built (inhibitory weights enter as `unsigned_abs().max(1)`, floored
+  at `R_trunk · twig_radius_fraction`). The trunk carries 100% at full radius;
+  each fork sheds its children's weight share.
+- **Why.** Area-preserving √ scaling (Murray/Rall) keeps shared trunks visually
+  substantial while still letting thin twigs read. The literal-linear
+  "90% weight → 90% width" model the owner first proposed was rejected as too
+  wispy — it collapses low-weight twigs to near-invisible threads and makes the
+  trunk look anemic.
+- **Applies to.** [`../architecture/manifold.md`](../architecture/manifold.md)
+- **Code anchors.** `crates/brain-visualizer/src/sim/morphology.rs → generate`
+  (width pass), `connectivity::weight`.
+- **Alternatives considered.** Literal-linear weight fraction (rejected: wispy).
+- **Tradeoffs.** Width is static — baked once at generation from synaptic weight;
+  there is no runtime width path.
+
+## Soft fork-degree penalty over a hard child cap
+
+- **Decision.** The 2-3-children-per-fork tendency is a *soft* `tree_score_degree`
+  term in the attach score (penalty monotonic in a node's current child count),
+  not a hard cap. Relaxation then spreads siblings into fork-like geometry.
+- **Why.** A soft penalty keeps the generator a single greedy pass with no
+  synthetic-split bookkeeping, and lets occasional higher-degree forks happen
+  where the geometry wants them rather than forcing artificial intermediate
+  nodes everywhere.
+- **Applies to.** [`../architecture/manifold.md`](../architecture/manifold.md)
+- **Code anchors.** `crates/brain-visualizer/src/sim/morphology.rs → generate`
+  (attach score), `MorphologyParams::tree_score_degree`.
+- **Revisit when.** If review shows trunks visibly spraying 5+ ways, the known
+  fallback is to convert `tree_score_degree` into a hard cap that synthesizes
+  intermediate split nodes. The `cluster_count_histogram` (fork-degree, index
+  5 = "5+") is the signal to watch.
+
+## Known limitation: high-N init cost and segment-cap growth (graceful-degrade guard deferred)
+
+- **Decision.** The Prim+relax generator ships without a "degrade gracefully at
+  high N" guard; the default tier (N≈1200/K≈16) is the supported target.
+- **Why.** The per-neuron init cost is ~5× the old fan — roughly 57ms → 281ms at
+  N=1200/K=16 — because each arbor runs an O(leaves × nodes) greedy attach plus
+  per-attach relaxation, and the per-arbor segment allocation cap grew ~1.5×.
+  High-N tiers therefore initialize slowly and approach GPU buffer limits. The
+  guard was scoped out to keep the rewrite to the generator alone; the cost is
+  acceptable at default scale and the team chose to ship rather than block on it.
+- **Applies to.** [`../architecture/manifold.md`](../architecture/manifold.md),
+  [`scaling.md`](scaling.md)
+- **Code anchors.** `crates/brain-visualizer/src/sim/morphology.rs → generate,
+  segment_cap`.
+- **Revisit when.** A high-N tier becomes a target — then add the deferred
+  degrade-gracefully guard (cap effective leaves or subsegments per arbor) before
+  the init cost or buffer cap becomes user-visible.
 
 ## Deterministic sockets over vague near-target landing
 
@@ -93,7 +151,8 @@
 ## Morphology generator exposed for tuning; budgets/slack/salts stay protected
 
 - **Decision.** The generator shape fields of `MorphologyParams` (branch counts,
-  reach, socket placement, radius/taper fractions) are exposed as a tunable
+  reach, socket placement, radius/taper fractions, and the tree-grammar knobs —
+  `tree_score_*`, `relax_*`, `edge_subsegments`) are exposed as a tunable
   `MorphologyConfig` to the hidden dev panel, layered over the locked default at
   apply time. The four allocation/safety budgets (`dendrite_budget`,
   `trunk_cluster_budget`, `terminal_twig_budget`, `cap_slack`) and the `salt::*`

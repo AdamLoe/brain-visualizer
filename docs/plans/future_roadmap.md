@@ -89,6 +89,24 @@ implementation details belong in the versioned plan docs, not here.
 
 - **Deferred.** The CPU/WebGL2 backend stays parked during visual showcase work.
 
+### High-N Morphology Degradation Guard
+
+- **Deferred.** The branching-tree morphology generator
+  (`crates/brain-visualizer/src/sim/morphology.rs → generate`) is tuned for the
+  beauty-first default (~1.2k neurons) and has no high-N relief valve.
+- **Why it matters.** Per-neuron build cost is ~5× the old fan (≈57→281 ms at
+  N=1200/K=16) and grows with N, and the segment allocation cap grew ~1.5×, so
+  high tiers pay a long one-time `initialize()` and approach the GPU
+  storage-buffer ceiling — observable as "the app hangs on start" when persisted
+  N/K is high.
+- **Route.** Above an N or segment-budget threshold, degrade gracefully: drop
+  `edge_subsegments` toward 1, simplify or skip the local relaxation pass, and/or
+  cap `max_segs_per_neuron` harder — keeping high tiers interactive rather than
+  blocking. The branching-tree plan called for this ("degrade gracefully at high
+  N") but it was not implemented when the plan shipped.
+- **Revisit when.** High-N tiers become part of the showcase, or the default
+  scale is raised.
+
 ## Rejected for the active roadmap
 
 - **Hard spatial region bands before v0.5.** Rejected because they risk the

@@ -76,7 +76,7 @@
   Float32Array or to `bv2_settings_v1`. The dev panel renders its rows from a
   typed descriptor array (`MORPH_DESCRIPTORS`) rather than bespoke per-control
   code.
-- **Why.** The 24-slot Float32Array index contract is a frozen, corruption-prone
+- **Why.** The 26-slot Float32Array index contract is a frozen, corruption-prone
   Rust↔TS boundary (see Float32Array decision below); the morphology config is a
   larger, nested, evolving surface where adding/removing a field should not risk
   silently shifting every other visual setting. A separate JSON channel lets the
@@ -112,7 +112,7 @@
 
 ## Float32Array index contract is the shared Rust/TS boundary
 
-- **Decision.** The 24-element `Float32Array` produced by
+- **Decision.** The 26-element `Float32Array` produced by
   `web/src/core/settings.ts → toFloat32Array` and consumed by
   `crates/brain-visualizer/src/sim/gpu/mod.rs → VisualSettings::from_slice` is the sole settings
   boundary between the JS and Rust worlds. Index assignment is the contract;

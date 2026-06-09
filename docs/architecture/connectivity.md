@@ -21,6 +21,9 @@ path and the WGSL GPU path, producing bit-identical results.
 - The local neighbourhood constant `LOCAL_D` and the anterior feed-forward bias
   (`ANTERIOR_BIAS_NUM / ANTERIOR_BIAS_DEN`) —
   `crates/brain-visualizer/src/connectivity/mod.rs → LOCAL_D`, `ANTERIOR_BIAS_NUM`.
+- The heavy-tailed long-range reach: the `ReachParams` knobs, the
+  `REACH_FRAC_DEN` integer denominator, and the `long_offset_component` helper —
+  `crates/brain-visualizer/src/connectivity/mod.rs → ReachParams`, `REACH_FRAC_DEN`.
 - The `hash32` / `mix_key` primitives and their locked constants —
   `crates/brain-visualizer/src/connectivity/hash.rs → hash32`, `mix_key` and
   `crates/brain-visualizer/src/sim/gpu/shaders/hash.wgsl → hash32`, `mix_key`.
@@ -40,7 +43,7 @@ path and the WGSL GPU path, producing bit-identical results.
 
 ## How target and weight are computed
 
-`target(i, j, ...)` is a five-step pure integer function:
+`target(i, j, ...)` is a pure integer function:
 
 1. Look up the packed integer cell id of source neuron `i` via `SpatialGrid`.
 2. Hash `(seed, i, j, CELL_OFFSET)` → three independent axis offsets in
@@ -48,11 +51,31 @@ path and the WGSL GPU path, producing bit-identical results.
    (`ANTERIOR_BIAS_NUM / ANTERIOR_BIAS_DEN ≈ 31%`) of synapses force the Z
    offset to `+LOCAL_D`, creating the posterior→anterior feed-forward bias.
    Inhibitory synapses are left unbiased.
-3. Clamp the candidate cell coordinate to the grid boundary.
-4. If the candidate cell is empty, walk outward by increasing Chebyshev radius
+3. **Heavy-tailed reach coin flip.** Hash `(seed, i, j, REACH_COIN) %
+   REACH_FRAC_DEN` (denominator `256`) and compare against the per-run
+   `ReachParams.long_range_frac`. When `coin < long_range_frac`, the synapse is
+   long-range: a fresh `(seed, i, j, REACH_OFFSET)` hash, sliced 10 bits per
+   axis like the local path, **overwrites** the local (already anterior-biased)
+   `(dx, dy, dz)` with wider offsets in `[−max_reach, max_reach]`
+   (`long_offset_component`). Most synapses keep their local offset; a tunable
+   tail jumps far. This branch is integer-only — no float distance compare.
+4. Clamp the candidate cell coordinate to the grid boundary.
+5. If the candidate cell is empty, walk outward by increasing Chebyshev radius
    until an occupied cell is found (`nearest_occupied` in
    `crates/brain-visualizer/src/connectivity/mod.rs`).
-5. Hash `(seed, i, j, IN_CELL_PICK)` to pick a neuron within the chosen cell.
+6. Hash `(seed, i, j, IN_CELL_PICK)` to pick a neuron within the chosen cell.
+
+The two reach knobs are integers so the path stays float-free:
+`long_range_frac` is a numerator over `REACH_FRAC_DEN` (`0` = always local,
+`256` = always long-range) and `max_reach` is a cell radius `≥ 1`. They are
+**dormant by default**: `ReachParams::LOCAL_ONLY` (`long_range_frac: 0`) and the
+`VisualSettings` default (`long_range_reach_frac: 0.0`) leave the coin compare
+always false, so the long-range branch never runs and output is bit-identical to
+the local-only network (the coin hash is still computed but changes no target).
+The dev-panel `longRangeReachFrac` (0..1) / `maxReachCells` knobs convert to
+these integers at the `set_visual_settings` boundary
+(`crates/brain-visualizer/src/sim/gpu/mod.rs → current_reach`); changing either
+rebuilds the axon geometry (a brain-reset/morphology-rebuild impact, not live).
 
 `weight(i, j, source_type)` hashes `(0, i, j, WEIGHT)` — seed-independent
 so weight is a property of the synapse identity, not the network instance.
@@ -84,11 +107,21 @@ before the final avalanche, keeping target, weight, and bias draws independent.
 The constants are **locked**: all multiplies wrap modulo 2^32 (WGSL `u32`
 multiply; Rust `wrapping_mul`); no `u64` appears anywhere. The Rust
 implementation in `crates/brain-visualizer/src/connectivity/hash.rs` and the WGSL in
-`crates/brain-visualizer/src/sim/gpu/shaders/hash.wgsl` must be byte-identical. The determinism gate
-`crates/brain-visualizer/tests/wgsl_hash_determinism.rs` embeds the WGSL source and asserts the GPU
-output equals the Rust golden vectors; `crates/brain-visualizer/tests/wgsl_target_determinism.rs`
-does the same end-to-end for `target()`. Neither side may be edited without
-updating both together.
+`crates/brain-visualizer/src/sim/gpu/shaders/hash.wgsl` must be byte-identical.
+
+`target` has **three bit-identical implementations** that must move together:
+the shared Rust `target_with_cell`, the GPU WGSL `target_neuron`
+(`crates/brain-visualizer/src/sim/gpu/shaders/scatter.wgsl`), and the CPU backend
+which threads `ReachParams` through `ConnParams.reach` into the same shared
+`target_with_cell` (`crates/brain-visualizer/src/sim/cpu/core.rs → ConnParams`).
+The determinism gate `crates/brain-visualizer/tests/wgsl_hash_determinism.rs`
+embeds the WGSL source and asserts the GPU output equals the Rust golden vectors;
+`crates/brain-visualizer/tests/wgsl_target_determinism.rs` does the same
+end-to-end for `target()` and **runs with the long-range tail enabled**
+(`LONG_RANGE_FRAC = 64`, `MAX_REACH = 6`) so the contract is proven with the
+branch live, self-checking GPU `target_neuron` against the live Rust `target`.
+No side (Rust / CPU / WGSL) may be edited without updating the others and
+re-running the gate.
 
 ## Per-tier K and store-once vs regenerate
 
@@ -110,8 +143,13 @@ expand K within a tier alongside N.
 - `hash32` or `mix_key` constants change (must update both `hash.rs` and
   `hash.wgsl` and re-derive golden vectors).
 - `LOCAL_D` or `ANTERIOR_BIAS_NUM / ANTERIOR_BIAS_DEN` change.
-- The `target` or `weight` algorithm changes (also recheck
-  `crates/brain-visualizer/tests/wgsl_target_determinism.rs`).
+- The `target` or `weight` algorithm changes (edit all three of Rust
+  `target_with_cell`, WGSL `target_neuron`, and the CPU `ConnParams` path
+  together, then recheck `crates/brain-visualizer/tests/wgsl_target_determinism.rs`).
+- The heavy-tailed reach rule, `REACH_FRAC_DEN`, the `REACH_COIN`/`REACH_OFFSET`
+  salts, or the `ConnectUniforms` `long_range_frac` / `max_reach` fields change
+  (Rust `resources.rs` ↔ WGSL `scatter.wgsl` struct ↔ the inline copy in the
+  determinism test).
 - `SpatialGrid` packing formula changes.
 - Per-tier K ranges or the store-once threshold change.
 

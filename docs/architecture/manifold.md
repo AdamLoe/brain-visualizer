@@ -49,18 +49,24 @@ The six-step pipeline runs synchronously in `crates/brain-visualizer/src/manifol
    envelope. The envelope is star-convex and deterministic: an elongated
    ellipsoid base is modulated by lobe-like anterior/posterior fullness, a
    ventral flattening term, temporal-side fullness, and a dorsal midline
-   indentation that reads as the longitudinal fissure. This same primitive is
-   used by both the surface mesh and neuron placement, so those two views of the
-   arena cannot drift.
+   indentation that reads as the longitudinal fissure. The fissure is a deep
+   cleft: it subtracts `0.32 × gaussian(|x|, 0, 0.15) × smoothstep(-0.05, 0.85, y)
+   × gaussian(z, 0.10, 0.78)` from the radius scale, so the hemispheres separate
+   along most of the dorsal length without the `scale.clamp(0.55, 1.35)` floor
+   pinching the volume at the midline. This same primitive is used by both the
+   surface mesh and neuron placement, so those two views of the arena cannot
+   drift.
 
-3. **Gyrification** (`crates/brain-visualizer/src/manifold/gyrify.rs → gyrify`): two octaves of
+3. **Gyrification** (`crates/brain-visualizer/src/manifold/gyrify.rs → gyrify`): three octaves of
    OpenSimplex noise displace each shaped envelope vertex along its outward
-   direction. Large-scale noise (gyri, ridges) uses `gyri_freq ≈ 1.5` at
-   `gyri_amp ≈ 15%` of local radius; fine-scale noise (sulci, folds) uses
-   `sulci_freq ≈ 4.0` at `sulci_amp ≈ 5%`. The two octaves use independent
-   noise instances (different seeds derived from the network seed) so they
-   decorrelate. See `crates/brain-visualizer/src/manifold/gyrify.rs → GyrifyParams`
-   for all tunable defaults.
+   direction. Coarse lumps use `lump_freq ≈ 0.8` at `lump_amp ≈ 12%` of local
+   radius (large slow bulges → a lumpier silhouette); gyri/ridges use
+   `gyri_freq ≈ 1.5` at `gyri_amp ≈ 15%`; fine sulci/folds use `sulci_freq ≈ 4.0`
+   at `sulci_amp ≈ 5%`. The three octaves use independent noise instances —
+   distinct seed offsets (`seed`, `+0x9e3779b9`, `+0x85ebca6b`) derived from the
+   network seed — so they decorrelate. See
+   `crates/brain-visualizer/src/manifold/gyrify.rs → GyrifyParams` for all tunable
+   defaults (a tracked drift-verification surface).
 
 4. **Neuron placement** (`crates/brain-visualizer/src/manifold/mod.rs → place_neurons`): neurons are
    sampled from the same deterministic hash namespace as the rest of the app.
@@ -107,30 +113,54 @@ default is `MorphologyParams::locked_default`; a dev-panel-supplied
 `MorphologyConfig::to_params` before regeneration (see Exposed vs protected
 parameters below).
 
-Each neuron now gets a deterministic shared arbor, not K independent sin-bow
-curves:
+Each neuron gets a deterministic arbor: a local dendrite tree plus a single
+**Prim-like axon tree grown by greedy attach + local relaxation**, not K
+independent sin-bow curves and not the old hand-tuned trunk→cluster→twig fan.
 
 - **Dendrites** (kind 0): a stable local tree of primary branches and twigs
   around the soma, used as visible landing context for sockets. Each stem/twig
   is emitted as a short sampled cubic-Bezier chain rather than a single chord,
   so close-up branches curve through multiple `MorphSegment`s while keeping the
-  same 48-byte layout. Reach, count, and taper come from named morphology
-  budgets rather than hidden constants.
-- **Shared root / cluster branches** (kind 1): a source-driven trunk and 2-5
-  deterministic cluster branches fan out from the soma before the terminal
-  twigs. These shared segments use the source neuron id as their `target_id` so
-  upstream lighting stays source-only on shared paths.
-- **Terminal twigs** (kind 1): one terminal twig per unique non-self target,
-  routed to deterministic sockets near visible dendrite anchors. Terminal twigs
-  carry the real target neuron id in `target_id`, so the renderer can light the
-  actual synaptic endpoint.
+  same 48-byte layout. This block is unchanged by the tree rewrite — reach,
+  count, and taper still come from named morphology budgets.
+- **Axon tree** (kind 1): one leaf per unique non-self target (resolved by the
+  production `target_with_cell` rule, deduped, ordered by target id). For a
+  multi-target neuron the tree seeds a shared trunk node along the mean target
+  direction, then grows by **Prim-like greedy attach**: each iteration adds the
+  one globally-best `(leaf, attach-point)` edge, scored by
+  `distance + tree_score_curvature·curvature + tree_score_density·density +
+  tree_score_degree·degree`. An attach point may **split an existing edge**,
+  inserting an internal node — this is where shared trunks and forks emerge.
+  After each attach, a `relax_window`-deep pass pulls internal nodes toward the
+  mean of parent+children (`relax_lerp`) and repels nearby branches
+  (`relax_repel`); the soma root and the fixed leaf sockets are never moved. A
+  single-target neuron takes the trivial fast path (root → one leaf, no shared
+  root). All draws use `mix_key`/`hash32` with the `salt::TREE_*` constants,
+  disjoint from connectivity and dendrite draws; tie-breaks are by
+  `(leaf target_id, node index)` so generation is fully seed-reproducible.
+- **Lighting `target_id` contract** (preserved): every internal trunk/fork edge
+  carries the **source** neuron id, so shared paths stay source-lit; only a leaf
+  edge carries the **real** target id, so the renderer can light the actual
+  synaptic endpoint. The single-target fast path emits no source-`target_id`
+  axon segment.
 
-v0.2.1 narrows the locked defaults without changing the arbor grammar: dendrite
-primaries are now 3..4 with 0.035-0.058 reach, the axon root radius fraction is
-0.66, trunk/cluster/twig radius fractions are 0.62/0.44/0.16, trunk and
-cluster split fractions are 0.32 and 0.62, terminal twigs sample with 3
-segments, and taper steepens to 2.1. The result is the same contract with less
-bright lattice clutter and better far-view directionality.
+**Width rule — area-preserving, bottom-up.** After the tree is final, each
+leaf's weight is the sum of `connectivity::weight(id, j, src_type)` over the
+draws that resolved to it, taken as `unsigned_abs().max(1)` so inhibitory
+(negative) weights still give a visible positive-width twig. A bottom-up pass
+(descending depth, deterministic order) sums each node's subtree weight, and
+`radius = R_trunk · √(subtree_weight / total_weight)`, floored at
+`R_trunk · twig_radius_fraction`. `R_trunk = base_radius · axon_root_radius_fraction`.
+The trunk carries 100% of the weight at full radius; each fork sheds its
+children's share. The √ (Murray/Rall, area-preserving) keeps trunks substantial
+and the thinnest twig still visible — see [`../decisions/manifold.md`](../decisions/manifold.md).
+
+**Soft fork degree.** The `tree_score_degree` term makes a node resist its
+3rd/4th child (penalty monotonic in current child count), biasing toward 2-3-way
+forks. It is a *tendency*, not a hard cap; relaxation then spreads siblings into
+fork-like geometry. `MorphologyStats::cluster_count_histogram` (now the
+fork-degree histogram, index 5 = "5+") plus `tree_depth_max/mean` and
+`radius_bands` carry the review evidence.
 
 Source-type bytes are built from the same region+seed contract used for
 production connectivity, so morphology target resolution matches the sim's real
@@ -154,10 +184,14 @@ defined in `crates/brain-visualizer/src/sim/morphology.rs → salt` so
 morphology draws stay disjoint from connectivity target/weight draws.
 
 The buffer cap is `n * max_segs_per_neuron(k)`, where the per-neuron cap is
-derived from named dendrite/trunk/cluster/twig budgets plus slack
-(`crates/brain-visualizer/src/sim/morphology.rs → max_segs_per_neuron`) rather
-than a fixed constant. If the cap is hit, the excess is counted in
-`Morphology::dropped` and printed; no silent truncation.
+`dendrite_budget + trunk_cluster_budget + k·terminal_twig_budget + cap_slack`
+(`crates/brain-visualizer/src/sim/morphology.rs → segment_cap, max_segs_per_neuron`)
+rather than a fixed constant. The Prim tree emits roughly `2k` edges ×
+`edge_subsegments` axon segments, so the per-target budget is sized for the
+descriptor-max `edge_subsegments` (`EDGE_SUBSEGMENTS_MAX`) — the cap never
+under-allocates regardless of where the live `edge_subsegments` slider sits. If
+the cap is hit, the excess is counted in `Morphology::dropped` and printed; no
+silent truncation.
 
 ## Exposed vs protected parameters
 
@@ -165,7 +199,9 @@ than a fixed constant. If the cap is hit, the excess is counted in
 splits into two classes:
 
 - **Exposed (tunable):** the generator shape fields — branch counts, reach,
-  socket placement, radius/taper fractions. These are surfaced to the hidden dev
+  socket placement, radius/taper fractions, and the tree-grammar knobs
+  (`tree_score_curvature/density/degree`, `relax_lerp/repel/window`,
+  `edge_subsegments`). These are surfaced to the hidden dev
   panel as a `MorphologyConfig` (see [`dev-panel.md`](dev-panel.md)) and reach
   the backend through the WASM entry point
   `crates/brain-visualizer/src/lib.rs → WasmGpuBackend::set_morphology_config` →

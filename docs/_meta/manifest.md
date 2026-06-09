@@ -43,9 +43,9 @@ Consult before declaring a commit done. "If you changed X → update Y."
 | If you changed… | Update… |
 |---|---|
 | `crates/brain-visualizer/src/manifold/*` (icosphere, gyrify, placement), `crates/brain-visualizer/src/manifold/regions.rs` | `architecture/manifold.md`, `decisions/manifold.md` |
-| `crates/brain-visualizer/src/sim/morphology.rs` (`MorphSegment` layout/generation, `MorphSphereInstance` layout/`emit_soma_spheres`) | `architecture/manifold.md`, `architecture/gpu-rendering.md` (both morphology sub-passes), and the WGSL structs in `render_morphology.wgsl` |
+| `crates/brain-visualizer/src/sim/morphology.rs` (`MorphSegment` layout, the Prim-tree axon arbor in `generate`, `MorphSphereInstance` layout/`emit_soma_spheres`) | `architecture/manifold.md`, `architecture/gpu-rendering.md` (both morphology sub-passes), and the WGSL structs in `render_morphology.wgsl` |
 | `crates/brain-visualizer/src/buffers.rs`, the packed-word / mask helpers (`crates/brain-visualizer/src/sim/backend.rs`, `integrate.wgsl`) | `architecture/data-model.md`, `decisions/data-layout.md` |
-| `crates/brain-visualizer/src/connectivity/*` (hash, spatial grid, `target`/`weight`), `hash.wgsl` | `architecture/connectivity.md`, `decisions/connectivity.md`, regenerate/verify the determinism gates |
+| `crates/brain-visualizer/src/connectivity/*` (hash, spatial grid, `target`/`weight`, the heavy-tailed `ReachParams`/`long_offset_component` long-range branch + `salt::REACH_*`), `hash.wgsl`, and the WGSL `target_neuron` twin in `scatter.wgsl` (`long_range_frac`/`max_reach` in `ConnectUniforms`) | `architecture/connectivity.md`, `decisions/connectivity.md`, regenerate/verify the determinism gates |
 | `crates/brain-visualizer/src/sim/cpu/core.rs`, `integrate.wgsl`, `scatter.wgsl`, `stimulate.wgsl` (LIF math, heterogeneity, weight norm, input modes) | `architecture/simulation.md`, `decisions/dynamics.md` |
 | `crates/brain-visualizer/src/sim/backend.rs` (`SimBackend`, `SimConfig`, `TickStats`), the `VisualSettings` Float32Array contract | `architecture/simulation.md`, `architecture/web-frontend.md`, `architecture/dev-panel.md` (the settings index) |
 | `crates/brain-visualizer/src/sim/gpu/mod.rs` (frame graph, pass ordering, `DRAW_LEGACY_*`, readback) | `architecture/gpu-backend.md`; `architecture/gpu-rendering.md` if a render pass changes |
@@ -71,9 +71,12 @@ spot-checks these against code:
 - The `MorphSegment` field order/size (48 B, branch-only; Rust `crates/brain-visualizer/src/sim/morphology.rs` ↔ WGSL
   `render_morphology.wgsl`) and any edge-event layout.
 - The `MorphSphereInstance` field order/size (32 B, soma-only; Rust `crates/brain-visualizer/src/sim/morphology.rs → MorphSphereInstance` ↔ the WGSL sphere struct in `render_morphology.wgsl`).
-- `MorphUniforms` size (192 B; Rust `crates/brain-visualizer/src/sim/gpu/resources.rs → MorphUniforms` ↔ WGSL `render_morphology.wgsl`; must update both sides atomically). Includes the v0.3.1 lighting/brightness fields `resting_brightness` and `active_boost`.
+- `MorphUniforms` size (192 B; Rust `crates/brain-visualizer/src/sim/gpu/resources.rs → MorphUniforms` ↔ WGSL `render_morphology.wgsl`; must update both sides atomically). Includes the lighting/brightness fields `resting_brightness`/`active_boost` and the true-opacity fields `active_opacity`/`inactive_opacity_floor` (the latter two repurposed from the former trailing `_pad4`/`_pad5` — size unchanged at 192 B).
 - The `VisualSettings` Float32Array index contract (`web/src/core/settings.ts` ↔
-  `crates/brain-visualizer/src/sim/gpu/mod.rs`).
+  `crates/brain-visualizer/src/sim/gpu/mod.rs`), including the heavy-tailed-reach
+  indices `longRangeReachFrac`/`maxReachCells` that `set_visual_settings` packs
+  (as integers over `REACH_FRAC_DEN`) into the `ConnectUniforms` `long_range_frac`/`max_reach`
+  slots (Rust `resources.rs` ↔ WGSL `scatter.wgsl`, still 32 B).
 - The packed `last_spike` masks and the locked hash constants (Rust ↔ WGSL).
 - The `DRAW_LEGACY_*` guard flags (which passes are live vs retired).
 - `DEFAULT_CONFIG` scale (`web/src/core/types.ts`).

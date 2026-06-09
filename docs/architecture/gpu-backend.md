@@ -107,10 +107,11 @@ upload of per-instance data. Order:
    additive, no depth.
 4. **morphology tube pass** — when `connection_layer != 0`; additive, no depth. Branch segments via `render_morphology.wgsl → vs_main`.
 5. **morphology soma sphere pass** — when `connection_layer != 0`; additive, no depth. One UV-sphere per neuron via `render_morphology.wgsl → vs_sphere`. Uses `render_soma_spheres` pipeline (`crates/brain-visualizer/src/sim/gpu/pipelines.rs → GpuPipelines`), reusing the same `last_spike` and `morph_uniform` buffers from the tube pass.
-6. **(retired) ribbon pass** — behind `DRAW_LEGACY_RIBBONS`.
-6. **(retired) near-LOD passes** — cull_neurons → (cull_synapses) → write_indirect
+6. **active-opacity tube + soma passes** — when `connection_layer != 0` and the active-opacity guard is on; depth-tested **alpha** blend (not additive), layered over the additive morphology passes so firing geometry genuinely occludes. The active-tube pass owns the depth `Clear(1.0)`; the active-soma pass `Load`s it. See [`gpu-rendering.md`](gpu-rendering.md) for the opacity model and skip-at-zero guard.
+7. **(retired) ribbon pass** — behind `DRAW_LEGACY_RIBBONS`.
+8. **(retired) near-LOD passes** — cull_neurons → (cull_synapses) → write_indirect
    → sphere draw → (cylinder draw), all behind `DRAW_LEGACY_NEAR_SPHERES`.
-7. **(optional) bloom post** — bright → blur_h → blur_v → composite into the
+9. **(optional) bloom post** — bright → blur_h → blur_v → composite into the
    surface.
 
 Per-frame uniform uploads use `queue.write_buffer` into buffers the bind groups

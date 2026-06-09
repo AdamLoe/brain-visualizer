@@ -16,7 +16,7 @@
     },
     {
       "id": "connectivity",
-      "summary": "procedural/implicit connectivity (no edge list), target/weight pure functions, integer spatial grid, per-tier K, anterior feed-forward bias, the 32-bit hash primitive + golden-vector gate",
+      "summary": "procedural/implicit connectivity (no edge list), target/weight pure functions, integer spatial grid, per-tier K, anterior feed-forward bias, the heavy-tailed long-range reach tail (ReachParams: long_range_frac/max_reach, default-off bit-identical), the 32-bit hash primitive + golden-vector gate",
       "owner": "architecture/connectivity.md",
       "references": ["architecture/simulation.md", "architecture/manifold.md", "architecture/active-edges.md"]
     },
@@ -34,7 +34,7 @@
     },
     {
       "id": "gpu-rendering",
-      "summary": "render LOD scheme (far additive glow billboards, live per-neuron morphology pass, retired near-sphere/cylinder behind DRAW_LEGACY_*), frustum-cull→indirect-draw, manifold surface render, HDR/bloom, visual mode enums (color_by/neuron_visibility/signal_source/surface)",
+      "summary": "render LOD scheme (far additive glow billboards, live per-neuron morphology pass, retired near-sphere/cylinder behind DRAW_LEGACY_*), the depth-tested alpha active-opacity layer (active=firing tubes/somas occlude the additive resting layer; active_opacity/inactive_opacity_floor knobs), frustum-cull→indirect-draw, manifold surface render, HDR/bloom, visual mode enums (color_by/neuron_visibility/signal_source/surface)",
       "owner": "architecture/gpu-rendering.md",
       "references": ["architecture/gpu-backend.md", "architecture/active-edges.md", "architecture/manifold.md", "architecture/simulation.md"]
     },
@@ -124,7 +124,7 @@
     },
     {
       "id": "dec-rendering",
-      "summary": "LOD glow→bodies, active-connections-only-by-default, morphology supersedes ribbons/cylinders",
+      "summary": "LOD glow→bodies, active-connections-only-by-default, morphology supersedes ribbons/cylinders, true-opacity (depth+alpha) for active geometry over faked-additive-brightness, active=firing not click-selection",
       "owner": "decisions/rendering.md",
       "references": []
     },

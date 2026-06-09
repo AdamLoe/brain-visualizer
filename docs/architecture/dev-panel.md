@@ -232,7 +232,7 @@ keys, including `bv2_morph_v1`.
 
 ## Float32Array index contract (corruption risk)
 
-`web/src/core/settings.ts → toFloat32Array` serialises all 24 `VisualizerSettings`
+`web/src/core/settings.ts → toFloat32Array` serialises all 26 `VisualizerSettings`
 fields into a `Float32Array` that is passed to the WASM backend. The index
 assignment is the **shared contract** with `crates/brain-visualizer/src/sim/gpu/mod.rs → VisualSettings`
 (`from_slice`). **Reordering or inserting a field in either file without
