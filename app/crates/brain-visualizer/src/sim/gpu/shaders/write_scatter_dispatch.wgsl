@@ -13,6 +13,8 @@ struct ConnectUniforms {
     fixed_point_scale: f32,
     seed_lo: u32,
     grid_dim: u32,
+    long_range_frac: u32,
+    max_reach: u32,
 }
 @group(1) @binding(0) var<uniform> cu: ConnectUniforms;
 

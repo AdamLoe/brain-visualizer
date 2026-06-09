@@ -120,6 +120,13 @@ pub struct VisualSettings {
     pub input_mode: u32,
     /// index 23 — adaptive scaler enabled: 0=off (default 0)
     pub adaptive_scaler_enabled: u32,
+    /// index 24 — heavy-tailed reach: long-range fraction 0..1 (default 0.0 =
+    /// local only, bit-identical to pre-heavy-tail). Converted to the integer
+    /// `long_range_frac` (over REACH_FRAC_DEN) at the connect-uniform boundary.
+    pub long_range_reach_frac: f32,
+    /// index 25 — heavy-tailed reach: max-reach cell radius (integer carried as
+    /// f32 like the other mode fields; default 6.0, clamped >= 1 at the boundary).
+    pub max_reach_cells: f32,
 }
 
 impl Default for VisualSettings {
@@ -154,6 +161,9 @@ impl Default for VisualSettings {
             weight_normalization: 1,
             input_mode: 0,
             adaptive_scaler_enabled: 0,
+            // Heavy-tailed reach: off by default (bit-identical to today).
+            long_range_reach_frac: 0.0,
+            max_reach_cells: 6.0,
         }
     }
 }
@@ -192,13 +202,15 @@ impl VisualSettings {
             weight_normalization: u(21, d.weight_normalization),
             input_mode: u(22, d.input_mode),
             adaptive_scaler_enabled: u(23, d.adaptive_scaler_enabled),
+            long_range_reach_frac: f(24, d.long_range_reach_frac),
+            max_reach_cells: f(25, d.max_reach_cells),
         }
     }
 
     /// Compact JSON snapshot for review artifacts.
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"glow_tau\":{:.6},\"point_radius\":{:.6},\"neuron_visual_radius\":{:.6},\"active_neuron_radius_boost\":{:.6},\"inactive_neuron_opacity\":{:.6},\"voltage_glow_strength\":{:.6},\"connection_visual_width\":{:.6},\"connection_curve_lift\":{:.6},\"connection_light_next\":{},\"bloom_strength\":{:.6},\"surface_opacity\":{:.6},\"i_ext\":{:.6},\"synaptic_scale\":{:.6},\"heterogeneity\":{:.6},\"morph_resting_opacity\":{:.6},\"signal_source\":{},\"connection_layer\":{},\"color_by\":{},\"neuron_visibility\":{},\"surface\":{},\"weight_normalization\":{},\"input_mode\":{},\"adaptive_scaler_enabled\":{}}}",
+            "{{\"glow_tau\":{:.6},\"point_radius\":{:.6},\"neuron_visual_radius\":{:.6},\"active_neuron_radius_boost\":{:.6},\"inactive_neuron_opacity\":{:.6},\"voltage_glow_strength\":{:.6},\"connection_visual_width\":{:.6},\"connection_curve_lift\":{:.6},\"connection_light_next\":{},\"bloom_strength\":{:.6},\"surface_opacity\":{:.6},\"i_ext\":{:.6},\"synaptic_scale\":{:.6},\"heterogeneity\":{:.6},\"morph_resting_opacity\":{:.6},\"signal_source\":{},\"connection_layer\":{},\"color_by\":{},\"neuron_visibility\":{},\"surface\":{},\"weight_normalization\":{},\"input_mode\":{},\"adaptive_scaler_enabled\":{},\"long_range_reach_frac\":{:.6},\"max_reach_cells\":{:.6}}}",
             self.glow_tau,
             self.point_radius,
             self.neuron_visual_radius,
@@ -222,6 +234,8 @@ impl VisualSettings {
             self.weight_normalization,
             self.input_mode,
             self.adaptive_scaler_enabled,
+            self.long_range_reach_frac,
+            self.max_reach_cells,
         )
     }
 }
@@ -475,8 +489,19 @@ impl GpuBackend {
         // the new value). Guarded so dragging other sliders never regenerates.
         let curve_changed =
             (v.connection_curve_lift - self.visual.connection_curve_lift).abs() > f32::EPSILON;
+        // Heavy-tailed reach knobs change target ids → both the GPU scatter
+        // uniform and the generated axon geometry must be refreshed. These are
+        // brain-reset / morphology-rebuild impact (not pure "live"), mirroring
+        // connection_curve_lift.
+        let reach_changed = (v.long_range_reach_frac - self.visual.long_range_reach_frac).abs()
+            > f32::EPSILON
+            || (v.max_reach_cells - self.visual.max_reach_cells).abs() > f32::EPSILON;
         self.visual = v;
-        if curve_changed {
+        if reach_changed {
+            // Push the new knobs to the GPU scatter uniform for the next tick.
+            self.write_connect_uniform();
+        }
+        if curve_changed || reach_changed {
             self.regenerate_morphology();
         }
     }
@@ -490,6 +515,7 @@ impl GpuBackend {
         let config = self.config.clone();
         let manifold = crate::build_manifold(&config);
         let params = self.current_morph_params();
+        let reach = self.current_reach();
         self.resources.init_morph_resources(
             &self.ctx.device,
             &manifold.neuron_positions,
@@ -497,6 +523,7 @@ impl GpuBackend {
             &manifold.neuron_regions,
             &config,
             &params,
+            reach,
         );
         self.resources
             .refresh_bind_groups(&self.ctx.device, &self.layouts);
@@ -510,6 +537,54 @@ impl GpuBackend {
         self.morph_config
             .to_params()
             .with_curve_lift(self.visual.connection_curve_lift)
+    }
+
+    /// Heavy-tailed reach knobs from the live VisualSettings, converted to the
+    /// integer encoding the kernel + morphology consume. The float→integer
+    /// conversion happens HERE (the boundary), never inside `target` — keeping
+    /// the determinism path float-free. `frac` is rounded over `REACH_FRAC_DEN`
+    /// and clamped `0..=REACH_FRAC_DEN`; `max_reach` is rounded and clamped `>= 1`.
+    fn current_reach(&self) -> crate::connectivity::ReachParams {
+        let den = crate::connectivity::REACH_FRAC_DEN;
+        let frac = (self.visual.long_range_reach_frac * den as f32).round();
+        let long_range_frac = frac.clamp(0.0, den as f32) as u32;
+        let max_reach = (self.visual.max_reach_cells.round() as i64).max(1) as u32;
+        crate::connectivity::ReachParams {
+            long_range_frac,
+            max_reach,
+        }
+    }
+
+    /// Re-write the `connect_uniform` buffer with the live reach knobs so the
+    /// GPU scatter picks them up on the next tick. The other ConnectUniforms
+    /// fields are static for the run (set at init); only the two reach knobs
+    /// change at runtime, but we rewrite the whole struct for simplicity.
+    fn write_connect_uniform(&self) {
+        let Some(sim) = self.resources.sim_buffers.as_ref() else {
+            return;
+        };
+        let grid_dim = self
+            .resources
+            .grid_buffers
+            .as_ref()
+            .map(|g| g.grid_dim)
+            .unwrap_or(1);
+        let reach = self.current_reach();
+        let cu = crate::sim::gpu::resources::ConnectUniforms {
+            n: self.config.n as u32,
+            k: self.config.k as u32,
+            fixed_point_scale: self.config.fixed_point_scale as f32,
+            seed_lo: self.config.seed_lo(),
+            grid_dim,
+            long_range_frac: reach.long_range_frac,
+            max_reach: reach.max_reach,
+            _pad: [0; 1],
+        };
+        self.ctx.queue.write_buffer(
+            &sim.connect_uniform,
+            0,
+            bytemuck::bytes_of(&cu),
+        );
     }
 
     /// Re-normalised world-space light direction from the morph-config lighting
@@ -859,6 +934,7 @@ impl GpuBackend {
         // dendrites + axon arbor). Regenerated on every network (re)build.
         // v0.3.1: generator params come from the current morphology config.
         let morph_params = self.current_morph_params();
+        let reach = self.current_reach();
         self.resources.init_morph_resources(
             &self.ctx.device,
             &manifold.neuron_positions,
@@ -866,9 +942,13 @@ impl GpuBackend {
             &manifold.neuron_regions,
             config,
             &morph_params,
+            reach,
         );
         self.resources
             .refresh_bind_groups(&self.ctx.device, &self.layouts);
+        // Heavy-tailed reach: push the live knobs into the freshly (re)written
+        // connect_uniform so the GPU scatter matches the generated geometry.
+        self.write_connect_uniform();
         self.tick = 0;
         self.parity = 0;
         self.max_abs_current_hw = 0;
@@ -1015,6 +1095,18 @@ impl GpuBackend {
         } else {
             target_view
         };
+
+        // ─── True-opacity active layer skip-at-zero guard ─────────────────────
+        // The two NEW depth-tested, alpha-blended active passes (active-tube +
+        // active-soma) are encoded only when the morphology layer is on AND the
+        // active-opacity ceiling is non-zero AND both active pipelines exist. At
+        // active_opacity == 0 nothing is encoded — not even the depth clear — so
+        // the renderer is bit-for-bit the current additive look (mirrors the
+        // existing draw_surface / connection_layer pass skips).
+        let active_opaque_on = self.visual.connection_layer != 0
+            && self.morph_config.lighting.active_opacity > 0.0
+            && self.pipelines.render_morphology_active.is_some()
+            && self.pipelines.render_soma_spheres_active.is_some();
 
         let n = self.config.n as u32;
 
@@ -1305,8 +1397,8 @@ impl GpuBackend {
                     _pad3: 0,
                     resting_brightness: lighting.resting_brightness,
                     active_boost: lighting.active_boost,
-                    _pad4: 0,
-                    _pad5: 0,
+                    active_opacity: lighting.active_opacity,
+                    inactive_opacity_floor: lighting.inactive_opacity_floor,
                 };
                 self.ctx
                     .queue
@@ -1335,6 +1427,52 @@ impl GpuBackend {
                     // as quads → 2 tris × 3 verts per side). v0.3.1: runtime value
                     // kept in sync with the WGSL TUBE_SIDES override constant the
                     // morph pipeline was built with.
+                    pass.draw(0..self.morph_tube_verts, 0..segs);
+                }
+            }
+        }
+
+        // ─── NEW: true-opacity active tube pass ───────────────────────────────
+        // Depth-tested, alpha-blended draw of the SAME tubes, on top of the
+        // additive resting tube pass. Owns the frame's depth clear (Clear(1.0))
+        // since the additive passes never touch depth and the surface/near-LOD
+        // depth users are off by default. `fs_main_active` returns a spike-driven
+        // straight alpha so freshly-fired tubes write near-opaque color AND a
+        // near-camera depth value, genuinely occluding the additive background.
+        // Reuses the additive tube bind group + draw count (same override consts).
+        if active_opaque_on {
+            if let (Some(pipe_active), Some(mbg), Some(mb)) = (
+                self.pipelines.render_morphology_active.as_ref(),
+                bg.render_morphology.as_ref(),
+                self.resources.morph_buffers.as_ref(),
+            ) {
+                let segs = mb.segment_count;
+                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("morphology-active-pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: scene_view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                if segs > 0 {
+                    pass.set_pipeline(pipe_active);
+                    pass.set_bind_group(0, mbg, &[]);
                     pass.draw(0..self.morph_tube_verts, 0..segs);
                 }
             }
@@ -1374,6 +1512,50 @@ impl GpuBackend {
                     // slices * stacks * 2 * 3 verts per soma instance. v0.3.1:
                     // runtime value kept in sync with the WGSL SPHERE_SLICES /
                     // SPHERE_STACKS override constants.
+                    pass.draw(0..self.morph_sphere_verts, 0..n_spheres);
+                }
+            }
+        }
+
+        // ─── NEW: true-opacity active soma pass ───────────────────────────────
+        // Depth-tested, alpha-blended draw of the SAME somas, on top of the
+        // additive resting soma pass. Loads the depth the active-tube pass wrote
+        // (so active tubes and active somas mutually occlude correctly), and
+        // writes depth itself. `fs_sphere_active` returns a firing-driven straight
+        // alpha. Reuses the additive soma bind group + draw count.
+        if active_opaque_on {
+            if let (Some(pipe_active), Some(soma_bg), Some(mb)) = (
+                self.pipelines.render_soma_spheres_active.as_ref(),
+                bg.render_soma_spheres.as_ref(),
+                self.resources.morph_buffers.as_ref(),
+            ) {
+                let n_spheres = mb.sphere_count;
+                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("soma-sphere-active-pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: scene_view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                if n_spheres > 0 {
+                    pass.set_pipeline(pipe_active);
+                    pass.set_bind_group(0, soma_bg, &[]);
                     pass.draw(0..self.morph_sphere_verts, 0..n_spheres);
                 }
             }

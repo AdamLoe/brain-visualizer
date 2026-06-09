@@ -98,6 +98,12 @@ pub struct GpuPipelines {
     pub render_morphology: Option<wgpu::RenderPipeline>,
     /// Morphology: soma sphere render pipeline (Wave 2).
     pub render_soma_spheres: Option<wgpu::RenderPipeline>,
+    /// Morphology: true-opacity active tube pipeline — depth-tested, alpha-blended
+    /// (`fs_main_active`). Renders firing tubes opaque so they occlude background.
+    pub render_morphology_active: Option<wgpu::RenderPipeline>,
+    /// Morphology: true-opacity active soma pipeline — depth-tested, alpha-blended
+    /// (`fs_sphere_active`). Renders firing somas opaque so they occlude background.
+    pub render_soma_spheres_active: Option<wgpu::RenderPipeline>,
     // ─── V2 Phase E: bloom post-process pipelines ─────────────────────────────
     /// Bright-pass (threshold) → rgba16float.
     pub bloom_bright: Option<wgpu::RenderPipeline>,
@@ -136,6 +142,8 @@ impl GpuPipelines {
             // Morphology
             render_morphology: None,
             render_soma_spheres: None,
+            render_morphology_active: None,
+            render_soma_spheres_active: None,
             // V2 Phase E
             bloom_bright: None,
             bloom_blur: None,
@@ -698,6 +706,105 @@ impl GpuPipelines {
                     conservative: false,
                 },
                 depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            },
+        ));
+
+        // ── True-opacity active layer (active-opacity-render-pass) ───────────────
+        // Two NEW depth-tested, alpha-blended pipelines layered on top of the
+        // additive resting passes. Same module / layout / override constants /
+        // bind-group layout as their additive siblings — only the fragment entry
+        // point, blend mode, and depth_stencil differ — so the
+        // set_morphology_config render-quality rebuild and initial build cover them
+        // with no extra wiring. Depth state copied from the manifold pipeline.
+        let active_depth = wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Less),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        };
+
+        self.render_morphology_active = Some(device.create_render_pipeline(
+            &wgpu::RenderPipelineDescriptor {
+                label: Some("render_morphology_active"),
+                layout: Some(&morph_pl),
+                vertex: wgpu::VertexState {
+                    module: &morph_module,
+                    entry_point: Some("vs_main"),
+                    buffers: &[],
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: tube_consts,
+                        ..Default::default()
+                    },
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &morph_module,
+                    entry_point: Some("fs_main_active"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: color_format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: tube_consts,
+                        ..Default::default()
+                    },
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: Some(active_depth.clone()),
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            },
+        ));
+
+        self.render_soma_spheres_active = Some(device.create_render_pipeline(
+            &wgpu::RenderPipelineDescriptor {
+                label: Some("render_soma_spheres_active"),
+                layout: Some(&soma_sphere_pl),
+                vertex: wgpu::VertexState {
+                    module: &morph_module,
+                    entry_point: Some("vs_sphere"),
+                    buffers: &[],
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: sphere_consts,
+                        ..Default::default()
+                    },
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &morph_module,
+                    entry_point: Some("fs_sphere_active"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: color_format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: sphere_consts,
+                        ..Default::default()
+                    },
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: Some(active_depth),
                 multisample: wgpu::MultisampleState::default(),
                 multiview_mask: None,
                 cache: None,

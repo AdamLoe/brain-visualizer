@@ -58,6 +58,9 @@ impl LifParams {
 pub struct ConnParams {
     pub k: usize,
     pub seed_lo: u32,
+    /// Heavy-tailed reach knobs (CPU backend has no dev panel; defaults to
+    /// `ReachParams::LOCAL_ONLY`, keeping CPU↔GPU bit-identical at frac=0).
+    pub reach: connectivity::ReachParams,
 }
 
 /// Per-neuron CPU state, structure-of-arrays (phase-6 spec). On the browser
@@ -221,8 +224,9 @@ pub fn scatter_tick(
 ) -> u64 {
     let k = params.k;
     let seed_lo = params.seed_lo;
+    let reach = params.reach;
 
-    let per_thread: Vec<Vec<u32>> = scatter_map(fired, buffers, grid, k, seed_lo);
+    let per_thread: Vec<Vec<u32>> = scatter_map(fired, buffers, grid, k, seed_lo, reach);
 
     touched_out.clear();
     for local in &per_thread {
@@ -244,15 +248,16 @@ fn scatter_one_source(
     grid: &SpatialGrid,
     k: usize,
     seed_lo: u32,
+    reach: connectivity::ReachParams,
     local_touched: &mut Vec<u32>,
 ) {
     let s = src as usize;
     let src_type = ((buffers.last_spike[s] >> 24) & 0x7F) as u8;
     let src_cell = buffers.cell_coord[s];
     for j in 0..k {
-        let tgt =
-            connectivity::target_with_cell(src, j as u32, grid, k, seed_lo, src_type, src_cell)
-                as usize;
+        let tgt = connectivity::target_with_cell(
+            src, j as u32, grid, k, seed_lo, src_type, src_cell, reach,
+        ) as usize;
         let w = connectivity::weight(src, j as u32, src_type);
         buffers.i[tgt].fetch_add(w, Ordering::Relaxed);
         local_touched.push(tgt as u32);
@@ -266,6 +271,7 @@ fn scatter_map(
     grid: &SpatialGrid,
     k: usize,
     seed_lo: u32,
+    reach: connectivity::ReachParams,
 ) -> Vec<Vec<u32>> {
     use rayon::prelude::*;
     fired
@@ -273,7 +279,7 @@ fn scatter_map(
         .map(|chunk| {
             let mut local = Vec::with_capacity(chunk.len() * k);
             for &src in chunk {
-                scatter_one_source(src, buffers, grid, k, seed_lo, &mut local);
+                scatter_one_source(src, buffers, grid, k, seed_lo, reach, &mut local);
             }
             local
         })
@@ -287,10 +293,11 @@ fn scatter_map(
     grid: &SpatialGrid,
     k: usize,
     seed_lo: u32,
+    reach: connectivity::ReachParams,
 ) -> Vec<Vec<u32>> {
     let mut local = Vec::with_capacity(fired.len() * k);
     for &src in fired {
-        scatter_one_source(src, buffers, grid, k, seed_lo, &mut local);
+        scatter_one_source(src, buffers, grid, k, seed_lo, reach, &mut local);
     }
     vec![local]
 }

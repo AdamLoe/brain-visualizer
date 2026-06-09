@@ -1,7 +1,8 @@
 //! Noise-based gyrification — turns the smooth icosphere into a folded cortex.
 //!
-//! Two octaves of OpenSimplex noise displace each vertex along its outward
+//! Three octaves of OpenSimplex noise displace each vertex along its outward
 //! normal (BV13, phase-1 doc step 2):
+//! - coarse lumps (freq ~0.8): large slow bulges, amplitude ~12% of radius;
 //! - large scale (freq ~1.5): gyri (ridges), amplitude ~15% of radius;
 //! - small scale (freq ~4.0): sulci (fine folds), amplitude ~5% of radius.
 //!
@@ -14,6 +15,8 @@ use noise::{NoiseFn, OpenSimplex};
 #[derive(Debug, Clone, Copy)]
 pub struct GyrifyParams {
     pub radius: f32,
+    pub lump_freq: f64,
+    pub lump_amp: f32,
     pub gyri_freq: f64,
     pub gyri_amp: f32,
     pub sulci_freq: f64,
@@ -24,6 +27,8 @@ impl Default for GyrifyParams {
     fn default() -> Self {
         Self {
             radius: 1.0,
+            lump_freq: 0.8,
+            lump_amp: 0.12,
             gyri_freq: 1.5,
             gyri_amp: 0.15,
             sulci_freq: 4.0,
@@ -37,9 +42,10 @@ impl Default for GyrifyParams {
 /// amplitudes are applied as a fraction of that radius, so the same noise
 /// params work for both the old sphere and the shaped brain shell.
 pub fn gyrify(base_vertices: &[[f32; 3]], params: &GyrifyParams, seed: u32) -> Vec<[f32; 3]> {
-    // Two independent noise fields (different seeds) so octaves decorrelate.
+    // Three independent noise fields (distinct seed offsets) so octaves decorrelate.
     let gyri = OpenSimplex::new(seed);
     let sulci = OpenSimplex::new(seed.wrapping_add(0x9e37_79b9));
+    let lumps = OpenSimplex::new(seed.wrapping_add(0x85eb_ca6b));
 
     base_vertices
         .iter()
@@ -56,11 +62,18 @@ pub fn gyrify(base_vertices: &[[f32; 3]], params: &GyrifyParams, seed: u32) -> V
                 (n[1] as f64) * params.sulci_freq,
                 (n[2] as f64) * params.sulci_freq,
             ];
+            let lp = [
+                (n[0] as f64) * params.lump_freq,
+                (n[1] as f64) * params.lump_freq,
+                (n[2] as f64) * params.lump_freq,
+            ];
             // Noise in [-1, 1] (OpenSimplex range is roughly [-1,1]).
             let g = gyri.get(gp) as f32;
             let s = sulci.get(sp) as f32;
+            let l = lumps.get(lp) as f32;
             let radius = base_radius
                 * (params.radius
+                    + l * params.lump_amp * params.radius
                     + g * params.gyri_amp * params.radius
                     + s * params.sulci_amp * params.radius);
             [n[0] * radius, n[1] * radius, n[2] * radius]
@@ -114,7 +127,7 @@ mod tests {
             "surface is too smooth: range {}",
             max - min
         );
-        // Within [1 - (0.15+0.05) - eps, 1 + (0.15+0.05) + eps].
-        assert!(min > 0.70 && max < 1.30, "folds out of expected band");
+        // Within [1 - (0.12+0.15+0.05) - eps, 1 + (0.12+0.15+0.05) + eps].
+        assert!(min > 0.66 && max < 1.34, "folds out of expected band");
     }
 }

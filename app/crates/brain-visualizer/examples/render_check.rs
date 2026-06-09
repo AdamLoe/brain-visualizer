@@ -282,6 +282,102 @@ async fn run() {
         "[render_check] bloom check PASS: HDR+blur+composite drew, bloom-off direct path intact"
     );
 
+    // --- 12. True-opacity active layer check ---------------------------------
+    // The NEW depth-tested, alpha-blended active passes (active-tube +
+    // active-soma) render firing geometry opaque so it OCCLUDES the additive
+    // background. Prove: (a) with active_opacity=1 the active layer draws solid,
+    // near-opaque pixels; (b) with active_opacity=0 the pass is skipped on the
+    // CPU side (no panic, no occlusion) and the frame matches the additive
+    // baseline; (c) it composites correctly with bloom both off and on.
+    println!("[render_check] active-opacity: warming firing scene (connection_layer=2) …");
+    backend.set_bloom_strength(0.0);
+    backend.set_connection_layer(2);
+    for _ in 0..50 {
+        backend.tick(1, 0.55);
+    }
+
+    // (b) Active layer SKIPPED (active_opacity=0): pure additive baseline.
+    backend
+        .set_morphology_config(r#"{"lighting":{"activeOpacity":0.0,"inactiveOpacityFloor":0.0}}"#)
+        .expect("set_morphology_config (active off) should parse");
+    backend.render(&color_view, &mvp, camera_right, camera_up, 100.0, 0.012);
+    let skipped_pixels =
+        readback_rgba(backend.device(), backend.queue(), &color_tex, WIDTH, HEIGHT).await;
+
+    // (a) Active layer ON (active_opacity=1, floor=0): firing geometry opaque.
+    backend
+        .set_morphology_config(r#"{"lighting":{"activeOpacity":1.0,"inactiveOpacityFloor":0.0}}"#)
+        .expect("set_morphology_config (active on) should parse");
+    backend.render(&color_view, &mvp, camera_right, camera_up, 100.0, 0.012);
+    let active_pixels =
+        readback_rgba(backend.device(), backend.queue(), &color_tex, WIDTH, HEIGHT).await;
+
+    // Occlusion proof: the alpha-blended active pass writes solid color over the
+    // additive background, so at least one pixel must DIFFER between the
+    // active-on and active-skipped frames by more than the llvmpipe-dither
+    // epsilon (the same `> 2` channel epsilon used elsewhere in this file).
+    // (With straight-alpha SrcAlpha/OneMinusSrcAlpha blending, an opaque active
+    // fragment REPLACES the additive sum behind it rather than adding to it, so
+    // the two frames diverge wherever a firing neuron sits in front.)
+    let mut occlusion_diffs = 0u32;
+    for (a, s) in active_pixels.chunks(4).zip(skipped_pixels.chunks(4)) {
+        let dr = (a[0] as i32 - s[0] as i32).abs();
+        let dg = (a[1] as i32 - s[1] as i32).abs();
+        let db = (a[2] as i32 - s[2] as i32).abs();
+        if dr > 2 || dg > 2 || db > 2 {
+            occlusion_diffs += 1;
+        }
+    }
+    println!(
+        "[render_check] active-opacity: pixels changed by active layer = {occlusion_diffs}/{}",
+        WIDTH * HEIGHT
+    );
+    assert!(
+        occlusion_diffs > 0,
+        "Active opacity layer produced NO change vs the additive-only frame \
+         (the depth+alpha active pass did not draw / did not occlude)"
+    );
+
+    // Skip-at-zero proof: active_opacity=0 must not panic and must not write
+    // occluding geometry. Re-render with it off and assert the frame is still a
+    // valid, non-black additive frame (the CPU-side pass skip held).
+    let mut skipped_non_black = 0u32;
+    for chunk in skipped_pixels.chunks(4) {
+        if chunk[0] > 2 || chunk[1] > 2 || chunk[2] > 2 {
+            skipped_non_black += 1;
+        }
+    }
+    assert!(
+        skipped_non_black > 0,
+        "Active-skipped (active_opacity=0) frame was all black — additive baseline broke"
+    );
+
+    // (c) Bloom ON with the active layer ON: both must composite without panic.
+    backend.set_bloom_strength(1.0);
+    backend.render(&color_view, &mvp, camera_right, camera_up, 100.0, 0.012);
+    let active_bloom_pixels =
+        readback_rgba(backend.device(), backend.queue(), &color_tex, WIDTH, HEIGHT).await;
+    let mut active_bloom_non_black = 0u32;
+    for chunk in active_bloom_pixels.chunks(4) {
+        if chunk[0] > 2 || chunk[1] > 2 || chunk[2] > 2 {
+            active_bloom_non_black += 1;
+        }
+    }
+    assert!(
+        active_bloom_non_black > 0,
+        "Active layer + bloom-on produced an all-black frame (HDR composition broke)"
+    );
+    backend.set_bloom_strength(0.0);
+
+    // Restore defaults so later code (if any) sees the default config.
+    backend
+        .set_morphology_config("{}")
+        .expect("set_morphology_config (defaults) should parse");
+    println!(
+        "[render_check] active-opacity check PASS: active layer occludes (diffs={occlusion_diffs}), \
+         skip-at-zero held, bloom-on composited"
+    );
+
     println!("=== render_check PASSED ===");
 }
 

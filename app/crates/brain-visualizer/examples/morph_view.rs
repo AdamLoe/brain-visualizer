@@ -33,8 +33,8 @@ async fn run() {
     const HEIGHT: u32 = 1024;
     const WARM_TICKS: u32 = 250;
     const ARTIFACT_JSON: &str = "/tmp/morph_view_stats.json";
-    const ARTIFACT_JSON_VERS: &str = "/tmp/morph_view_0.2.1_stats.json";
-    const ARTIFACT_TAG: &str = "0.2.1";
+    const ARTIFACT_JSON_VERS: &str = "/tmp/morph_view_0.3.0_stats.json";
+    const ARTIFACT_TAG: &str = "0.3.0";
 
     let default_visual = VisualSettings::default();
     let default_params =

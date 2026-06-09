@@ -64,6 +64,11 @@ mod salt {
     pub const DENDRITE_CURL: u32 = 0x00A0_0002; // per-segment curl jitter
     pub const DENDRITE_COUNT: u32 = 0x00A0_0003; // how many primary dendrites
     pub const AXON_BOW: u32 = 0x00A0_0004; // axon perpendicular arc seed
+    // Prim-like axon tree growth + relaxation draws (morphology-branching-tree).
+    // Disjoint from connectivity::salt (≤4) AND from the dendrite salts above so
+    // a tree draw never collides with a target/weight or dendrite draw.
+    pub const TREE_SPLIT: u32 = 0x00A0_0005; // mid-edge split-point jitter
+    pub const TREE_BEND: u32 = 0x00A0_0006; // per-edge Bézier bow seed
 }
 
 /// Per-neuron morphology tuning parameters (world units; tuned to the ~0.15
@@ -106,21 +111,28 @@ pub struct MorphologyParams {
     pub socket_radius_lo: f32,
     pub socket_radius_hi: f32,
     pub socket_tip_preference: f32,
-    pub cluster_min: usize,
-    pub cluster_max: usize,
-    pub trunk_root_samples: usize,
-    pub cluster_branch_samples: usize,
-    pub terminal_twig_samples: usize,
     pub trunk_length_fraction: f32,
-    pub cluster_split_fraction: f32,
-    pub root_radius_fraction: f32,
-    pub cluster_radius_fraction: f32,
     pub twig_radius_fraction: f32,
     pub taper_curve: f32,
     /// Dendrite mid-point radius as a fraction of base_radius (soma → bifurcation).
     pub dendrite_mid_radius_fraction: f32,
     /// Dendrite tip radius as a fraction of base_radius (bifurcation → tip).
     pub dendrite_tip_radius_fraction: f32,
+    // ── Prim-like axon tree growth + relaxation (morphology-branching-tree) ──
+    /// Curvature-penalty weight in the attach score (resist sharp bends).
+    pub tree_score_curvature: f32,
+    /// Density/repel-penalty weight in the attach score (avoid crowding).
+    pub tree_score_density: f32,
+    /// Degree-penalty weight in the attach score (soft 2–3-child fork tendency).
+    pub tree_score_degree: f32,
+    /// Relaxation pull-to-mean strength per pass.
+    pub relax_lerp: f32,
+    /// Relaxation sibling/branch repulsion strength.
+    pub relax_repel: f32,
+    /// Ancestor-window depth relaxed per attach.
+    pub relax_window: usize,
+    /// Bézier samples emitted per tree edge (curvature smoothness).
+    pub edge_subsegments: usize,
     pub dendrite_budget: usize,
     pub trunk_cluster_budget: usize,
     pub terminal_twig_budget: usize,
@@ -144,22 +156,26 @@ impl MorphologyParams {
             socket_radius_lo: 0.008,
             socket_radius_hi: 0.018,
             socket_tip_preference: 0.78,
-            cluster_min: 2,
-            cluster_max: 5,
-            trunk_root_samples: 2,
-            cluster_branch_samples: 2,
-            terminal_twig_samples: 3,
             trunk_length_fraction: 0.32,
-            cluster_split_fraction: 0.62,
-            root_radius_fraction: 0.62,
-            cluster_radius_fraction: 0.44,
             twig_radius_fraction: 0.16,
             taper_curve: 2.1,
             dendrite_mid_radius_fraction: 0.6,
             dendrite_tip_radius_fraction: 0.3,
+            tree_score_curvature: 0.5,
+            tree_score_density: 0.5,
+            tree_score_degree: 0.7,
+            relax_lerp: 0.25,
+            relax_repel: 0.15,
+            relax_window: 3,
+            edge_subsegments: 3,
             dendrite_budget: DENDRITE_MAX,
-            trunk_cluster_budget: 14,
-            terminal_twig_budget: 4,
+            // Prim tree: ≤ ~2k edges × edge_subsegments. Sized for the descriptor
+            // max edge_subsegments (EDGE_SUBSEGMENTS_MAX) so the cap never
+            // under-allocates regardless of the live slider. trunk_cluster_budget
+            // is the per-arbor fixed overhead (root edge headroom); the per-target
+            // term carries the bulk (≈ 2 edges/target × EDGE_SUBSEGMENTS_MAX).
+            trunk_cluster_budget: EDGE_SUBSEGMENTS_MAX,
+            terminal_twig_budget: 2 * EDGE_SUBSEGMENTS_MAX,
             cap_slack: 4,
         }
     }
@@ -192,7 +208,7 @@ impl MorphologyParams {
     /// Compact JSON snapshot used by review artifacts.
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"base_radius\":{:.6},\"dendrite_primary_min\":{},\"dendrite_primary_span\":{},\"dendrite_reach_lo\":{:.6},\"dendrite_reach_hi\":{:.6},\"axon_stop_fraction\":{:.6},\"axon_root_radius_fraction\":{:.6},\"axon_curve_lift\":{:.6},\"socket_count_min\":{},\"socket_count_max\":{},\"socket_radius_lo\":{:.6},\"socket_radius_hi\":{:.6},\"socket_tip_preference\":{:.6},\"cluster_min\":{},\"cluster_max\":{},\"trunk_root_samples\":{},\"cluster_branch_samples\":{},\"terminal_twig_samples\":{},\"trunk_length_fraction\":{:.6},\"cluster_split_fraction\":{:.6},\"root_radius_fraction\":{:.6},\"cluster_radius_fraction\":{:.6},\"twig_radius_fraction\":{:.6},\"taper_curve\":{:.6},\"dendrite_budget\":{},\"trunk_cluster_budget\":{},\"terminal_twig_budget\":{},\"cap_slack\":{}}}",
+            "{{\"base_radius\":{:.6},\"dendrite_primary_min\":{},\"dendrite_primary_span\":{},\"dendrite_reach_lo\":{:.6},\"dendrite_reach_hi\":{:.6},\"axon_stop_fraction\":{:.6},\"axon_root_radius_fraction\":{:.6},\"axon_curve_lift\":{:.6},\"socket_count_min\":{},\"socket_count_max\":{},\"socket_radius_lo\":{:.6},\"socket_radius_hi\":{:.6},\"socket_tip_preference\":{:.6},\"trunk_length_fraction\":{:.6},\"twig_radius_fraction\":{:.6},\"taper_curve\":{:.6},\"tree_score_curvature\":{:.6},\"tree_score_density\":{:.6},\"tree_score_degree\":{:.6},\"relax_lerp\":{:.6},\"relax_repel\":{:.6},\"relax_window\":{},\"edge_subsegments\":{},\"dendrite_budget\":{},\"trunk_cluster_budget\":{},\"terminal_twig_budget\":{},\"cap_slack\":{}}}",
             self.base_radius,
             self.dendrite_primary_min,
             self.dendrite_primary_span,
@@ -206,17 +222,16 @@ impl MorphologyParams {
             self.socket_radius_lo,
             self.socket_radius_hi,
             self.socket_tip_preference,
-            self.cluster_min,
-            self.cluster_max,
-            self.trunk_root_samples,
-            self.cluster_branch_samples,
-            self.terminal_twig_samples,
             self.trunk_length_fraction,
-            self.cluster_split_fraction,
-            self.root_radius_fraction,
-            self.cluster_radius_fraction,
             self.twig_radius_fraction,
             self.taper_curve,
+            self.tree_score_curvature,
+            self.tree_score_density,
+            self.tree_score_degree,
+            self.relax_lerp,
+            self.relax_repel,
+            self.relax_window,
+            self.edge_subsegments,
             self.dendrite_budget,
             self.trunk_cluster_budget,
             self.terminal_twig_budget,
@@ -244,7 +259,7 @@ impl Default for MorphologyParams {
 // config into `MorphologyParams`, the protected budget fields keep their
 // `locked_default()` values.
 
-/// Generator controls — the 24 exposed `MorphologyParams` fields (budgets/slack
+/// Generator controls — the exposed `MorphologyParams` fields (budgets/slack
 /// and salts are protected and excluded). `#[serde(default)]` so a partial JSON
 /// blob falls back to the locked defaults per field.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -263,19 +278,18 @@ pub struct GeneratorConfig {
     pub socket_radius_lo: f32,
     pub socket_radius_hi: f32,
     pub socket_tip_preference: f32,
-    pub cluster_min: usize,
-    pub cluster_max: usize,
-    pub trunk_root_samples: usize,
-    pub cluster_branch_samples: usize,
-    pub terminal_twig_samples: usize,
     pub trunk_length_fraction: f32,
-    pub cluster_split_fraction: f32,
-    pub root_radius_fraction: f32,
-    pub cluster_radius_fraction: f32,
     pub twig_radius_fraction: f32,
     pub taper_curve: f32,
     pub dendrite_mid_radius_fraction: f32,
     pub dendrite_tip_radius_fraction: f32,
+    pub tree_score_curvature: f32,
+    pub tree_score_density: f32,
+    pub tree_score_degree: f32,
+    pub relax_lerp: f32,
+    pub relax_repel: f32,
+    pub relax_window: usize,
+    pub edge_subsegments: usize,
 }
 
 impl Default for GeneratorConfig {
@@ -285,7 +299,7 @@ impl Default for GeneratorConfig {
 }
 
 impl GeneratorConfig {
-    /// Extract the 24 generator-tunable fields from a `MorphologyParams`.
+    /// Extract the generator-tunable fields from a `MorphologyParams`.
     pub fn from_params(p: &MorphologyParams) -> Self {
         Self {
             base_radius: p.base_radius,
@@ -301,23 +315,22 @@ impl GeneratorConfig {
             socket_radius_lo: p.socket_radius_lo,
             socket_radius_hi: p.socket_radius_hi,
             socket_tip_preference: p.socket_tip_preference,
-            cluster_min: p.cluster_min,
-            cluster_max: p.cluster_max,
-            trunk_root_samples: p.trunk_root_samples,
-            cluster_branch_samples: p.cluster_branch_samples,
-            terminal_twig_samples: p.terminal_twig_samples,
             trunk_length_fraction: p.trunk_length_fraction,
-            cluster_split_fraction: p.cluster_split_fraction,
-            root_radius_fraction: p.root_radius_fraction,
-            cluster_radius_fraction: p.cluster_radius_fraction,
             twig_radius_fraction: p.twig_radius_fraction,
             taper_curve: p.taper_curve,
             dendrite_mid_radius_fraction: p.dendrite_mid_radius_fraction,
             dendrite_tip_radius_fraction: p.dendrite_tip_radius_fraction,
+            tree_score_curvature: p.tree_score_curvature,
+            tree_score_density: p.tree_score_density,
+            tree_score_degree: p.tree_score_degree,
+            relax_lerp: p.relax_lerp,
+            relax_repel: p.relax_repel,
+            relax_window: p.relax_window,
+            edge_subsegments: p.edge_subsegments,
         }
     }
 
-    /// Apply these 24 fields onto a base `MorphologyParams`, preserving the base's
+    /// Apply these exposed fields onto a base `MorphologyParams`, preserving the base's
     /// protected budget/slack fields (`dendrite_budget`, `trunk_cluster_budget`,
     /// `terminal_twig_budget`, `cap_slack`).
     pub fn apply_to(&self, base: &MorphologyParams) -> MorphologyParams {
@@ -335,19 +348,18 @@ impl GeneratorConfig {
             socket_radius_lo: self.socket_radius_lo,
             socket_radius_hi: self.socket_radius_hi,
             socket_tip_preference: self.socket_tip_preference,
-            cluster_min: self.cluster_min,
-            cluster_max: self.cluster_max,
-            trunk_root_samples: self.trunk_root_samples,
-            cluster_branch_samples: self.cluster_branch_samples,
-            terminal_twig_samples: self.terminal_twig_samples,
             trunk_length_fraction: self.trunk_length_fraction,
-            cluster_split_fraction: self.cluster_split_fraction,
-            root_radius_fraction: self.root_radius_fraction,
-            cluster_radius_fraction: self.cluster_radius_fraction,
             twig_radius_fraction: self.twig_radius_fraction,
             taper_curve: self.taper_curve,
             dendrite_mid_radius_fraction: self.dendrite_mid_radius_fraction,
             dendrite_tip_radius_fraction: self.dendrite_tip_radius_fraction,
+            tree_score_curvature: self.tree_score_curvature,
+            tree_score_density: self.tree_score_density,
+            tree_score_degree: self.tree_score_degree,
+            relax_lerp: self.relax_lerp,
+            relax_repel: self.relax_repel,
+            relax_window: self.relax_window,
+            edge_subsegments: self.edge_subsegments,
             // Protected: keep the base preset's budgets/slack.
             dendrite_budget: base.dendrite_budget,
             trunk_cluster_budget: base.trunk_cluster_budget,
@@ -395,6 +407,15 @@ pub struct LightingConfig {
     pub rim_power: f32,
     pub resting_brightness: f32,
     pub active_boost: f32,
+    // ── True-opacity active layer (active-opacity-render-pass) ─────────────────
+    // `active_opacity`: the active-opacity CEILING — a freshly-fired neuron's
+    //   alpha in the depth-tested active pass ramps toward this (default 1.0 =
+    //   fully opaque). 0.0 skips the active pass entirely (pure additive look).
+    // `inactive_opacity_floor`: the inactive-opacity FLOOR in the active layer —
+    //   default 0.0 so resting structure is fully hidden in the opaque pass (the
+    //   additive resting layer still shows it softly).
+    pub active_opacity: f32,
+    pub inactive_opacity_floor: f32,
 }
 
 impl Default for LightingConfig {
@@ -413,6 +434,8 @@ impl Default for LightingConfig {
             rim_power: 2.0,
             resting_brightness: 0.20,
             active_boost: 1.8,
+            active_opacity: 1.0,
+            inactive_opacity_floor: 0.0,
         }
     }
 }
@@ -471,9 +494,20 @@ pub struct MorphologyStats {
     pub source_type_bytes: usize,
     pub source_type_excitatory: usize,
     pub source_type_inhibitory: usize,
+    /// Internal-node fork-degree histogram for the Prim axon tree: index =
+    /// child count, index 5 = "5+" (soft-fork evidence). Neurons with no axon
+    /// arbor (0 unique targets) increment index 0. Repurposed from the legacy
+    /// cluster-count histogram (morphology-branching-tree step 9).
     pub cluster_count_histogram: [u32; 6],
     pub terminal_socket_distance_bands: [u32; 4],
     pub socket_reuse_bands: [u32; 4],
+    /// Max axon-tree depth across neurons (shared-trunk evidence).
+    pub tree_depth_max: u32,
+    /// Mean axon-tree depth across neurons that grew an arbor.
+    pub tree_depth_mean: f32,
+    /// Axon-segment radius distribution into 4 √-width bands (thinnest→thickest),
+    /// fractions of R_trunk: [<0.25, 0.25–0.5, 0.5–0.75, ≥0.75].
+    pub radius_bands: [u32; 4],
     pub unique_targets_expected: usize,
     pub unique_targets_emitted: usize,
     pub unique_target_coverage: f32,
@@ -484,7 +518,7 @@ pub struct MorphologyStats {
 impl MorphologyStats {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"segment_count\":{},\"dropped_count\":{},\"segment_cap\":{},\"segment_cap_bytes\":{},\"segment_buffer_bytes\":{},\"cap_utilization\":{:.6},\"duplicate_targets\":{},\"self_targets\":{},\"source_type_bytes\":{},\"source_type_excitatory\":{},\"source_type_inhibitory\":{},\"cluster_count_histogram\":[{},{},{},{},{},{}],\"terminal_socket_distance_bands\":[{},{},{},{}],\"socket_reuse_bands\":[{},{},{},{}],\"unique_targets_expected\":{},\"unique_targets_emitted\":{},\"unique_target_coverage\":{:.6},\"all_k_coverage\":{},\"timings\":{{\"setup_ms\":{:.3},\"dendrite_ms\":{:.3},\"axon_ms\":{:.3},\"finalize_ms\":{:.3},\"total_ms\":{:.3}}}}}",
+            "{{\"segment_count\":{},\"dropped_count\":{},\"segment_cap\":{},\"segment_cap_bytes\":{},\"segment_buffer_bytes\":{},\"cap_utilization\":{:.6},\"duplicate_targets\":{},\"self_targets\":{},\"source_type_bytes\":{},\"source_type_excitatory\":{},\"source_type_inhibitory\":{},\"cluster_count_histogram\":[{},{},{},{},{},{}],\"terminal_socket_distance_bands\":[{},{},{},{}],\"socket_reuse_bands\":[{},{},{},{}],\"tree_depth_max\":{},\"tree_depth_mean\":{:.6},\"radius_bands\":[{},{},{},{}],\"unique_targets_expected\":{},\"unique_targets_emitted\":{},\"unique_target_coverage\":{:.6},\"all_k_coverage\":{},\"timings\":{{\"setup_ms\":{:.3},\"dendrite_ms\":{:.3},\"axon_ms\":{:.3},\"finalize_ms\":{:.3},\"total_ms\":{:.3}}}}}",
             self.segment_count,
             self.dropped_count,
             self.segment_cap,
@@ -510,6 +544,12 @@ impl MorphologyStats {
             self.socket_reuse_bands[1],
             self.socket_reuse_bands[2],
             self.socket_reuse_bands[3],
+            self.tree_depth_max,
+            self.tree_depth_mean,
+            self.radius_bands[0],
+            self.radius_bands[1],
+            self.radius_bands[2],
+            self.radius_bands[3],
             self.unique_targets_expected,
             self.unique_targets_emitted,
             self.unique_target_coverage,
@@ -617,6 +657,12 @@ const DENDRITE_TWIG_SAMPLES: usize = 2;
 /// primaries × (2 sampled stem segments + 2 twigs × 2 sampled segments) = 30.
 pub const DENDRITE_MAX: usize = 30;
 
+/// Descriptor-max for the exposed `edge_subsegments` knob (MORPH_DESCRIPTORS
+/// generator.edgeSubsegments max). The protected segment cap is sized against
+/// THIS value, not the default, so raising the slider never under-allocates the
+/// GPU buffer (morphology-branching-tree step 8).
+pub const EDGE_SUBSEGMENTS_MAX: usize = 4;
+
 /// Build the production type-byte slice from the manifold region assignment and
 /// seed, matching `initial_last_spike()` / the integrate-shader path.
 pub fn build_source_types(seed_lo: u32, regions: &[RegionKind]) -> Vec<u8> {
@@ -628,6 +674,9 @@ pub fn build_source_types(seed_lo: u32, regions: &[RegionKind]) -> Vec<u8> {
 }
 
 #[derive(Clone, Copy, Debug)]
+// `target_socket` reads only target_id/source_pos/target_pos; the remaining
+// fields are retained for the planning struct shape and the bounded-landing test.
+#[allow(dead_code)]
 struct TargetPlan {
     target_id: u32,
     source_pos: [f32; 3],
@@ -785,17 +834,6 @@ fn target_socket(
     (socket_pos, socket_idx, socket_distance)
 }
 
-fn cluster_sort_key(seed_lo: u32, source_id: u32, direction: [f32; 3]) -> f32 {
-    let axis = dir_from_hashes(
-        mix_key(seed_lo, source_id, 0, salt::AXON_BOW),
-        mix_key(seed_lo, source_id, 1, salt::DENDRITE_DIR),
-    );
-    let (right, up) = bezier_basis(axis, mix_key(seed_lo, source_id, 2, salt::DENDRITE_CURL));
-    let x = direction[0] * right[0] + direction[1] * right[1] + direction[2] * right[2];
-    let y = direction[0] * up[0] + direction[1] * up[1] + direction[2] * up[2];
-    y.atan2(x)
-}
-
 /// Worst-case segments per neuron for a given fan-out `k`, used to size the GPU
 /// buffer cap. The named `MorphologyParams` budgets now own the actual formula;
 /// this helper keeps the default preset path available for callers that only
@@ -867,6 +905,193 @@ fn perp(dir: [f32; 3], seed: u32) -> [f32; 3] {
     norm(p)
 }
 
+#[inline]
+fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+#[inline]
+fn dist(a: [f32; 3], b: [f32; 3]) -> f32 {
+    len(sub(a, b))
+}
+
+/// Host-local axon-tree node (morphology-branching-tree step 2). NEVER uploaded;
+/// flattened to `MorphSegment`s after build. Index-keyed `Vec` (not HashMap) so
+/// iteration order is deterministic — the locked ordered-structures rule.
+#[derive(Clone, Debug)]
+struct ArborNode {
+    pos: [f32; 3],
+    parent: Option<usize>,
+    children: Vec<usize>,
+    /// Real target neuron id for a leaf (socket) node; `None` for internal/root.
+    target_id: Option<u32>,
+    /// Leaf synaptic weight (clamped positive); 0 for internal/root.
+    weight: i64,
+    /// Bottom-up subtree weight sum (filled in the width pass).
+    subtree_weight: i64,
+    /// Area-preserving radius (filled in the width pass).
+    radius: f32,
+    /// Depth from the root (root = 0).
+    depth: u32,
+}
+
+/// Prim attach score for placing a new leaf at `cand_pos` under `parent_idx`:
+/// `distance + curvature·curv + density·dens + degree·deg`. Lower is better.
+/// Curvature = `1 - dot` of the parent's incoming direction vs the new edge
+/// (trig-free, deterministic). Density = inverse proximity to existing nodes.
+/// Degree = `children.len().saturating_sub(1)` (1st child free, soft fork).
+fn attach_score(
+    tree: &[ArborNode],
+    parent_idx: usize,
+    cand_pos: [f32; 3],
+    leaf_pos: [f32; 3],
+    curv_w: f32,
+    dens_w: f32,
+    deg_w: f32,
+) -> f32 {
+    let new_dir = norm(sub(leaf_pos, cand_pos));
+    let base = dist(cand_pos, leaf_pos);
+
+    // Curvature: angle between the parent's incoming edge and the new edge.
+    let curvature = if let Some(gp) = tree[parent_idx].parent {
+        let incoming = norm(sub(tree[parent_idx].pos, tree[gp].pos));
+        (1.0 - dot(incoming, new_dir)).max(0.0)
+    } else {
+        0.0
+    };
+
+    // Density: penalize crowding near already-placed nodes (linear scan over the
+    // small per-arbor node Vec — ordered, deterministic).
+    let mut density = 0.0f32;
+    for (ni, node) in tree.iter().enumerate() {
+        if ni == parent_idx {
+            continue;
+        }
+        let d = dist(node.pos, cand_pos);
+        density += 1.0 / (1.0 + d * 40.0);
+    }
+
+    let degree = tree[parent_idx].children.len().saturating_sub(1) as f32;
+
+    base + curv_w * curvature * base + dens_w * density * base + deg_w * degree * base * 0.25
+}
+
+/// Record a direct-node attach candidate if it beats the current best, breaking
+/// ties deterministically by `(leaf target_id, node index)` ascending.
+#[allow(clippy::too_many_arguments)]
+fn consider(
+    best: &mut Option<(usize, usize, [f32; 3], u32, f32)>,
+    ui: usize,
+    node_idx: usize,
+    pos: [f32; 3],
+    leaf_tid: u32,
+    score: f32,
+    eps: f32,
+) {
+    match best {
+        None => *best = Some((ui, node_idx, pos, leaf_tid, score)),
+        Some((_, b_node, _, b_tid, b_score)) => {
+            if score < *b_score - eps
+                || ((score - *b_score).abs() <= eps
+                    && (leaf_tid, node_idx) < (*b_tid, *b_node))
+            {
+                *best = Some((ui, node_idx, pos, leaf_tid, score));
+            }
+        }
+    }
+}
+
+/// Like `consider` but for a mid-edge split candidate (the attach node is the
+/// child whose incoming edge is split). Same deterministic tie-break.
+#[allow(clippy::too_many_arguments)]
+fn consider_split(
+    best: &mut Option<(usize, usize, [f32; 3], u32, f32)>,
+    ui: usize,
+    node_idx: usize,
+    split_pos: [f32; 3],
+    leaf_tid: u32,
+    score: f32,
+    eps: f32,
+) {
+    consider(best, ui, node_idx, split_pos, leaf_tid, score, eps);
+}
+
+/// Re-derive depths for the subtree rooted at `root` from its parent's depth.
+/// Iterative, ascending — deterministic.
+fn refresh_depths(tree: &mut [ArborNode], root: usize) {
+    let mut stack = vec![root];
+    while let Some(idx) = stack.pop() {
+        let base = tree[idx].parent.map(|p| tree[p].depth + 1).unwrap_or(0);
+        tree[idx].depth = base;
+        // Clone children indices to avoid borrow conflict.
+        let kids = tree[idx].children.clone();
+        for c in kids {
+            stack.push(c);
+        }
+    }
+}
+
+/// Local relaxation: pull each INTERNAL node in the just-touched ancestor window
+/// toward the mean of (parent + children) by `lerp`, then repel from nearby
+/// nodes by `repel`. Node 0 (axon root) and all leaf nodes are held fixed.
+/// Processes nodes in ascending index order; neighbour set is the ordered node
+/// Vec — no spatial-hash iteration, no float-nondeterministic reduction.
+fn relax_window(
+    tree: &mut [ArborNode],
+    start: usize,
+    window: usize,
+    lerp_amt: f32,
+    repel_amt: f32,
+) {
+    // Collect the ancestor window (start and up to `window` ancestors), ascending.
+    let mut chain = Vec::with_capacity(window + 1);
+    let mut cur = Some(start);
+    for _ in 0..=window {
+        match cur {
+            Some(idx) => {
+                chain.push(idx);
+                cur = tree[idx].parent;
+            }
+            None => break,
+        }
+    }
+    chain.sort_unstable();
+
+    for &idx in &chain {
+        // Held-fixed: root (no parent) and leaves (have a target_id).
+        if tree[idx].parent.is_none() || tree[idx].target_id.is_some() {
+            continue;
+        }
+        let parent = tree[idx].parent.expect("internal node has a parent");
+        // Mean of parent + children.
+        let mut sum = tree[parent].pos;
+        let mut count = 1u32;
+        let kids = tree[idx].children.clone();
+        for c in &kids {
+            sum = add(sum, tree[*c].pos);
+            count += 1;
+        }
+        let mean = scale(sum, 1.0 / count as f32);
+        let cur_pos = tree[idx].pos;
+        let mut new_pos = add(cur_pos, scale(sub(mean, cur_pos), lerp_amt.clamp(0.0, 1.0)));
+
+        // Repel from nearby nodes (ascending order, fixed reduction).
+        let mut push = [0.0f32; 3];
+        for (ni, node) in tree.iter().enumerate() {
+            if ni == idx {
+                continue;
+            }
+            let off = sub(new_pos, node.pos);
+            let d = len(off).max(1e-4);
+            if d < 0.05 {
+                push = add(push, scale(norm(off), (0.05 - d) / 0.05));
+            }
+        }
+        new_pos = add(new_pos, scale(push, repel_amt.clamp(0.0, 1.0) * 0.02));
+        tree[idx].pos = new_pos;
+    }
+}
+
 /// Generate the full morphology for all `n` neurons. Deterministic in
 /// `(seed_lo, positions, grid, k)`. Caps the total at `n * max_segs_per_neuron(k)`
 /// (never hit in practice; logged if it is — no silent truncation).
@@ -877,6 +1102,7 @@ pub fn generate(
     seed_lo: u32,
     params: &MorphologyParams,
     source_types: &[u8],
+    reach: connectivity::ReachParams,
 ) -> Morphology {
     let n = positions.len();
     let setup_start = MorphTimer::start();
@@ -898,6 +1124,10 @@ pub fn generate(
     let mut cluster_count_histogram = [0u32; 6];
     let mut terminal_socket_distance_bands = [0u32; 4];
     let mut socket_reuse_bands = [0u32; 4];
+    let mut radius_bands = [0u32; 4];
+    let mut tree_depth_max = 0u32;
+    let mut tree_depth_sum = 0u64;
+    let mut tree_depth_count = 0u64;
 
     // Precompute each neuron's grid cell once (O(N)) so the axon-arbor loop below
     // can use the hot-path `target_with_cell` entry. The uncached
@@ -1028,25 +1258,42 @@ pub fn generate(
         }
         dendrite_ms += dendrite_start.elapsed_ms();
 
-        // ── Axon arbor (kind 1): shared root -> clusters -> terminal twigs. ───
+        // ── Axon arbor (kind 1): Prim-like shared tree → relax → width → spline.
         let axon_start = MorphTimer::start();
         let src_cell = grid.unpack(cell_of_neuron[i]);
+        // Unique-target resolution (verbatim dedup) PLUS per-unique-target weight.
         let mut unique_targets = Vec::<u32>::new();
+        let mut leaf_weights = Vec::<i64>::new();
         let mut seen_targets = HashSet::new();
         for j in 0..k as u32 {
-            let tgt_id =
-                connectivity::target_with_cell(id, j, grid, k, seed_lo, src_type, src_cell);
+            let tgt_id = connectivity::target_with_cell(
+                id, j, grid, k, seed_lo, src_type, src_cell, reach,
+            );
             if tgt_id == id {
                 self_targets += 1;
                 continue;
             }
-            if !seen_targets.insert(tgt_id) {
+            // Clamp negatives (inhibitory weights are negative) and floor at 1 so
+            // the √-width is real and the thinnest twig is never zero-width.
+            let w = connectivity::weight(id, j, src_type).unsigned_abs().max(1) as i64;
+            if seen_targets.insert(tgt_id) {
+                unique_targets.push(tgt_id);
+                leaf_weights.push(w);
+            } else {
                 duplicate_targets += 1;
-                continue;
+                // Sum duplicate-draw weight onto the existing leaf (ordered Vec).
+                if let Some(slot) = unique_targets.iter().position(|&t| t == tgt_id) {
+                    leaf_weights[slot] += w;
+                }
             }
-            unique_targets.push(tgt_id);
         }
-        unique_targets.sort_unstable();
+        // Sort leaves by target_id (deterministic) carrying their weights along.
+        {
+            let mut order: Vec<usize> = (0..unique_targets.len()).collect();
+            order.sort_unstable_by_key(|&idx| unique_targets[idx]);
+            unique_targets = order.iter().map(|&idx| unique_targets[idx]).collect();
+            leaf_weights = order.iter().map(|&idx| leaf_weights[idx]).collect();
+        }
         let unique_count = unique_targets.len();
         unique_targets_expected += unique_count;
         if unique_count == 0 {
@@ -1055,88 +1302,47 @@ pub fn generate(
             continue;
         }
 
-        let mut plans: Vec<TargetPlan> = unique_targets
-            .iter()
-            .map(|&tgt_id| {
-                let target_pos = positions[tgt_id as usize];
-                let full = sub(target_pos, soma);
-                let distance = len(full).max(1e-6);
-                let direction = norm(full);
-                TargetPlan {
-                    target_id: tgt_id,
-                    source_pos: soma,
-                    target_pos,
-                    direction,
-                    distance,
-                    socket_idx: 0,
-                    socket_pos: target_pos,
-                    socket_distance: 0.0,
-                }
-            })
-            .collect();
+        let r_trunk = params.base_radius * params.axon_root_radius_fraction;
+        let r_floor = (r_trunk * params.twig_radius_fraction).max(1e-4);
+        let edge_subs = params.edge_subsegments.max(1);
 
-        let cluster_count = if unique_count == 1 {
-            1
-        } else {
-            let min_c = params.cluster_min.max(1).min(unique_count);
-            let max_c = params.cluster_max.max(min_c).min(unique_count);
-            let span = max_c.saturating_sub(min_c) + 1;
-            let draw = if span == 1 {
-                0
-            } else {
-                mix_key(seed_lo, id, unique_count as u32, salt::DENDRITE_COUNT) as usize % span
-            };
-            (min_c + draw).clamp(1, unique_count)
-        };
-        cluster_count_histogram[cluster_count.min(5)] += 1;
-
-        let mut axis = [0.0f32; 3];
-        for p in &plans {
-            axis = add(axis, p.direction);
-        }
-        axis = norm(add(
-            axis,
-            dir_from_hashes(
-                mix_key(seed_lo, id, unique_count as u32, salt::AXON_BOW),
-                mix_key(seed_lo, id, unique_count as u32, salt::DENDRITE_DIR),
-            ),
-        ));
-
-        plans.sort_by(|a, b| {
-            let ka = cluster_sort_key(seed_lo, id, a.direction);
-            let kb = cluster_sort_key(seed_lo, id, b.direction);
-            ka.partial_cmp(&kb)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.target_id.cmp(&b.target_id))
+        // ── Build the per-arbor tree (host-local; never uploaded). ───────────
+        let mut tree: Vec<ArborNode> = Vec::with_capacity(2 * unique_count + 1);
+        // Node 0 = soma/axon-root, held fixed.
+        tree.push(ArborNode {
+            pos: soma,
+            parent: None,
+            children: Vec::new(),
+            target_id: None,
+            weight: 0,
+            subtree_weight: 0,
+            radius: 0.0,
+            depth: 0,
         });
 
-        let base = unique_count / cluster_count;
-        let extra = unique_count % cluster_count;
-        let mut clusters: Vec<Vec<usize>> = Vec::with_capacity(cluster_count);
-        let mut cursor = 0usize;
-        for cidx in 0..cluster_count {
-            let size = base + usize::from(cidx < extra);
-            let mut cluster = Vec::with_capacity(size);
-            for _ in 0..size {
-                cluster.push(cursor);
-                cursor += 1;
-            }
-            clusters.push(cluster);
+        // Leaf sockets (held fixed), tagged with synaptic weight. Each leaf is a
+        // detached node until attached by the Prim loop below.
+        struct Leaf {
+            target_id: u32,
+            socket_pos: [f32; 3],
+            weight: i64,
         }
-
-        let root_radius = params.base_radius * params.axon_root_radius_fraction;
-        let shared_root_radius = root_radius * params.root_radius_fraction;
-        let cluster_start_radius = root_radius * params.cluster_radius_fraction;
-        let twig_start_radius = root_radius * params.cluster_radius_fraction;
-        let twig_end_radius = root_radius * params.twig_radius_fraction;
-
-        if unique_count == 1 {
-            let plan = &mut plans[0];
+        let mut leaves: Vec<Leaf> = Vec::with_capacity(unique_count);
+        for (slot, &tgt_id) in unique_targets.iter().enumerate() {
+            let target_pos = positions[tgt_id as usize];
+            let full = sub(target_pos, soma);
+            let plan = TargetPlan {
+                target_id: tgt_id,
+                source_pos: soma,
+                target_pos,
+                direction: norm(full),
+                distance: len(full).max(1e-6),
+                socket_idx: 0,
+                socket_pos: target_pos,
+                socket_distance: 0.0,
+            };
             let (socket_pos, socket_idx, socket_distance) =
-                target_socket(seed_lo, id, plan, params);
-            plan.socket_pos = socket_pos;
-            plan.socket_idx = socket_idx;
-            plan.socket_distance = socket_distance;
+                target_socket(seed_lo, id, &plan, params);
             terminal_socket_distance_bands[if socket_distance < params.socket_radius_lo * 0.5 {
                 0
             } else if socket_distance < params.socket_radius_lo * 0.9 {
@@ -1147,194 +1353,284 @@ pub fn generate(
                 3
             }] += 1;
             socket_reuse_bands[socket_idx.min(3)] += 1;
-            let path_dir = norm(sub(socket_pos, soma));
-            let path_len = len(sub(socket_pos, soma)).max(0.03);
+            leaves.push(Leaf {
+                target_id: tgt_id,
+                socket_pos,
+                weight: leaf_weights[slot],
+            });
+        }
+
+        // Single-target fast path: trivial tree (root → one leaf), no shared root.
+        if unique_count == 1 {
+            tree.push(ArborNode {
+                pos: leaves[0].socket_pos,
+                parent: Some(0),
+                children: Vec::new(),
+                target_id: Some(leaves[0].target_id),
+                weight: leaves[0].weight,
+                subtree_weight: 0,
+                radius: 0.0,
+                depth: 1,
+            });
+            tree[0].children.push(1);
+        } else {
+            // Seed a shared trunk node along the average target direction so a
+            // source-lit internal edge (soma → trunk) always exists for a fan-out
+            // arbor (the locked lighting invariant: shared paths stay source-lit).
+            // Leaves then attach to {root, trunk}, forking off the trunk.
+            let mut axis = [0.0f32; 3];
+            let mut avg_distance = 0.0f32;
+            for l in &leaves {
+                axis = add(axis, norm(sub(l.socket_pos, soma)));
+                avg_distance += dist(l.socket_pos, soma);
+            }
+            avg_distance /= leaves.len() as f32;
+            let trunk_dir = if len(axis) < 1e-6 {
+                dir_from_hashes(
+                    mix_key(seed_lo, id, unique_count as u32, salt::AXON_BOW),
+                    mix_key(seed_lo, id, unique_count as u32, salt::DENDRITE_DIR),
+                )
+            } else {
+                norm(axis)
+            };
+            let trunk_len =
+                (avg_distance * params.trunk_length_fraction.max(0.05)).max(0.02);
+            let trunk_pos = add(soma, scale(trunk_dir, trunk_len));
+            tree.push(ArborNode {
+                pos: trunk_pos,
+                parent: Some(0),
+                children: Vec::new(),
+                target_id: None,
+                weight: 0,
+                subtree_weight: 0,
+                radius: 0.0,
+                depth: 1,
+            });
+            tree[0].children.push(1);
+
+            // Prim-like greedy attach: one edge per iteration, picking the
+            // globally-best (leaf, attach-point) pair over existing nodes AND
+            // along existing edges. Attach points can split an edge (→ shared
+            // trunks/forks). Deterministic tie-break by (leaf target_id, node idx).
+            let mut unattached: Vec<usize> = (0..leaves.len()).collect(); // ordered by target_id
+            let curv_w = params.tree_score_curvature.max(0.0);
+            let dens_w = params.tree_score_density.max(0.0);
+            let deg_w = params.tree_score_degree.max(0.0);
+            const EPS: f32 = 1e-5;
+
+            while !unattached.is_empty() {
+                let mut best: Option<(usize, usize, [f32; 3], u32, f32)> = None;
+                // (unattached_idx, parent_node, split_pos, leaf_target_id, score)
+                for (ui, &li) in unattached.iter().enumerate() {
+                    let leaf_pos = leaves[li].socket_pos;
+                    let leaf_tid = leaves[li].target_id;
+                    for node_idx in 0..tree.len() {
+                        // Candidate 1: attach directly to this node.
+                        let cand_pos = tree[node_idx].pos;
+                        let score = attach_score(
+                            &tree, node_idx, cand_pos, leaf_pos, curv_w, dens_w, deg_w,
+                        );
+                        consider(&mut best, ui, node_idx, cand_pos, leaf_tid, score, EPS);
+
+                        // Candidate 2: split the edge (parent→node) at the
+                        // projection of the leaf, if this node has a parent.
+                        if let Some(parent) = tree[node_idx].parent {
+                            let a = tree[parent].pos;
+                            let b = tree[node_idx].pos;
+                            let ab = sub(b, a);
+                            let ab_len2 = dot(ab, ab).max(1e-12);
+                            let t = (dot(sub(leaf_pos, a), ab) / ab_len2).clamp(0.0, 1.0);
+                            // Deterministic split-point jitter (kept tiny so it
+                            // stays on the edge); uses the new TREE_SPLIT salt.
+                            let jitter = (unit(mix_key(
+                                seed_lo,
+                                id,
+                                leaf_tid ^ (node_idx as u32),
+                                salt::TREE_SPLIT,
+                            )) - 0.5)
+                                * 0.04;
+                            let t = (t + jitter).clamp(0.05, 0.95);
+                            let split_pos = add(a, scale(ab, t));
+                            let score = attach_score(
+                                &tree, parent, split_pos, leaf_pos, curv_w, dens_w, deg_w,
+                            ) + 0.001; // mild bias toward existing nodes on ties
+                            // Encode "split of edge into node_idx" as parent index
+                            // with the split position; resolved at attach.
+                            consider_split(
+                                &mut best, ui, node_idx, split_pos, leaf_tid, score, EPS,
+                            );
+                        }
+                    }
+                }
+
+                let (ui, attach_target, split_pos, _tid, _score) =
+                    best.expect("at least one candidate per non-empty unattached set");
+                let li = unattached[ui];
+
+                // Resolve the attach point. If `split_pos == node.pos` we attach to
+                // the node directly; otherwise we split the (parent→node) edge.
+                let parent_for_leaf = if dist(split_pos, tree[attach_target].pos) < 1e-9 {
+                    attach_target
+                } else {
+                    // Insert an internal split node between node's parent and node.
+                    let node = attach_target;
+                    let parent = tree[node].parent.expect("split target has a parent");
+                    let split_idx = tree.len();
+                    let depth = tree[parent].depth + 1;
+                    tree.push(ArborNode {
+                        pos: split_pos,
+                        parent: Some(parent),
+                        children: vec![node],
+                        target_id: None,
+                        weight: 0,
+                        subtree_weight: 0,
+                        radius: 0.0,
+                        depth,
+                    });
+                    // Re-parent `node` under the split node.
+                    if let Some(slot) =
+                        tree[parent].children.iter().position(|&c| c == node)
+                    {
+                        tree[parent].children[slot] = split_idx;
+                    }
+                    tree[node].parent = Some(split_idx);
+                    // `node` and its subtree depths shift by +1; fix lazily below.
+                    refresh_depths(&mut tree, split_idx);
+                    split_idx
+                };
+
+                // Append the leaf node.
+                let leaf_idx = tree.len();
+                let depth = tree[parent_for_leaf].depth + 1;
+                tree.push(ArborNode {
+                    pos: leaves[li].socket_pos,
+                    parent: Some(parent_for_leaf),
+                    children: Vec::new(),
+                    target_id: Some(leaves[li].target_id),
+                    weight: leaves[li].weight,
+                    subtree_weight: 0,
+                    radius: 0.0,
+                    depth,
+                });
+                tree[parent_for_leaf].children.push(leaf_idx);
+
+                unattached.remove(ui);
+
+                // ── Relaxation: local ancestor-window pass (fixed root + leaves).
+                relax_window(
+                    &mut tree,
+                    parent_for_leaf,
+                    params.relax_window,
+                    params.relax_lerp,
+                    params.relax_repel,
+                );
+            }
+        }
+
+        // ── Width pass (bottom-up, area-preserving √ rule). ──────────────────
+        // Edge-splitting can make a parent's index exceed its child's, so a plain
+        // reverse-index pass is NOT reliably bottom-up. Walk by descending depth
+        // (deepest first) with a deterministic (depth, index) order so every
+        // child is summed before its parent.
+        let total_weight: i64 = leaves.iter().map(|l| l.weight).sum::<i64>().max(1);
+        let mut order: Vec<usize> = (0..tree.len()).collect();
+        order.sort_unstable_by(|&a, &b| {
+            tree[b]
+                .depth
+                .cmp(&tree[a].depth)
+                .then_with(|| a.cmp(&b))
+        });
+        for &idx in &order {
+            let own = tree[idx].weight;
+            let child_sum: i64 = tree[idx]
+                .children
+                .iter()
+                .map(|&c| tree[c].subtree_weight)
+                .sum();
+            tree[idx].subtree_weight = own + child_sum;
+            let frac = tree[idx].subtree_weight as f32 / total_weight as f32;
+            tree[idx].radius = (r_trunk * frac.max(0.0).sqrt()).max(r_floor);
+        }
+
+        // ── Stats: fork-degree histogram (internal nodes), depth, width bands.
+        let mut neuron_depth_max = 0u32;
+        for node in &tree {
+            neuron_depth_max = neuron_depth_max.max(node.depth);
+            if node.target_id.is_none() && node.parent.is_some() {
+                // internal (non-root, non-leaf) fork node
+                cluster_count_histogram[node.children.len().min(5)] += 1;
+            }
+        }
+        tree_depth_max = tree_depth_max.max(neuron_depth_max);
+        tree_depth_sum += neuron_depth_max as u64;
+        tree_depth_count += 1;
+
+        // ── Spline emission: each edge → sampled Bézier → MorphSegment list. ──
+        // Carry cumulative path length forward per node so child edges start at
+        // the parent edge's end path (path_lengths_match_parent_branch_endpoints).
+        let mut node_path_end = vec![0.0f32; tree.len()];
+        // Emit edges parent-before-child so node_path_end[parent] is ready when the
+        // child edge starts. Edge-splitting can break index ordering, so order by
+        // ascending depth (then index) — a deterministic topological order.
+        let mut emit_order: Vec<usize> = (1..tree.len()).collect();
+        emit_order.sort_unstable_by(|&a, &b| {
+            tree[a].depth.cmp(&tree[b].depth).then_with(|| a.cmp(&b))
+        });
+        for &child in &emit_order {
+            let parent = tree[child].parent.expect("non-root has a parent");
+            let p_start = tree[parent].pos;
+            let p_end = tree[child].pos;
+            let is_leaf = tree[child].target_id.is_some();
+            // LOCKED lighting rule: leaf edges carry the real target id; internal
+            // (trunk/fork) edges carry the SOURCE neuron id.
+            let seg_target = if is_leaf {
+                tree[child].target_id.expect("leaf has a target id")
+            } else {
+                id
+            };
+            let dir = norm(sub(p_end, p_start));
+            let edge_len = dist(p_end, p_start).max(1e-4);
             let bend = bend_vector(
-                path_dir,
-                mix_key(seed_lo, id, plan.target_id, salt::AXON_BOW),
-                path_len * params.axon_curve_lift.max(0.0),
+                dir,
+                mix_key(seed_lo, id, seg_target ^ (child as u32), salt::TREE_BEND),
+                edge_len * params.axon_curve_lift.max(0.0),
             );
-            let p1 = add(
-                add(soma, scale(path_dir, path_len * 0.33)),
-                scale(bend, 0.28),
-            );
-            let p2 = add(
-                add(socket_pos, scale(path_dir, -path_len * 0.27)),
-                scale(bend, -0.16),
-            );
+            let p1 = add(add(p_start, scale(dir, edge_len * 0.33)), scale(bend, 0.30));
+            let p2 = add(add(p_end, scale(dir, -edge_len * 0.27)), scale(bend, -0.16));
             let (next_path, complete, _) = emit_bezier_path(
                 &mut segments,
                 cap,
                 &mut dropped,
                 id,
-                plan.target_id,
+                seg_target,
                 1,
-                soma,
+                p_start,
                 p1,
                 p2,
-                socket_pos,
-                root_radius,
-                twig_end_radius,
-                params.terminal_twig_samples.max(1),
-                0.0,
+                p_end,
+                tree[parent].radius.max(r_floor),
+                tree[child].radius,
+                edge_subs,
+                node_path_end[parent],
                 params.taper_curve,
             );
+            node_path_end[child] = next_path;
             if !complete {
                 all_k_coverage = false;
-            } else {
+            } else if is_leaf {
                 unique_targets_emitted += 1;
             }
-            let _ = next_path;
-            axon_ms += axon_start.elapsed_ms();
-            continue;
-        }
-
-        let avg_distance = plans.iter().map(|p| p.distance).sum::<f32>() / unique_count as f32;
-        let root_len = (avg_distance * params.trunk_length_fraction.max(0.05)).max(0.03);
-        let root_dir = axis;
-        let root_anchor = add(soma, scale(root_dir, root_len));
-        let root_bend = bend_vector(
-            root_dir,
-            mix_key(seed_lo, id, unique_count as u32, salt::AXON_BOW),
-            root_len * params.axon_curve_lift.max(0.0),
-        );
-        let root_p1 = add(
-            add(soma, scale(root_dir, root_len * 0.33)),
-            scale(root_bend, 0.35),
-        );
-        let root_p2 = add(
-            add(root_anchor, scale(root_dir, -root_len * 0.27)),
-            scale(root_bend, -0.18),
-        );
-        let (next_path, root_complete, _) = emit_bezier_path(
-            &mut segments,
-            cap,
-            &mut dropped,
-            id,
-            id,
-            1,
-            soma,
-            root_p1,
-            root_p2,
-            root_anchor,
-            shared_root_radius,
-            cluster_start_radius,
-            params.trunk_root_samples.max(1),
-            0.0,
-            params.taper_curve,
-        );
-        if !root_complete {
-            all_k_coverage = false;
-        }
-        let root_path_end = next_path;
-
-        for (cluster_idx, cluster) in clusters.iter().enumerate() {
-            let mut cluster_dir = [0.0f32; 3];
-            let mut cluster_avg = 0.0f32;
-            for &plan_idx in cluster {
-                cluster_dir = add(cluster_dir, plans[plan_idx].direction);
-                cluster_avg += plans[plan_idx].distance;
-            }
-            if len(cluster_dir) < 1e-6 {
-                cluster_dir = root_dir;
+            // Width-band stat on the edge's thicker (parent) radius.
+            let rb = tree[parent].radius / r_trunk;
+            radius_bands[if rb < 0.25 {
+                0
+            } else if rb < 0.5 {
+                1
+            } else if rb < 0.75 {
+                2
             } else {
-                cluster_dir = norm(cluster_dir);
-            }
-            cluster_avg /= cluster.len().max(1) as f32;
-            let cluster_len = (cluster_avg * params.cluster_split_fraction.max(0.05)).max(0.02);
-            let cluster_anchor = add(root_anchor, scale(cluster_dir, cluster_len));
-            let cluster_bend = bend_vector(
-                cluster_dir,
-                mix_key(seed_lo, id, cluster_idx as u32, salt::DENDRITE_CURL),
-                cluster_len * params.axon_curve_lift.max(0.0),
-            );
-            let cluster_p1 = add(
-                add(root_anchor, scale(cluster_dir, cluster_len * 0.35)),
-                scale(cluster_bend, 0.30),
-            );
-            let cluster_p2 = add(
-                add(cluster_anchor, scale(cluster_dir, -cluster_len * 0.28)),
-                scale(cluster_bend, -0.15),
-            );
-            let (next_path, cluster_complete, _) = emit_bezier_path(
-                &mut segments,
-                cap,
-                &mut dropped,
-                id,
-                id,
-                1,
-                root_anchor,
-                cluster_p1,
-                cluster_p2,
-                cluster_anchor,
-                cluster_start_radius,
-                twig_start_radius,
-                params.cluster_branch_samples.max(1),
-                root_path_end,
-                params.taper_curve,
-            );
-            if !cluster_complete {
-                all_k_coverage = false;
-            }
-            let cluster_path_end = next_path;
-
-            for &plan_idx in cluster {
-                let plan = &mut plans[plan_idx];
-                let (socket_pos, socket_idx, socket_distance) =
-                    target_socket(seed_lo, id, plan, params);
-                plan.socket_pos = socket_pos;
-                plan.socket_idx = socket_idx;
-                plan.socket_distance = socket_distance;
-                terminal_socket_distance_bands[if socket_distance < params.socket_radius_lo * 0.5 {
-                    0
-                } else if socket_distance < params.socket_radius_lo * 0.9 {
-                    1
-                } else if socket_distance < params.socket_radius_hi * 1.1 {
-                    2
-                } else {
-                    3
-                }] += 1;
-                socket_reuse_bands[socket_idx.min(3)] += 1;
-
-                let twig_dir = norm(sub(socket_pos, cluster_anchor));
-                let twig_len = len(sub(socket_pos, cluster_anchor)).max(1e-4);
-                let twig_bend = bend_vector(
-                    twig_dir,
-                    mix_key(seed_lo, id, plan.target_id, salt::AXON_BOW),
-                    twig_len * params.axon_curve_lift.max(0.0),
-                );
-                let twig_p1 = add(
-                    add(cluster_anchor, scale(twig_dir, twig_len * 0.32)),
-                    scale(twig_bend, 0.30),
-                );
-                let twig_p2 = add(
-                    add(socket_pos, scale(twig_dir, -twig_len * 0.24)),
-                    scale(twig_bend, -0.15),
-                );
-                let (next_path, twig_complete, _) = emit_bezier_path(
-                    &mut segments,
-                    cap,
-                    &mut dropped,
-                    id,
-                    plan.target_id,
-                    1,
-                    cluster_anchor,
-                    twig_p1,
-                    twig_p2,
-                    socket_pos,
-                    twig_start_radius,
-                    twig_end_radius,
-                    params.terminal_twig_samples.max(1),
-                    cluster_path_end,
-                    params.taper_curve,
-                );
-                if !twig_complete {
-                    all_k_coverage = false;
-                } else {
-                    unique_targets_emitted += 1;
-                }
-                let _ = next_path;
-            }
+                3
+            }] += 1;
         }
         axon_ms += axon_start.elapsed_ms();
     }
@@ -1391,6 +1687,13 @@ pub fn generate(
             cluster_count_histogram,
             terminal_socket_distance_bands,
             socket_reuse_bands,
+            tree_depth_max,
+            tree_depth_mean: if tree_depth_count == 0 {
+                0.0
+            } else {
+                tree_depth_sum as f32 / tree_depth_count as f32
+            },
+            radius_bands,
         },
     }
 }
@@ -1439,14 +1742,18 @@ mod tests {
         assert_eq!(p.axon_curve_lift, 0.15);
         assert_eq!(p.socket_count_min, 2);
         assert_eq!(p.socket_count_max, 4);
-        assert_eq!(p.cluster_min, 2);
-        assert_eq!(p.cluster_max, 5);
-        assert_eq!(p.trunk_root_samples, 2);
-        assert_eq!(p.cluster_branch_samples, 2);
-        assert_eq!(p.terminal_twig_samples, 3);
         assert_eq!(p.dendrite_budget, DENDRITE_MAX);
-        assert_eq!(p.terminal_twig_budget, 4);
+        assert_eq!(p.terminal_twig_budget, 2 * EDGE_SUBSEGMENTS_MAX);
+        assert_eq!(p.trunk_cluster_budget, EDGE_SUBSEGMENTS_MAX);
         assert_eq!(p.cap_slack, 4);
+        // New Prim-tree generator knobs.
+        assert_eq!(p.tree_score_curvature, 0.5);
+        assert_eq!(p.tree_score_density, 0.5);
+        assert_eq!(p.tree_score_degree, 0.7);
+        assert_eq!(p.relax_lerp, 0.25);
+        assert_eq!(p.relax_repel, 0.15);
+        assert_eq!(p.relax_window, 3);
+        assert_eq!(p.edge_subsegments, 3);
     }
 
     #[test]
@@ -1467,7 +1774,7 @@ mod tests {
         let regions = small_regions(pos.len());
         let source_types = build_source_types(1234, &regions);
         let params = MorphologyParams::locked_default();
-        let m = generate(&pos, &g, 16, 1234, &params, &source_types);
+        let m = generate(&pos, &g, 16, 1234, &params, &source_types, connectivity::ReachParams::LOCAL_ONLY);
         // Every neuron contributes at least one dendrite + (usually) axon segment.
         assert!(!m.segments.is_empty());
         assert_eq!(m.dropped, 0, "should not hit the cap at this size");
@@ -1479,10 +1786,16 @@ mod tests {
             m.stats.source_type_excitatory + m.stats.source_type_inhibitory,
             pos.len()
         );
-        assert_eq!(
-            m.stats.cluster_count_histogram.iter().sum::<u32>() as usize,
-            pos.len()
+        // Fork-degree histogram now counts internal fork nodes (plus index 0 for
+        // arbor-less neurons), so it no longer sums to neuron count — just assert
+        // it has signal and that some forks (≥2 children) exist.
+        assert!(m.stats.cluster_count_histogram.iter().sum::<u32>() > 0);
+        assert!(
+            m.stats.cluster_count_histogram[2..].iter().sum::<u32>() > 0,
+            "expected at least one ≥2-child fork node"
         );
+        assert!(m.stats.tree_depth_max >= 2, "expected shared-trunk depth ≥2");
+        assert!(m.stats.radius_bands.iter().sum::<u32>() > 0);
         assert!(m.stats.terminal_socket_distance_bands.iter().sum::<u32>() > 0);
         assert!(m.stats.socket_reuse_bands.iter().sum::<u32>() > 0);
         assert!(m.stats.cap_utilization > 0.0 && m.stats.cap_utilization <= 1.0);
@@ -1517,14 +1830,14 @@ mod tests {
         let regions = small_regions(pos.len());
         let source_types = build_source_types(seed, &regions);
         let params = MorphologyParams::locked_default();
-        let m = generate(&pos, &g, k, seed, &params, &source_types);
+        let m = generate(&pos, &g, k, seed, &params, &source_types, connectivity::ReachParams::LOCAL_ONLY);
         let probe = (0..pos.len() as u32)
             .find(|&nid| {
                 let src_type = source_types[nid as usize];
                 let src_cell = g.unpack(g.cell_of_index(nid));
                 let mut expected: Vec<u32> = (0..k as u32)
                     .map(|j| {
-                        connectivity::target_with_cell(nid, j, &g, k, seed, src_type, src_cell)
+                        connectivity::target_with_cell(nid, j, &g, k, seed, src_type, src_cell, connectivity::ReachParams::LOCAL_ONLY)
                     })
                     .filter(|&t| t != nid)
                     .collect();
@@ -1537,7 +1850,7 @@ mod tests {
         let probe_type = source_types[probe as usize];
         let probe_cell = g.unpack(g.cell_of_index(probe));
         let mut expected: Vec<u32> = (0..k as u32)
-            .map(|j| connectivity::target_with_cell(probe, j, &g, k, seed, probe_type, probe_cell))
+            .map(|j| connectivity::target_with_cell(probe, j, &g, k, seed, probe_type, probe_cell, connectivity::ReachParams::LOCAL_ONLY))
             .filter(|&t| t != probe)
             .collect();
         expected.sort_unstable();
@@ -1573,17 +1886,17 @@ mod tests {
         let regions = small_regions(pos.len());
         let source_types = build_source_types(seed, &regions);
         let params = MorphologyParams::locked_default();
-        let m = generate(&pos, &g, k, seed, &params, &source_types);
+        let m = generate(&pos, &g, k, seed, &params, &source_types, connectivity::ReachParams::LOCAL_ONLY);
         let probe = (0..pos.len() as u32)
             .find(|&nid| {
                 let src_type = source_types[nid as usize];
                 let src_cell = g.unpack(g.cell_of_index(nid));
-                connectivity::target_with_cell(nid, 0, &g, k, seed, src_type, src_cell) != nid
+                connectivity::target_with_cell(nid, 0, &g, k, seed, src_type, src_cell, connectivity::ReachParams::LOCAL_ONLY) != nid
             })
             .expect("need a single-target probe");
         let src_type = source_types[probe as usize];
         let src_cell = g.unpack(g.cell_of_index(probe));
-        let expected = connectivity::target_with_cell(probe, 0, &g, k, seed, src_type, src_cell);
+        let expected = connectivity::target_with_cell(probe, 0, &g, k, seed, src_type, src_cell, connectivity::ReachParams::LOCAL_ONLY);
         assert_ne!(expected, probe);
         let got: Vec<u32> = m
             .segments
@@ -1615,7 +1928,7 @@ mod tests {
         let regions = small_regions(pos.len());
         let source_types = build_source_types(seed, &regions);
         let params = MorphologyParams::locked_default();
-        let m = generate(&pos, &g, k, seed, &params, &source_types);
+        let m = generate(&pos, &g, k, seed, &params, &source_types, connectivity::ReachParams::LOCAL_ONLY);
 
         let mut exc_probe = None;
         let mut inh_probe = None;
@@ -1641,7 +1954,7 @@ mod tests {
             let src_type = source_types[probe as usize];
             let src_cell = g.unpack(g.cell_of_index(probe));
             let mut expected: Vec<u32> = (0..k as u32)
-                .map(|j| connectivity::target_with_cell(probe, j, &g, k, seed, src_type, src_cell))
+                .map(|j| connectivity::target_with_cell(probe, j, &g, k, seed, src_type, src_cell, connectivity::ReachParams::LOCAL_ONLY))
                 .filter(|&t| t != probe)
                 .collect();
             expected.sort_unstable();
@@ -1669,8 +1982,8 @@ mod tests {
         let regions = small_regions(pos.len());
         let source_types = build_source_types(99, &regions);
         let params = MorphologyParams::locked_default();
-        let a = generate(&pos, &g, 16, 99, &params, &source_types);
-        let b = generate(&pos, &g, 16, 99, &params, &source_types);
+        let a = generate(&pos, &g, 16, 99, &params, &source_types, connectivity::ReachParams::LOCAL_ONLY);
+        let b = generate(&pos, &g, 16, 99, &params, &source_types, connectivity::ReachParams::LOCAL_ONLY);
         assert_eq!(a.segments.len(), b.segments.len());
         assert_eq!(
             a.stats.cluster_count_histogram,
@@ -1695,7 +2008,7 @@ mod tests {
         let regions = small_regions(pos.len());
         let source_types = build_source_types(seed, &regions);
         let params = MorphologyParams::locked_default();
-        let m = generate(&pos, &g, 16, seed, &params, &source_types);
+        let m = generate(&pos, &g, 16, seed, &params, &source_types, connectivity::ReachParams::LOCAL_ONLY);
         assert_eq!(m.dropped, 0);
 
         let per_primary = DENDRITE_STEM_SAMPLES + 2 * DENDRITE_TWIG_SAMPLES;
@@ -1727,7 +2040,7 @@ mod tests {
         let regions = small_regions(pos.len());
         let source_types = build_source_types(seed, &regions);
         let params = MorphologyParams::locked_default();
-        let m = generate(&pos, &g, 16, seed, &params, &source_types);
+        let m = generate(&pos, &g, 16, seed, &params, &source_types, connectivity::ReachParams::LOCAL_ONLY);
 
         let mut branch_end_paths: std::collections::HashMap<(u32, u32, [u32; 3]), Vec<f32>> =
             std::collections::HashMap::new();
@@ -1768,8 +2081,16 @@ mod tests {
         let source_types = build_source_types(1, &regions);
         let source_types_b = build_source_types(2, &regions);
         let params = MorphologyParams::locked_default();
-        let a = generate(&pos, &g, 16, 1, &params, &source_types);
-        let b = generate(&pos, &g, 16, 2, &params, &source_types_b);
+        let a = generate(&pos, &g, 16, 1, &params, &source_types, connectivity::ReachParams::LOCAL_ONLY);
+        let b = generate(
+            &pos,
+            &g,
+            16,
+            2,
+            &params,
+            &source_types_b,
+            connectivity::ReachParams::LOCAL_ONLY,
+        );
         let differ = a
             .segments
             .iter()
@@ -1785,7 +2106,7 @@ mod tests {
         let regions = small_regions(pos.len());
         let source_types = build_source_types(7, &regions);
         let params = MorphologyParams::locked_default();
-        let m = generate(&pos, &g, 16, 7, &params, &source_types);
+        let m = generate(&pos, &g, 16, 7, &params, &source_types, connectivity::ReachParams::LOCAL_ONLY);
         // The first segment of each branch (touching the soma) has path_len 0.
         let zero_count = m.segments.iter().filter(|s| s.path_len == 0.0).count();
         assert!(
@@ -1802,14 +2123,14 @@ mod tests {
         let regions = small_regions(pos.len());
         let source_types = build_source_types(seed, &regions);
         let params = MorphologyParams::locked_default();
-        let _m = generate(&pos, &g, k, seed, &params, &source_types);
+        let _m = generate(&pos, &g, k, seed, &params, &source_types, connectivity::ReachParams::LOCAL_ONLY);
         let probe = (0..pos.len() as u32)
             .find(|&nid| {
                 let src_type = source_types[nid as usize];
                 let src_cell = g.unpack(g.cell_of_index(nid));
                 let mut expected: Vec<u32> = (0..k as u32)
                     .map(|j| {
-                        connectivity::target_with_cell(nid, j, &g, k, seed, src_type, src_cell)
+                        connectivity::target_with_cell(nid, j, &g, k, seed, src_type, src_cell, connectivity::ReachParams::LOCAL_ONLY)
                     })
                     .filter(|&t| t != nid)
                     .collect();
@@ -1821,7 +2142,7 @@ mod tests {
         let src_type = source_types[probe as usize];
         let src_cell = g.unpack(g.cell_of_index(probe));
         let target_id = (0..k as u32)
-            .map(|j| connectivity::target_with_cell(probe, j, &g, k, seed, src_type, src_cell))
+            .map(|j| connectivity::target_with_cell(probe, j, &g, k, seed, src_type, src_cell, connectivity::ReachParams::LOCAL_ONLY))
             .find(|&t| t != probe)
             .expect("need a non-self target");
         let plan = TargetPlan {
@@ -1859,6 +2180,9 @@ mod tests {
             cluster_count_histogram: [0, 1, 2, 3, 4, 5],
             terminal_socket_distance_bands: [1, 2, 3, 4],
             socket_reuse_bands: [5, 6, 7, 8],
+            tree_depth_max: 4,
+            tree_depth_mean: 2.5,
+            radius_bands: [9, 8, 7, 6],
             unique_targets_expected: 7,
             unique_targets_emitted: 7,
             unique_target_coverage: 1.0,
@@ -1880,6 +2204,8 @@ mod tests {
             "\"cluster_count_histogram\":[0,1,2,3,4,5]",
             "\"terminal_socket_distance_bands\":[1,2,3,4]",
             "\"socket_reuse_bands\":[5,6,7,8]",
+            "\"tree_depth_max\":4",
+            "\"radius_bands\":[9,8,7,6]",
             "\"all_k_coverage\":true",
             "\"setup_ms\":0.100",
             "\"total_ms\":0.600",

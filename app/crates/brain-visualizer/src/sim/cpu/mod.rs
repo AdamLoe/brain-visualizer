@@ -139,6 +139,9 @@ impl SimBackend for CpuBackend {
         let conn = ConnParams {
             k: self.config.k,
             seed_lo: self.config.seed_lo(),
+            // CPU backend has no dev-panel reach knob; stays local-only so the
+            // CPU and GPU networks match at the default (frac=0).
+            reach: crate::connectivity::ReachParams::LOCAL_ONLY,
         };
 
         let mut max_hw = self.max_abs_current_hw;

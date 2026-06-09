@@ -1433,6 +1433,27 @@ export class DevPanel {
       changeOnly: true,
     }, s.connectionCurveLift, "renderer-rebuild");
 
+    // Heavy-tailed synapse reach: most synapses stay local; a tunable fraction
+    // jump up to maxReach cells away. Changing either re-derives target ids and
+    // rebuilds the morphology, so apply on release (changeOnly).
+    this._sliderRow(root, {
+      key: "longRangeReachFrac",
+      label: "Long-range fraction",
+      tooltip: "Fraction of synapses routed to distant neurons (0 = all local). Raises long axons that span the cortex (rebuilds the network).",
+      min: 0, max: 1, step: 0.01,
+      decimals: 2,
+      changeOnly: true,
+    }, s.longRangeReachFrac, "brain-reset");
+
+    this._sliderRow(root, {
+      key: "maxReachCells",
+      label: "Max reach (cells)",
+      tooltip: "How far a long-range synapse can jump, in grid cells (rebuilds the network).",
+      min: 2, max: 16, step: 1,
+      decimals: 0,
+      changeOnly: true,
+    }, s.maxReachCells, "brain-reset");
+
     // v0.3.1: descriptor-driven morphology config (generator / render-quality /
     // lighting). Rendered from MORPH_DESCRIPTORS — no hand-written rows.
     this._buildMorphConfigRows(root);

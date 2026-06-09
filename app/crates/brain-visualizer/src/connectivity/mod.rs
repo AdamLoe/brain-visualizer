@@ -30,6 +30,38 @@ mod salt {
     pub const IN_CELL_PICK: u32 = 0x0000_0002;
     pub const WEIGHT: u32 = 0x0000_0003;
     pub const ANTERIOR_BIAS: u32 = 0x0000_0004;
+    /// Local-vs-long-range coin flip (heavy-tailed reach).
+    pub const REACH_COIN: u32 = 0x0000_0005;
+    /// Long-range cell offset draw (heavy-tailed reach).
+    pub const REACH_OFFSET: u32 = 0x0000_0006;
+}
+
+/// Denominator for the integer long-range fraction (`long_range_frac` is the
+/// numerator over this). A fixed constant so the local-vs-long-range coin flip
+/// is a pure integer compare — no float on the determinism path. Mirrored as
+/// `REACH_FRAC_DEN` in scatter.wgsl.
+pub const REACH_FRAC_DEN: u32 = 256;
+
+/// Heavy-tailed reach knobs threaded into [`target`]/[`target_with_cell`].
+/// All integer so the Rust↔WGSL `target` path stays bit-identical and float-free.
+///
+/// - `long_range_frac`: numerator over [`REACH_FRAC_DEN`] (so `0` = always local,
+///   `REACH_FRAC_DEN` = always long-range). A per-synapse hash coin `< frac`
+///   selects the long-range branch.
+/// - `max_reach`: integer cell radius for the long-range offset, `>= 1`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReachParams {
+    pub long_range_frac: u32,
+    pub max_reach: u32,
+}
+
+impl ReachParams {
+    /// Default-off: no long-range synapses. Output is bit-identical to the
+    /// pre-heavy-tail network (the long-range branch never executes).
+    pub const LOCAL_ONLY: ReachParams = ReachParams {
+        long_range_frac: 0,
+        max_reach: 1,
+    };
 }
 
 /// Half-width (in cells) of the local connectivity neighbourhood. A synapse
@@ -59,6 +91,13 @@ fn offset_component(h: u32) -> i32 {
     (h % AXIS_SPAN) as i32 - LOCAL_D
 }
 
+/// Decode a hashed value into a signed cell offset in `[-max_reach, +max_reach]`
+/// for the long-range branch. Mirrors `long_offset_component` in scatter.wgsl.
+#[inline]
+fn long_offset_component(bits: u32, max_reach: u32) -> i32 {
+    (bits % (2 * max_reach + 1)) as i32 - max_reach as i32
+}
+
 /// Returns the target neuron index for synapse `j` of neuron `i`.
 ///
 /// Pure function of `(i, j, grid, k, seed, source_type)` — no float math.
@@ -73,10 +112,18 @@ fn offset_component(h: u32) -> i32 {
 ///
 /// `k` participates only as part of the per-synapse key space; the caller
 /// iterates `j in 0..k`.
-pub fn target(i: u32, j: u32, grid: &SpatialGrid, k: usize, seed: u32, source_type: u8) -> u32 {
+pub fn target(
+    i: u32,
+    j: u32,
+    grid: &SpatialGrid,
+    k: usize,
+    seed: u32,
+    source_type: u8,
+    reach: ReachParams,
+) -> u32 {
     debug_assert!((j as usize) < k.max(1));
     let src_cell = grid.unpack(grid.cell_of_index(i));
-    target_with_cell(i, j, grid, k, seed, source_type, src_cell)
+    target_with_cell(i, j, grid, k, seed, source_type, src_cell, reach)
 }
 
 /// Identical to [`target`] but takes the source neuron's already-known integer
@@ -93,14 +140,15 @@ pub fn target_with_cell(
     seed: u32,
     source_type: u8,
     src_cell: [u32; 3],
+    reach: ReachParams,
 ) -> u32 {
     debug_assert!((j as usize) < k.max(1));
 
     let h = mix_key(seed, i, j, salt::CELL_OFFSET);
 
     // Three independent offset components from one 32-bit hash (10 bits each).
-    let dx = offset_component(h & 0x3ff);
-    let dy = offset_component((h >> 10) & 0x3ff);
+    let mut dx = offset_component(h & 0x3ff);
+    let mut dy = offset_component((h >> 10) & 0x3ff);
     let mut dz = offset_component((h >> 20) & 0x3ff);
 
     // Mild anterior (+Z) feed-forward bias for a fraction of excitatory
@@ -110,6 +158,20 @@ pub fn target_with_cell(
         if bias_draw < ANTERIOR_BIAS_NUM {
             dz = LOCAL_D; // push this synapse forward
         }
+    }
+
+    // Heavy-tailed reach: a deterministic per-synapse coin flips a tunable
+    // fraction of synapses long-range. When long, OVERWRITE the local
+    // (already biased) offset with a wider integer draw bounded by max_reach.
+    // The coin compare `coin < long_range_frac` is integer-only; at
+    // `long_range_frac == 0` it is always false, so this branch never runs and
+    // output is bit-identical to the local-only network (REACH_FRAC_DEN units).
+    let coin = mix_key(seed, i, j, salt::REACH_COIN) % REACH_FRAC_DEN;
+    if coin < reach.long_range_frac {
+        let h2 = mix_key(seed, i, j, salt::REACH_OFFSET);
+        dx = long_offset_component(h2 & 0x3ff, reach.max_reach);
+        dy = long_offset_component((h2 >> 10) & 0x3ff, reach.max_reach);
+        dz = long_offset_component((h2 >> 20) & 0x3ff, reach.max_reach);
     }
 
     let target_cell = clamp_cell(src_cell, [dx, dy, dz], grid.dim);
@@ -232,8 +294,8 @@ mod tests {
         let n = pos.len() as u32;
         for i in 0..n {
             for j in 0..8u32 {
-                let a = target(i, j, &g, 8, 1234, 0);
-                let b = target(i, j, &g, 8, 1234, 0);
+                let a = target(i, j, &g, 8, 1234, 0, ReachParams::LOCAL_ONLY);
+                let b = target(i, j, &g, 8, 1234, 0, ReachParams::LOCAL_ONLY);
                 assert_eq!(a, b, "target({i},{j}) not deterministic");
             }
         }
@@ -245,7 +307,7 @@ mod tests {
         let n = pos.len() as u32;
         for i in 0..n {
             for j in 0..16u32 {
-                let t = target(i, j, &g, 16, 7, (i % 2) as u8);
+                let t = target(i, j, &g, 16, 7, (i % 2) as u8, ReachParams::LOCAL_ONLY);
                 assert!(t < n, "target {t} out of range (n={n})");
             }
         }
@@ -257,7 +319,7 @@ mod tests {
         let mut differ = 0;
         for i in 0..pos.len() as u32 {
             for j in 0..8u32 {
-                if target(i, j, &g, 8, 1, 0) != target(i, j, &g, 8, 2, 0) {
+                if target(i, j, &g, 8, 1, 0, ReachParams::LOCAL_ONLY) != target(i, j, &g, 8, 2, 0, ReachParams::LOCAL_ONLY) {
                     differ += 1;
                 }
             }
@@ -299,7 +361,7 @@ mod tests {
                 continue; // already at front, bias clamps — skip for clarity
             }
             for j in 0..32u32 {
-                let t = target(i, j, &g, 32, 99, 0);
+                let t = target(i, j, &g, 32, 99, 0, ReachParams::LOCAL_ONLY);
                 let tc = g.unpack(g.cell_of_index(t));
                 if tc[2] > src[2] {
                     forward += 1;

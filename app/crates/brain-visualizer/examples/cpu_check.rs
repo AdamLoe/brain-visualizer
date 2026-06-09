@@ -161,11 +161,26 @@ fn determinism_parity(cfg: &SimConfig) {
     for j in 0..100u32 {
         // CPU hot path (precomputed cell): what scatter_one_source calls.
         cpu_targets.push(connectivity::target_with_cell(
-            0, j, grid, K, seed_lo, src_type, src_cell,
+            0,
+            j,
+            grid,
+            K,
+            seed_lo,
+            src_type,
+            src_cell,
+            connectivity::ReachParams::LOCAL_ONLY,
         ));
         // Canonical shared function the GPU scatter mirrors bit-for-bit
         // (tests/wgsl_target_determinism.rs proves WGSL == this).
-        shared_targets.push(connectivity::target(0, j, grid, K, seed_lo, src_type));
+        shared_targets.push(connectivity::target(
+            0,
+            j,
+            grid,
+            K,
+            seed_lo,
+            src_type,
+            connectivity::ReachParams::LOCAL_ONLY,
+        ));
     }
 
     let matches = cpu_targets == shared_targets;

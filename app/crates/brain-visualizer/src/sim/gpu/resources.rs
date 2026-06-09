@@ -172,7 +172,7 @@ pub use crate::sim::morphology::{MorphSegment, MorphSphereInstance};
 /// 128:   color_by:u32 + _pad_a:u32 + _pad_b:u32 + _pad_c:u32 (16 B)
 /// 144:   light_dir:[f32;3] + ambient:f32 (16 B)
 /// 160:   diffuse_intensity:f32 + rim_intensity:f32 + rim_power:f32 + _pad3:u32 (16 B)
-/// 176:   resting_brightness:f32 + active_boost:f32 + _pad4:u32 + _pad5:u32 (16 B)
+/// 176:   resting_brightness:f32 + active_boost:f32 + active_opacity:f32 + inactive_opacity_floor:f32 (16 B)
 /// Total = 192 B
 ///
 /// v0.3.1: `resting_brightness` and `active_boost` are owned by the morphology
@@ -216,8 +216,13 @@ pub struct MorphUniforms {
     // former hardcoded WGSL `const BOOST = 1.8`.
     pub resting_brightness: f32,
     pub active_boost: f32,
-    pub _pad4: u32,
-    pub _pad5: u32, // pad to 192 B (16-B aligned)
+    // ── True-opacity active layer (active-opacity-render-pass) ─────────────────
+    // Repurposed from the former trailing reserved pads (_pad4/_pad5 → f32). Read
+    // only by the NEW depth-tested fs_main_active / fs_sphere_active entry points;
+    // the additive resting passes share this buffer and ignore them. Size is
+    // unchanged (two u32→f32 in place), so the 192 B asserts stay green.
+    pub active_opacity: f32,          // active-opacity ceiling (was _pad4)
+    pub inactive_opacity_floor: f32,  // inactive-opacity floor (was _pad5; pads to 192 B)
 }
 
 /// Morphology: GPU buffers. Allocated ONCE per network (re)build in
@@ -1231,7 +1236,11 @@ impl GpuResources {
                 fixed_point_scale: config.fixed_point_scale as f32,
                 seed_lo,
                 grid_dim: grid.dim,
-                _pad: [0; 3],
+                // Default-off heavy-tailed reach (== LOCAL_ONLY); the GPU
+                // dev-panel knob re-writes this buffer via set_visual_settings.
+                long_range_frac: crate::connectivity::ReachParams::LOCAL_ONLY.long_range_frac,
+                max_reach: crate::connectivity::ReachParams::LOCAL_ONLY.max_reach,
+                _pad: [0; 1],
             }),
         );
 
@@ -1668,6 +1677,7 @@ impl GpuResources {
         neuron_regions: &[crate::manifold::RegionKind],
         config: &SimConfig,
         params: &crate::sim::morphology::MorphologyParams,
+        reach: crate::connectivity::ReachParams,
     ) {
         let source_types =
             crate::sim::morphology::build_source_types(config.seed_lo(), neuron_regions);
@@ -1678,6 +1688,7 @@ impl GpuResources {
             config.seed_lo(),
             params,
             &source_types,
+            reach,
         );
         let segment_count = morph.segments.len() as u32;
         let stats = morph.stats;
@@ -2332,7 +2343,11 @@ pub struct ConnectUniforms {
     pub fixed_point_scale: f32,
     pub seed_lo: u32,
     pub grid_dim: u32,
-    pub _pad: [u32; 3], // pad to 32 B
+    /// Heavy-tailed reach: numerator over `connectivity::REACH_FRAC_DEN` (0 = local only).
+    pub long_range_frac: u32,
+    /// Heavy-tailed reach: long-range cell radius (>= 1).
+    pub max_reach: u32,
+    pub _pad: [u32; 1], // pad to 32 B
 }
 
 #[cfg(test)]

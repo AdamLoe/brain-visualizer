@@ -24,7 +24,7 @@
 // Never persist runtime counters (there are none in this struct).
 
 // ─── canonical flat-array length ─────────────────────────────────────────────
-export const SETTINGS_LENGTH = 24;
+export const SETTINGS_LENGTH = 26;
 
 // ─── VisualizerSettings (runtime flat type) ───────────────────────────────────
 // One field per contract index.  Mode fields typed as number (integer) for now;
@@ -59,7 +59,9 @@ export interface VisualizerSettings {
   weightNormalization:      number;   // 21 0=none, 1=sqrt_k, 2=k
   inputMode:                number;   // 22 0=constant, 1=poisson, …
   adaptiveScalerEnabled:    number;   // 23 RESERVED/INERT — auto-scaling removed in 0.1.1; index kept to preserve the Rust↔TS contract
-
+  // ── index 24–25: heavy-tailed synapse reach ──
+  longRangeReachFrac:       number;   // 24 fraction of synapses routed long-range (0..1; 0 = local only)
+  maxReachCells:            number;   // 25 long-range max-reach radius in cells (integer)
 }
 
 // ─── DEFAULT_SETTINGS ─────────────────────────────────────────────────────────
@@ -89,6 +91,8 @@ export const DEFAULT_SETTINGS: VisualizerSettings = {
   weightNormalization:      1,  // sqrt_k default
   inputMode:                0,  // constant
   adaptiveScalerEnabled:    0,  // RESERVED/INERT — auto-scaling removed in 0.1.1; index 23 kept for the contract
+  longRangeReachFrac:       0.0,  // heavy-tailed reach off by default (bit-identical to pre-tail)
+  maxReachCells:            6,    // long-range max-reach radius in cells
 };
 
 // ─── SavedVisualizerSettings — persisted schema ───────────────────────────────
@@ -124,6 +128,8 @@ interface SavedDev {
   weightNormalization:      number;
   inputMode:                number;
   adaptiveScalerEnabled:    number;
+  longRangeReachFrac:       number;
+  maxReachCells:            number;
 }
 
 /** Versioned localStorage schema.  version !== 5 → ignored (no migration). */
@@ -168,6 +174,8 @@ function settingsToSaved(s: VisualizerSettings): SavedVisualizerSettings {
       weightNormalization:      s.weightNormalization,
       inputMode:                s.inputMode,
       adaptiveScalerEnabled:    s.adaptiveScalerEnabled,
+      longRangeReachFrac:       s.longRangeReachFrac,
+      maxReachCells:            s.maxReachCells,
     },
   };
 }
@@ -204,6 +212,8 @@ function mergeOver(base: VisualizerSettings, saved: SavedVisualizerSettings): Vi
     weightNormalization:      d.weightNormalization      ?? base.weightNormalization,
     inputMode:                d.inputMode                ?? base.inputMode,
     adaptiveScalerEnabled:    d.adaptiveScalerEnabled    ?? base.adaptiveScalerEnabled,
+    longRangeReachFrac:       d.longRangeReachFrac       ?? base.longRangeReachFrac,
+    maxReachCells:            d.maxReachCells            ?? base.maxReachCells,
   };
 }
 
@@ -276,8 +286,9 @@ function notify(): void {
 }
 
 // ─── Flat-array serialisation ────────────────────────────────────────────────
-// Produces the exact 24-element Float32Array the Rust VisualSettings::from_slice
-// expects.  Indices MUST stay in sync with the contract table.
+// Produces the exact SETTINGS_LENGTH-element Float32Array the Rust
+// VisualSettings::from_slice expects.  Indices MUST stay in sync with the
+// contract table.
 
 export function toFloat32Array(s: VisualizerSettings): Float32Array {
   const a = new Float32Array(SETTINGS_LENGTH);
@@ -305,6 +316,8 @@ export function toFloat32Array(s: VisualizerSettings): Float32Array {
   a[21] = s.weightNormalization;
   a[22] = s.inputMode;
   a[23] = s.adaptiveScalerEnabled;
+  a[24] = s.longRangeReachFrac;   // heavy-tailed reach: long-range fraction (0..1)
+  a[25] = s.maxReachCells;        // heavy-tailed reach: max-reach radius (cells)
   return a;
 }
 

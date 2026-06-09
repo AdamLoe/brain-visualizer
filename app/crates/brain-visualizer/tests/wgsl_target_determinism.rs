@@ -8,7 +8,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use brain_visualizer::connectivity::target;
+use brain_visualizer::connectivity::{target, ReachParams};
 use brain_visualizer::manifold::{Manifold, ManifoldParams};
 use brain_visualizer::sim::backend::neuron_type_byte;
 use brain_visualizer::sim::gpu::pipelines::{HASH_WGSL, SCATTER_WGSL};
@@ -17,6 +17,12 @@ use wgpu::util::DeviceExt;
 const N: usize = 4_000;
 const K: u32 = 32;
 const SEED: u32 = 0x5eed_5eed;
+
+// Heavy-tailed reach: exercise the long-range tail in the gate (not just the
+// local path) so the Rust↔WGSL contract is proven WITH the branch enabled.
+// long_range_frac = 64 / 256 = 25%; max_reach = 6 cells.
+const LONG_RANGE_FRAC: u32 = 64;
+const MAX_REACH: u32 = 6;
 
 // Harness kernel: call the production target_neuron for each (i, j) pair and
 // write the result. Reuses the real scatter.wgsl bindings + ConnectUniforms.
@@ -50,7 +56,9 @@ struct ConnectUniforms {
     fixed_point_scale: f32,
     seed_lo: u32,
     grid_dim: u32,
-    _pad: [u32; 3],
+    long_range_frac: u32,
+    max_reach: u32,
+    _pad: [u32; 1],
 }
 
 #[test]
@@ -109,7 +117,18 @@ async fn run() {
         let st = neuron_type_byte(i, SEED, m.neuron_regions[i as usize]);
         for j in 0..K {
             pairs.push(Pair { i, j });
-            rust_tgt.push(target(i, j, grid, K as usize, SEED, st));
+            rust_tgt.push(target(
+                i,
+                j,
+                grid,
+                K as usize,
+                SEED,
+                st,
+                ReachParams {
+                    long_range_frac: LONG_RANGE_FRAC,
+                    max_reach: MAX_REACH,
+                },
+            ));
         }
     }
     let count = pairs.len();
@@ -141,7 +160,9 @@ async fn run() {
         fixed_point_scale: 4096.0,
         seed_lo: SEED,
         grid_dim: grid.dim,
-        _pad: [0; 3],
+        long_range_frac: LONG_RANGE_FRAC,
+        max_reach: MAX_REACH,
+        _pad: [0; 1],
     };
     let cu_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("connect_uniform"),

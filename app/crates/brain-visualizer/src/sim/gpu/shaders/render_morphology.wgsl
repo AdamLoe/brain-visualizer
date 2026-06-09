@@ -54,7 +54,7 @@ struct MorphSegment {
 // 128:   color_by u32 | _pad_a u32 | _pad_b u32 | _pad_c u32
 // 144:   light_dir     vec3<f32>      (12 B) | ambient         f32 (4 B)
 // 160:   diffuse_intensity f32 | rim_intensity f32 | rim_power f32 | _pad3 u32
-// 176:   resting_brightness f32 | active_boost f32 | _pad4 u32 | _pad5 u32
+// 176:   resting_brightness f32 | active_boost f32 | active_opacity f32 | inactive_opacity_floor f32
 struct MorphUniforms {
     mvp: mat4x4<f32>,
     camera_right: vec3<f32>,
@@ -81,8 +81,9 @@ struct MorphUniforms {
     // v0.3.1 active/resting brightness split (morph-config owned).
     resting_brightness: f32, // resting structure brightness (config source)
     active_boost: f32,       // multiplier on the lit/spiking contribution (was const BOOST)
-    _pad4: u32,
-    _pad5: u32,
+    // True-opacity active layer (read only by fs_main_active / fs_sphere_active).
+    active_opacity: f32,          // active-opacity ceiling (was _pad4)
+    inactive_opacity_floor: f32,  // inactive-opacity floor (was _pad5)
 }
 
 // ── Tube pass bindings (group 0, bindings 0/1/2) ──────────────────────────────
@@ -468,6 +469,37 @@ fn fs_main(in: TubeVertOut) -> @location(0) vec4<f32> {
     return vec4<f32>(c, 1.0);
 }
 
+// True-opacity active tube pass (active-opacity-render-pass). Same color as the
+// additive fs_main, but returns a spike-driven straight alpha and is rendered
+// depth-tested + alpha-blended so a firing tube genuinely occludes the additive
+// background behind it. `activity` (= legacy + packet) is the SAME firing signal
+// fs_main uses — "active = firing", not click-selection.
+@fragment
+fn fs_main_active(in: TubeVertOut) -> @location(0) vec4<f32> {
+    let N = normalize(in.normal);
+    let V = normalize(in.view_dir);
+    let L = normalize(u.light_dir);
+
+    let packet = impulse_packet(in.path_pos, in.spike_age, in.glow, in.kind);
+    let legacy = in.glow * select(0.04, LEGACY_WHOLE_GLOW, in.kind == 1u);
+    let activity = legacy + packet;
+    let material = tube_material(in.base_color, N, in.world_pos, in.path_pos, in.neuron_id, in.kind);
+    let tint = mix(material, vec3<f32>(1.0), clamp(packet * 0.18, 0.0, 0.18));
+    let brightness = u.resting_brightness + activity * u.active_boost;
+
+    let lambert = max(dot(N, L), 0.0);
+    let nv = max(dot(N, V), 0.0);
+    let rim = pow(1.0 - nv, u.rim_power) * u.rim_intensity * (1.0 + clamp(activity, 0.0, 1.0) * 0.25);
+    let lighting = u.ambient + u.diffuse_intensity * lambert + rim;
+
+    let c = tint * brightness * lighting;
+    // Spike-recency drives opacity from the inactive floor up to the active ceiling.
+    let active_alpha = mix(u.inactive_opacity_floor, u.active_opacity, clamp(activity, 0.0, 1.0));
+    // Below epsilon, write neither color nor depth (in-shader inactive skip).
+    if active_alpha < 0.004 { discard; }
+    return vec4<f32>(c, active_alpha);
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // Stream 2 — Soma sphere pass (vs_sphere / fs_sphere)
 // ════════════════════════════════════════════════════════════════════════════
@@ -624,4 +656,30 @@ fn fs_sphere(in: SphereVertOut) -> @location(0) vec4<f32> {
     let c = (material * brightness + core) * lighting;
     if c.r + c.g + c.b < 0.002 { discard; }
     return vec4<f32>(c, 1.0);
+}
+
+// True-opacity active soma pass (active-opacity-render-pass). Same color as the
+// additive fs_sphere, but returns a firing-driven straight alpha and is rendered
+// depth-tested + alpha-blended so a firing soma genuinely occludes the additive
+// background behind it. The firing signal is the soma's glow/flash/core energy
+// (the same "active = firing" source the additive path lights from).
+@fragment
+fn fs_sphere_active(in: SphereVertOut) -> @location(0) vec4<f32> {
+    let N = normalize(in.normal);
+    let V = normalize(in.view_dir);
+    let L = normalize(su.light_dir);
+    let material = soma_material(in.base_color, N, in.world_pos, in.neuron_id, in.glow, in.flash);
+    let brightness = su.resting_brightness + (in.glow * 0.55 + in.flash * 1.15) * su.active_boost;
+
+    let lambert = max(dot(N, L), 0.0);
+    let nv = max(dot(N, V), 0.0);
+    let rim = pow(1.0 - nv, su.rim_power) * su.rim_intensity * (1.0 + in.flash * 0.45);
+    let lighting = su.ambient + su.diffuse_intensity * lambert + rim;
+    let core = mix(material, vec3<f32>(1.0), 0.70) * in.core * 0.85;
+
+    let c = (material * brightness + core) * lighting;
+    let activity = clamp(in.glow + in.flash + in.core, 0.0, 1.0);
+    let active_alpha = mix(su.inactive_opacity_floor, su.active_opacity, activity);
+    if active_alpha < 0.004 { discard; }
+    return vec4<f32>(c, active_alpha);
 }

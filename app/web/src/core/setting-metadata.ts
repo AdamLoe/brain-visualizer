@@ -54,6 +54,9 @@ export const SETTING_IMPACT: Record<keyof VisualizerSettings, SettingImpact> = {
   inputMode:                "live",
   // ── index 23 reserved/inert — auto-scaling removed in 0.1.1 (contract kept) ──
   adaptiveScalerEnabled:    "live",
+  // ── Heavy-tailed reach — brain-reset: changes target ids + generated geometry ──
+  longRangeReachFrac:       "brain-reset",
+  maxReachCells:            "brain-reset",
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

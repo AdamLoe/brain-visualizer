@@ -127,7 +127,7 @@ fn brain_outer_radius(dir: [f32; 3]) -> f32 {
     let dorsal_fullness = 0.04 * smoothstep(-0.10, 0.75, y);
     let ventral_flatten = 0.14 * smoothstep(0.10, 0.95, -y);
     let fissure =
-        0.22 * gaussian(x.abs(), 0.00, 0.18) * smoothstep(-0.05, 0.85, y) * gaussian(z, 0.10, 0.65);
+        0.32 * gaussian(x.abs(), 0.00, 0.15) * smoothstep(-0.05, 0.85, y) * gaussian(z, 0.10, 0.78);
     let lower_rear_taper = 0.06 * gaussian(z, 0.95, 0.20) * smoothstep(0.05, 0.95, -y);
 
     let scale = (1.0 + frontal + parietal + occipital + temporal + dorsal_fullness
@@ -288,7 +288,7 @@ mod tests {
             "brain should be longer anterior-posterior than wide"
         );
         assert!(
-            lateral_top > midline_top + 0.08,
+            lateral_top > midline_top + 0.12,
             "dorsal fissure should indent the top midline"
         );
     }
@@ -372,6 +372,7 @@ mod tests {
                     seed,
                     src_type,
                     src_cell,
+                    connectivity::ReachParams::LOCAL_ONLY,
                 );
                 let b = connectivity::target_with_cell(
                     i as u32,
@@ -381,6 +382,7 @@ mod tests {
                     seed,
                     src_type,
                     src_cell,
+                    connectivity::ReachParams::LOCAL_ONLY,
                 );
                 assert_eq!(a, b, "target drifted for neuron {i}, synapse {j}");
                 assert!(

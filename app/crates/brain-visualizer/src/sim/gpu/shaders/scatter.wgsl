@@ -29,6 +29,8 @@ struct ConnectUniforms {
     fixed_point_scale: f32,
     seed_lo: u32,    // BV22 seed; matches SimConfig.seed_lo()
     grid_dim: u32,   // cells per axis
+    long_range_frac: u32, // heavy-tailed reach: numerator over REACH_FRAC_DEN
+    max_reach: u32,       // heavy-tailed reach: long-range cell radius (>=1)
 }
 @group(1) @binding(0) var<uniform> cu: ConnectUniforms;
 
@@ -37,11 +39,14 @@ const LOCAL_D: i32 = 1;
 const AXIS_SPAN: u32 = 3u;            // 2*LOCAL_D + 1
 const ANTERIOR_BIAS_NUM: u32 = 5u;
 const ANTERIOR_BIAS_DEN: u32 = 16u;
+const REACH_FRAC_DEN: u32 = 256u;
 // Salt constants (connectivity::salt).
 const SALT_CELL_OFFSET: u32 = 0x00000001u;
 const SALT_IN_CELL_PICK: u32 = 0x00000002u;
 const SALT_WEIGHT: u32 = 0x00000003u;
 const SALT_ANTERIOR_BIAS: u32 = 0x00000004u;
+const SALT_REACH_COIN: u32 = 0x00000005u;
+const SALT_REACH_OFFSET: u32 = 0x00000006u;
 
 const TYPE_MASK: u32 = 0x7F000000u;
 
@@ -113,13 +118,18 @@ fn offset_component(h: u32) -> i32 {
     return i32(h % AXIS_SPAN) - LOCAL_D;
 }
 
+// Long-range offset in [-max_reach, +max_reach] (mirrors Rust long_offset_component).
+fn long_offset_component(bits: u32, max_reach: u32) -> i32 {
+    return i32(bits % (2u * max_reach + 1u)) - i32(max_reach);
+}
+
 // Production target rule: identical algorithm to Rust connectivity::target().
 fn target_neuron(src: u32, synapse_j: u32, src_type: u32) -> u32 {
     let src_cell = grid_unpack(cell_of_neuron[src]);
     let h = mix_key(cu.seed_lo, src, synapse_j, SALT_CELL_OFFSET);
 
-    let dx = offset_component(h & 0x3ffu);
-    let dy = offset_component((h >> 10u) & 0x3ffu);
+    var dx = offset_component(h & 0x3ffu);
+    var dy = offset_component((h >> 10u) & 0x3ffu);
     var dz = offset_component((h >> 20u) & 0x3ffu);
 
     // Mild anterior (+Z) feed-forward bias for a fraction of excitatory synapses.
@@ -128,6 +138,17 @@ fn target_neuron(src: u32, synapse_j: u32, src_type: u32) -> u32 {
         if bias_draw < ANTERIOR_BIAS_NUM {
             dz = LOCAL_D;
         }
+    }
+
+    // Heavy-tailed reach: integer coin flip; when long, OVERWRITE the local
+    // (biased) offset with a wider draw bounded by max_reach. At
+    // long_range_frac == 0 the compare is always false (bit-identical to local).
+    let coin = mix_key(cu.seed_lo, src, synapse_j, SALT_REACH_COIN) % REACH_FRAC_DEN;
+    if coin < cu.long_range_frac {
+        let h2 = mix_key(cu.seed_lo, src, synapse_j, SALT_REACH_OFFSET);
+        dx = long_offset_component(h2 & 0x3ffu, cu.max_reach);
+        dy = long_offset_component((h2 >> 10u) & 0x3ffu, cu.max_reach);
+        dz = long_offset_component((h2 >> 20u) & 0x3ffu, cu.max_reach);
     }
 
     let target_cell = clamp_cell(src_cell, vec3<i32>(dx, dy, dz));

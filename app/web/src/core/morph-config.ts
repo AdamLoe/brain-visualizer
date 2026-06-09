@@ -33,19 +33,18 @@ export interface MorphGeneratorConfig {
   socketRadiusLo:              number;
   socketRadiusHi:              number;
   socketTipPreference:         number;
-  clusterMin:                  number;
-  clusterMax:                  number;
-  trunkRootSamples:            number;
-  clusterBranchSamples:        number;
-  terminalTwigSamples:         number;
   trunkLengthFraction:         number;
-  clusterSplitFraction:        number;
-  rootRadiusFraction:          number;
-  clusterRadiusFraction:       number;
   twigRadiusFraction:          number;
   taperCurve:                  number;
   dendriteMidRadiusFraction:   number;
   dendriteTipRadiusFraction:   number;
+  treeScoreCurvature:          number;
+  treeScoreDensity:            number;
+  treeScoreDegree:             number;
+  relaxLerp:                   number;
+  relaxRepel:                  number;
+  relaxWindow:                 number;
+  edgeSubsegments:             number;
 }
 
 export interface MorphRenderQualityConfig {
@@ -89,19 +88,18 @@ export const DEFAULT_MORPH_CONFIG: MorphologyConfig = {
     socketRadiusLo:            0.008,
     socketRadiusHi:            0.018,
     socketTipPreference:       0.78,
-    clusterMin:                2,
-    clusterMax:                5,
-    trunkRootSamples:          2,
-    clusterBranchSamples:      2,
-    terminalTwigSamples:       3,
     trunkLengthFraction:       0.32,
-    clusterSplitFraction:      0.62,
-    rootRadiusFraction:        0.62,
-    clusterRadiusFraction:     0.44,
     twigRadiusFraction:        0.16,
     taperCurve:                2.1,
     dendriteMidRadiusFraction: 0.6,
     dendriteTipRadiusFraction: 0.3,
+    treeScoreCurvature:        0.5,
+    treeScoreDensity:          0.5,
+    treeScoreDegree:           0.7,
+    relaxLerp:                 0.25,
+    relaxRepel:                0.15,
+    relaxWindow:               3,
+    edgeSubsegments:           3,
   },
   renderQuality: {
     tubeSides:    6,
@@ -162,19 +160,18 @@ export const MORPH_DESCRIPTORS: readonly MorphDescriptor[] = [
   { jsonPath: "generator.socketRadiusLo",            group: "generator", label: "Socket radius lo",         type: "number", min: 0.004, max: 0.016, step: 0.0005, default: 0.008, impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Lower bound of socket placement radius." },
   { jsonPath: "generator.socketRadiusHi",            group: "generator", label: "Socket radius hi",         type: "number", min: 0.010, max: 0.030, step: 0.0005, default: 0.018, impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Upper bound of socket placement radius." },
   { jsonPath: "generator.socketTipPreference",       group: "generator", label: "Socket tip preference",    type: "number", min: 0.50,  max: 1.0,   step: 0.01,   default: 0.78,  impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Bias of sockets toward branch tips." },
-  { jsonPath: "generator.clusterMin",                group: "generator", label: "Cluster min",              type: "int",    min: 1,     max: 4,     step: 1,      default: 2,     impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Minimum axon cluster fan-out." },
-  { jsonPath: "generator.clusterMax",                group: "generator", label: "Cluster max",              type: "int",    min: 2,     max: 8,     step: 1,      default: 5,     impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Maximum axon cluster fan-out." },
-  { jsonPath: "generator.trunkRootSamples",          group: "generator", label: "Trunk root samples",       type: "int",    min: 1,     max: 4,     step: 1,      default: 2,     impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Bezier sample density for trunk roots." },
-  { jsonPath: "generator.clusterBranchSamples",      group: "generator", label: "Cluster branch samples",   type: "int",    min: 1,     max: 4,     step: 1,      default: 2,     impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Bezier sample density for cluster branches." },
-  { jsonPath: "generator.terminalTwigSamples",       group: "generator", label: "Terminal twig samples",    type: "int",    min: 1,     max: 4,     step: 1,      default: 3,     impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Bezier sample density for terminal twigs." },
-  { jsonPath: "generator.trunkLengthFraction",       group: "generator", label: "Trunk length fraction",    type: "number", min: 0.15,  max: 0.50,  step: 0.01,   default: 0.32,  impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Where the trunk ends relative to reach." },
-  { jsonPath: "generator.clusterSplitFraction",      group: "generator", label: "Cluster split fraction",   type: "number", min: 0.40,  max: 0.85,  step: 0.01,   default: 0.62,  impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Where branches split into clusters." },
-  { jsonPath: "generator.rootRadiusFraction",        group: "generator", label: "Root radius fraction",     type: "number", min: 0.40,  max: 0.90,  step: 0.01,   default: 0.62,  impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Root radius as a fraction of base radius." },
-  { jsonPath: "generator.clusterRadiusFraction",     group: "generator", label: "Cluster radius fraction",  type: "number", min: 0.20,  max: 0.70,  step: 0.01,   default: 0.44,  impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Cluster radius as a fraction of root radius." },
-  { jsonPath: "generator.twigRadiusFraction",        group: "generator", label: "Twig radius fraction",     type: "number", min: 0.08,  max: 0.35,  step: 0.01,   default: 0.16,  impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Twig radius as a fraction of cluster radius." },
+  { jsonPath: "generator.trunkLengthFraction",       group: "generator", label: "Trunk length fraction",    type: "number", min: 0.15,  max: 0.50,  step: 0.01,   default: 0.32,  impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Where the shared trunk node ends relative to mean target distance." },
+  { jsonPath: "generator.twigRadiusFraction",        group: "generator", label: "Twig radius fraction",     type: "number", min: 0.08,  max: 0.35,  step: 0.01,   default: 0.16,  impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Axon tip (twig) radius floor as a fraction of trunk radius." },
   { jsonPath: "generator.taperCurve",                group: "generator", label: "Taper curve",              type: "number", min: 1.0,   max: 3.5,   step: 0.1,    default: 2.1,   impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Taper exponent along branches." },
   { jsonPath: "generator.dendriteMidRadiusFraction", group: "generator", label: "Dendrite mid radius frac", type: "number", min: 0.30,  max: 0.90,  step: 0.01,   default: 0.6,   impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Dendrite mid-section radius fraction." },
   { jsonPath: "generator.dendriteTipRadiusFraction", group: "generator", label: "Dendrite tip radius frac", type: "number", min: 0.10,  max: 0.60,  step: 0.01,   default: 0.3,   impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Dendrite tip radius fraction." },
+  { jsonPath: "generator.treeScoreCurvature",        group: "generator", label: "Tree curvature weight",   type: "number", min: 0.0,   max: 2.0,   step: 0.05,   default: 0.5,   impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Axon-tree attach score: penalty for sharp bends (smoother forks)." },
+  { jsonPath: "generator.treeScoreDensity",          group: "generator", label: "Tree density weight",     type: "number", min: 0.0,   max: 2.0,   step: 0.05,   default: 0.5,   impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Axon-tree attach score: penalty for crowding near existing branches." },
+  { jsonPath: "generator.treeScoreDegree",           group: "generator", label: "Tree degree weight",      type: "number", min: 0.0,   max: 2.0,   step: 0.05,   default: 0.7,   impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Axon-tree attach score: soft 2-3-child fork tendency (no hard cap)." },
+  { jsonPath: "generator.relaxLerp",                 group: "generator", label: "Relax pull strength",     type: "number", min: 0.0,   max: 0.8,   step: 0.01,   default: 0.25,  impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Relaxation pull of internal nodes toward parent+children mean." },
+  { jsonPath: "generator.relaxRepel",                group: "generator", label: "Relax repel strength",    type: "number", min: 0.0,   max: 0.8,   step: 0.01,   default: 0.15,  impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Relaxation repulsion of nearby branches (spreads forks)." },
+  { jsonPath: "generator.relaxWindow",               group: "generator", label: "Relax window depth",      type: "int",    min: 0,     max: 6,     step: 1,      default: 3,     impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Ancestor-window depth relaxed per attach." },
+  { jsonPath: "generator.edgeSubsegments",           group: "generator", label: "Edge subsegments",        type: "int",    min: 1,     max: 4,     step: 1,      default: 3,     impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Bezier samples per axon-tree edge (curvature smoothness)." },
 
   // ── renderQuality (pipeline-rebuild; red renderer-rebuild dot) ─────────────
   { jsonPath: "renderQuality.tubeSides",    group: "renderQuality", label: "Tube sides",    type: "int", min: 3, max: 12, step: 1, default: 6, impact: "renderer-rebuild", applyKind: "pipeline-rebuild", tooltip: "Tube tessellation quality (sides per tube cross-section)." },
