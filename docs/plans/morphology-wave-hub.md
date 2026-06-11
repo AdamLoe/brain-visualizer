@@ -1,8 +1,8 @@
 ---
-status:        active
+status:        shipped
 owner:         orchestrator
 last_updated:  2026-06-11
-okay_to_delete: false
+okay_to_delete: true
 long_lived:    false
 owning_docs: []
 ---

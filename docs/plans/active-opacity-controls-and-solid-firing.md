@@ -1,8 +1,8 @@
 ---
-status:        active
+status:        shipped
 owner:         unassigned
-last_updated:  2026-06-09
-okay_to_delete: false
+last_updated:  2026-06-11
+okay_to_delete: true
 long_lived:    false
 owning_docs:
   - architecture/dev-panel.md
@@ -86,6 +86,15 @@ Observed gates:
 
 Remaining before ship: final visual/browser artifact review with the rest of the
 morphology refresh.
+
+## Closure — 2026-06-11
+
+Shipped as the controls/persistence foundation. Its original segment-solid alpha
+model was superseded by
+[`active-opacity-continuous-model.md`](active-opacity-continuous-model.md), which
+is now shipped and documents the current continuous-opacity behavior. The
+still-true facts from this plan are migrated into the dev-panel and rendering
+docs.
 
 ## Exit gate
 

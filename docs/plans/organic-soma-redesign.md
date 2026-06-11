@@ -1,8 +1,8 @@
 ---
-status:        active
+status:        shipped
 owner:         unassigned
-last_updated:  2026-06-09
-okay_to_delete: false
+last_updated:  2026-06-11
+okay_to_delete: true
 long_lived:    false
 owning_docs:
   - architecture/manifold.md
@@ -99,6 +99,13 @@ top-few-root deformation and incoming dendrite sockets remain deferred.
   (soma sub-pass) + `decisions/rendering.md` updated.
 - The soma deformation uses the same dominant root descriptor as the axon trunk;
   no duplicate root-direction convention exists in shader code.
+
+## Closure — 2026-06-11
+
+Shipped. The integrated gates confirm the 48 B `MorphSphereInstance` layout,
+the soma sphere render path, and the process-root deformation contract. The
+current docs record the soma buffer/pass design and the dominant-root
+deformation trade-off.
 
 ## Open questions
 

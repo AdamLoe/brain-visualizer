@@ -1,8 +1,8 @@
 ---
-status:        active
+status:        shipped
 owner:         orchestrator
-last_updated:  2026-06-09
-okay_to_delete: false
+last_updated:  2026-06-11
+okay_to_delete: true
 long_lived:    false
 owning_docs:
   - architecture/connectivity.md
@@ -132,8 +132,11 @@ state.
 
 ## Migration Notes
 
-Fill at ship time. Route current-state facts into architecture docs and durable
-trade-offs into decisions docs listed in frontmatter.
+Shipped on 2026-06-11. Current-state facts from the opacity, root/socket, axon,
+soma, incoming-dendrite, dendrite-geometry, and dev-panel/settings streams are
+migrated into the architecture docs and durable trade-offs into the decisions
+docs listed in frontmatter. Final verification passed through native artifacts,
+Rust/web gates, and server-backed Playwright.
 
 ## See also
 

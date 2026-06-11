@@ -1,8 +1,8 @@
 ---
-status:        active
+status:        shipped
 owner:         orchestrator
-last_updated:  2026-06-09
-okay_to_delete: false
+last_updated:  2026-06-11
+okay_to_delete: true
 long_lived:    false
 owning_docs:
   - architecture/manifold.md
@@ -102,6 +102,16 @@ config structs, TypeScript config/defaults/descriptors, and architecture docs.
 Live dendrite placement controls remain `socketCount*`, `socketRadius*`, and
 `socketTipPreference`; old saved morphology payloads that still include the
 removed keys are accepted and normalized away rather than breaking reload.
+
+## Closure — 2026-06-11
+
+Shipped. `morph_view` regenerated the default and close-up morphology artifacts
+with 174,633 segments at N=1200/K=16, 0 dropped, and visible incoming-dendrite
+branching. `render_check` passed the production render smoke and active/recent
+compaction checks. Final gates passed: `cargo test -p brain-visualizer`,
+`npm run typecheck`, `npm test`, and server-backed Playwright
+`npm run test:e2e:server` (4 passed, 1 expected CPU-backend skip; WebGPU adapter
+device assertions gated by the WSL2 environment).
 
 ## Approach
 

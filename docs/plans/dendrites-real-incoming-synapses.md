@@ -1,8 +1,8 @@
 ---
-status:        active
+status:        shipped
 owner:         Hilbert
-last_updated:  2026-06-09
-okay_to_delete: false
+last_updated:  2026-06-11
+okay_to_delete: true
 long_lived:    false
 owning_docs:
   - architecture/connectivity.md
@@ -154,6 +154,13 @@ Deferrals:
   do not presynaptically pulse.
 - No high-scale incoming cap/sampling policy was added; if future density is too
   high, lower K or design an explicit cap before hiding groups.
+
+## Closure — 2026-06-11
+
+Shipped. The reverse-synapse and target-owned incoming-dendrite model is live,
+documented, and covered by morphology/unit tests plus the final Rust package
+gate. The geometry concerns from this plan were superseded and closed by
+[`dendrite-geometry-fix.md`](dendrite-geometry-fix.md).
 
 ## Open questions
 

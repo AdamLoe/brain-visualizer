@@ -1,8 +1,8 @@
 ---
-status:        active
+status:        shipped
 owner:         unassigned
-last_updated:  2026-06-09
-okay_to_delete: false
+last_updated:  2026-06-11
+okay_to_delete: true
 long_lived:    false
 owning_docs:
   - architecture/manifold.md
@@ -112,6 +112,14 @@ Implemented in `app/crates/brain-visualizer/src/sim/morphology.rs`:
   out if a buffer/instance layout changes.
 - A combined segment-budget acceptance gate exists before any plan that adds
   subsegments can ship.
+
+## Closure — 2026-06-11
+
+Shipped. The downstream axon, soma, and incoming-dendrite plans have all consumed
+the process-root/socket contract and are closed. The contract is documented in
+`architecture/manifold.md`, `architecture/gpu-rendering.md`, and
+`decisions/manifold.md`; final Rust, web, native render, and Playwright gates
+passed for the integrated state.
 
 ## See also
 

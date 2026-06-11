@@ -1,8 +1,8 @@
 ---
-status:        active
+status:        shipped
 owner:         orchestrator
-last_updated:  2026-06-09
-okay_to_delete: false
+last_updated:  2026-06-11
+okay_to_delete: true
 long_lived:    false
 owning_docs:
   - architecture/dev-panel.md
@@ -150,6 +150,15 @@ passed and `npm test` passed.
 `surface`/`surfaceOpacity` and legacy neuron-body knobs remain for now. The
 legacy dendrite reach/primary-count controls are removed from the morphology
 descriptor/config surface, and persisted old fields are dropped on load/save.
+
+## Closure — 2026-06-11
+
+Shipped. The web gates passed (`npm run typecheck`, `npm test` with 56 tests),
+and server-backed Playwright passed the browser smoke/control/resize checks with
+4 passed and 1 expected CPU-backend skip. The reload/backend acceptance is
+covered by the persisted-config boot path plus the e2e boot/control checks; real
+WebGPU device assertions remain gated by the WSL2 environment, as documented in
+the test output.
 
 ## Approach
 

@@ -1,8 +1,8 @@
 ---
-status:        active
+status:        shipped
 owner:         orchestrator
-last_updated:  2026-06-09
-okay_to_delete: false
+last_updated:  2026-06-11
+okay_to_delete: true
 long_lived:    false
 owning_docs:
   - architecture/gpu-rendering.md
@@ -104,6 +104,17 @@ so the packet travels; `active_opacity = 0` maps to a soft low-emphasis ceiling
 of `0.10` and still encodes the active redraw; somas share that low-end ceiling.
 Reported gates: `cargo run -p brain-visualizer --example render_check` passed
 and `cargo test -p brain-visualizer` passed.
+
+## Closure — 2026-06-11
+
+Shipped. `render_check` regenerated the active-opacity low/small/high frames and
+passed its continuous-opacity assertion: low-to-small and small-to-high frames
+differed measurably, `active_opacity = 0` stayed low-emphasis, and the active
+redraw remained encoded. `morph_view` regenerated the morphology artifacts for
+visual inspection. Final gates passed: `cargo test -p brain-visualizer`,
+`npm run typecheck`, `npm test`, and server-backed Playwright
+`npm run test:e2e:server` (4 passed, 1 expected CPU-backend skip; WebGPU adapter
+device assertions gated by the WSL2 environment).
 
 ## Approach
 

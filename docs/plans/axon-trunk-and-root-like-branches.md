@@ -1,8 +1,8 @@
 ---
-status:        active
+status:        shipped
 owner:         unassigned
-last_updated:  2026-06-09
-okay_to_delete: false
+last_updated:  2026-06-11
+okay_to_delete: true
 long_lived:    false
 owning_docs:
   - architecture/manifold.md
@@ -116,6 +116,13 @@ seed-reproducible and disjoint from connectivity.
   knob. This avoids widening the TS/Rust config and localStorage surface before
   the look is proven. Revisit after screenshot review if the trunk length needs
   interactive tuning.
+
+## Closure — 2026-06-11
+
+Shipped. `morph_view` regenerated the default and close-up artifacts with no
+dropped segments, and visual inspection shows root-like curved branches with
+readable trunk/twig hierarchy. Durable facts are migrated into the manifold and
+rendering docs; final integrated gates passed.
 
 ## Open questions (resolved by the shared contract)
 
