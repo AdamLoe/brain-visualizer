@@ -6,7 +6,7 @@
   thing you watch and lightly perturb, not an instrument you operate.
 - **Why.** Fitting the "silly, pretty toy" framing keeps the experience inviting
   without competing with benchmark or scientific visualization tools. The visual
-  and auditory richness carry the page on their own.
+  richness carries the page on its own.
 - **Applies to.** [`../architecture/web-frontend.md`](../architecture/web-frontend.md).
 
 ## Input scheme: hover=stimulate, left-drag=orbit, right-drag=pan, scroll=zoom; click does nothing
@@ -42,20 +42,6 @@
   sim-side drive in `crates/brain-visualizer/src/sim/gpu/shaders/integrate.wgsl`.
 - **Alternatives considered.** Scripted seed spike at t=0, timed fade-in — both
   rejected: brittle, disconnected from real dynamics.
-
-## Sonification opt-in, muted by default
-
-- **Decision.** The `SonificationEngine` is constructed at boot but the
-  `AudioContext` is not created until the user clicks the sound toggle.
-  Sound is disabled entirely on mobile.
-- **Why.** Autoplay audio is blocked by browsers and is annoying when unexpected.
-  Muted-by-default keeps the page polite; the toggle is visible when the visitor
-  wants it.
-- **Applies to.** [`../architecture/web-frontend.md`](../architecture/web-frontend.md).
-- **Code anchors.** `web/src/audio/sonification.ts → SonificationEngine.enable`;
-  `web/src/main.ts` sound-toggle click handler; `web/index.html` `#sound-toggle`.
-- **Tradeoffs.** `ScriptProcessorNode` (noise layer) is deprecated; an
-  `AudioWorklet` is the modern replacement but is deferred as an enhancement.
 
 ## Discrete speed presets (not a continuous slider)
 
@@ -122,6 +108,6 @@
 - [`../architecture/dev-panel.md`](../architecture/dev-panel.md) — settings
   panel, speed/brain-state knobs
 - [`../architecture/profiling.md`](../architecture/profiling.md) — profiler
-  snapshot that feeds sonification
+  snapshot that feeds HUD and monitor updates
 - [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md)
 - [`../agent-context/maintaining-docs.md`](../agent-context/maintaining-docs.md)

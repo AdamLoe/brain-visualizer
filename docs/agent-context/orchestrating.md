@@ -17,6 +17,6 @@ manual is **generic** and lives in the global kit.
 
 ## See also
 
-- [`~/.claude/agent-docs/v1/rules/orchestrating.md`](~/.claude/agent-docs/v1/rules/orchestrating.md) — the generic operating manual.
+- [`~/agent-docs/v1/rules/orchestrating.md`](~/agent-docs/v1/rules/orchestrating.md) — the generic operating manual.
 - [`../plans/index.md`](../plans/index.md) — where multi-step work is staged.
 - [`index.md`](index.md) — agent-context router.

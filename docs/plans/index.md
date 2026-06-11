@@ -6,9 +6,9 @@ updated and the plan is deleted.
 
 The **lifecycle rules, status-frontmatter spec, and ship-time migration
 workflow are generic** (agent-docs v1) and live in the kit:
-[`~/.claude/agent-docs/v1/plan-lifecycle.md`](~/.claude/agent-docs/v1/plan-lifecycle.md).
+[`~/agent-docs/v1/plan-lifecycle.md`](~/agent-docs/v1/plan-lifecycle.md).
 New plans start from the kit skeleton:
-[`~/.claude/agent-docs/v1/plan-template.md`](~/.claude/agent-docs/v1/plan-template.md).
+[`~/agent-docs/v1/plan-template.md`](~/agent-docs/v1/plan-template.md).
 
 ## What lives here
 
@@ -33,8 +33,8 @@ active/recent coordination docs that eventually reach
 
 | Need | Read |
 |---|---|
-| Create a new plan | [`~/.claude/agent-docs/v1/plan-template.md`](~/.claude/agent-docs/v1/plan-template.md) |
-| Plan lifecycle / status-metadata rules | [`~/.claude/agent-docs/v1/plan-lifecycle.md`](~/.claude/agent-docs/v1/plan-lifecycle.md) |
+| Create a new plan | [`~/agent-docs/v1/plan-template.md`](~/agent-docs/v1/plan-template.md) |
+| Plan lifecycle / status-metadata rules | [`~/agent-docs/v1/plan-lifecycle.md`](~/agent-docs/v1/plan-lifecycle.md) |
 | Deferred / rejected roadmap items | [`future_roadmap.md`](future_roadmap.md) |
 | The doc-update workflow a shipped plan triggers | [`../agent-context/maintaining-docs.md`](../agent-context/maintaining-docs.md) |
 

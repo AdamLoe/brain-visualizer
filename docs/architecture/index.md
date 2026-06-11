@@ -25,7 +25,7 @@ changed over time. Load only the doc that matches your task; follow its
 
 | Need | Read |
 |---|---|
-| The TS app shell: `main.ts` orchestrator, wasm bridge, camera, controls, renderer, sonification, public HUD | [`web-frontend.md`](web-frontend.md) |
+| The TS app shell: `main.ts` orchestrator, wasm bridge, camera, controls, renderer, public HUD | [`web-frontend.md`](web-frontend.md) |
 | The hidden dev panel: triggers, tabs, impact dots, settings persistence contract | [`dev-panel.md`](dev-panel.md) |
 | Perf instrumentation: profiler + HUD, the GPU metrics reduction pass, async non-blocking readback | [`profiling.md`](profiling.md) |
 
@@ -33,7 +33,7 @@ changed over time. Load only the doc that matches your task; follow its
 
 | Need | Read |
 |---|---|
-| Adaptive scaler, difficulty tiers, adapter-limit caps, the 1M/10M policy | [`scaling.md`](scaling.md) |
+| Fixed-N scaling, difficulty tiers, the 20k product cap, adapter-limit caps | [`scaling.md`](scaling.md) |
 | The CPU/WebGL2 backend (parked for V2): active-list rayon sim, coordinator worker, SharedArrayBuffer | [`cpu-backend.md`](cpu-backend.md) |
 | Build pipeline (wasm-pack/vite), `cpu-threads` feature, COOP/COEP, examples, test gates | [`build-and-deploy.md`](build-and-deploy.md) |
 

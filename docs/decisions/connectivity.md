@@ -17,6 +17,27 @@
   be regenerated and is accumulated lazily only for edges materialised in the
   zoomed-in view. This never touches the sim hot path.
 
+## Reverse incoming view is morphology-only build data
+
+- **Decision.** The simulation keeps procedural source-out connectivity, but the
+  morphology builder materializes a deterministic reverse incoming view at
+  network build time by evaluating production `target_with_cell` for every
+  `(source_id, synapse_index)`. Every non-self raw incoming record is stored;
+  visible socket groups aggregate duplicate `(source,target,socket)` records by
+  summed absolute weight.
+- **Why.** Real incoming dendrites need "who connects to this soma", which the
+  hot sim path deliberately never stores. Building the reverse view once for
+  morphology preserves the no-edge-list sim contract while giving the renderer
+  honest dendrite sockets.
+- **Applies to.** [`../architecture/connectivity.md`](../architecture/connectivity.md),
+  [`../architecture/manifold.md`](../architecture/manifold.md).
+- **Tradeoffs.** This adds host-side init memory/time proportional to N*K. At
+  the default N=1200/K=16 review scale, v1 draws all unique incoming socket
+  groups with no hidden visual drops. If density becomes too high, lower K or
+  introduce an explicit cap policy before sampling.
+- **Code anchors.** `crates/brain-visualizer/src/sim/morphology.rs →
+  build_incoming_view, IncomingSynapse, IncomingRange, IncomingSocketGroup`.
+
 ## Per-tier out-degree K
 
 - **Decision.** K is a per-tier knob, not a single global constant. Low tier:
@@ -55,6 +76,24 @@
 - **Code anchors.** `crates/brain-visualizer/src/connectivity/mod.rs → ReachParams`,
   `long_offset_component`, `REACH_FRAC_DEN`;
   `crates/brain-visualizer/src/sim/gpu/shaders/scatter.wgsl → target_neuron`.
+
+## No per-synapse long-range flag — morphology classifies by world distance
+
+- **Decision.** Connectivity bakes the heavy-tail reach coin into the resulting
+  target id and exposes no per-synapse long-range flag; `target` /
+  `target_with_cell` return the target id only. Morphology's curved long-range
+  waypoint routing therefore classifies "visually long" by world distance, not by
+  a connectivity flag.
+- **Why.** Adding a flag would mean threading an extra return value (and an extra
+  CPU↔GPU contract surface) purely for a visual concern. World-distance
+  classification keeps the visual routing decoupled from the wiring rule, which
+  stays target/weight-unchanged; waypoints never affect synaptic semantics.
+- **Applies to.** [`../architecture/connectivity.md`](../architecture/connectivity.md),
+  [`../architecture/manifold.md`](../architecture/manifold.md).
+- **Code anchors.** `crates/brain-visualizer/src/connectivity/mod.rs → target,
+  target_with_cell`; `crates/brain-visualizer/src/sim/morphology.rs →
+  long_range_waypoints`. (Full routing geometry in
+  [`../architecture/manifold.md`](../architecture/manifold.md).)
 
 ## 32-bit hash — not u64 PCG
 

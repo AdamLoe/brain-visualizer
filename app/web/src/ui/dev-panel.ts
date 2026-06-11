@@ -12,13 +12,14 @@ import "./dev-panel.css";
 // pointer-events only on the panel itself (canvas interaction unaffected when
 // closed). main.ts listens via onVisibilityChange to shrink the canvas.
 //
-// Tabs: Monitor · Dynamics · Network · Rendering · Debug View · Storage
+// Tabs: Monitor · Dynamics · Network · Appearance · Morphology · Debug · Storage
 //   - Monitor has live metrics content (Phase A) + System section (UX overhaul).
-//   - Rendering has live visual-knob controls (Phase B).
+//   - Appearance has live visual-knob controls (Phase B).
+//   - Morphology has generator, render-quality, and lighting controls.
 //   - Storage has reset + hidden review presets + localStorage readout.
 //   - Dynamics has live E/I, branching-ratio, cascade readouts (Phase C).
 //   - Network has Simulation controls (UX overhaul — brain state, speed, scale).
-//   - Debug View shows current visual mode readout.
+//   - Debug shows current visual mode readout.
 //
 // Monitor tab — Silent/Tuned/Overactive classifier thresholds.
 // NOTE: pctFired* metrics are FRACTIONS in [0,1] (count/N), not percentages.
@@ -40,7 +41,14 @@ import {
   setSetting,
 } from "../core/settings";
 import { subscribe } from "../core/settings";
-import { CONFIG_LS_KEY, DEFAULT_CONFIG, resetConfig, type AppConfig } from "../core/types";
+import {
+  CONFIG_LS_KEY,
+  DEFAULT_CONFIG,
+  PRODUCT_MAX_N,
+  clampNeuronCount,
+  resetConfig,
+  type AppConfig,
+} from "../core/types";
 import {
   impactColor,
   impactLabel,
@@ -80,14 +88,15 @@ export interface SysInfo {
 
 // ── Tab definitions ──────────────────────────────────────────────────────────
 
-type TabId = "monitor" | "dynamics" | "network" | "rendering" | "debugview" | "storage";
+type TabId = "monitor" | "dynamics" | "network" | "appearance" | "morphology" | "debugview" | "storage";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "monitor",    label: "Monitor"   },
   { id: "dynamics",   label: "Dynamics"  },
   { id: "network",    label: "Network"   },
-  { id: "rendering",  label: "Rendering" },
-  { id: "debugview",  label: "Debug View"},
+  { id: "appearance", label: "Appearance"},
+  { id: "morphology", label: "Morphology"},
+  { id: "debugview",  label: "Debug"     },
   { id: "storage",    label: "Storage"   },
 ];
 
@@ -160,6 +169,12 @@ function buildHiddenReviewPresets(): Record<HiddenReviewPresetId, HiddenReviewPr
   heroMorph.lighting.rimPower = 2.5;
   heroMorph.lighting.restingBrightness = 0.07;
   heroMorph.lighting.activeBoost = 3.0;
+  // Stream F: richer dendrite decoration for close-up screenshots.
+  // branchlets=1/twigs=2/decorGroupMax=16 maximises the bushy local look;
+  // not the default because at N=6000 performance is already at 24.7% cap util.
+  heroMorph.generator.dendriteBranchletCount = 1;
+  heroMorph.generator.dendriteTwigCount = 2;
+  heroMorph.generator.dendriteDecorGroupMax = 16;
 
   return {
     "accepted-default": acceptedDefault,
@@ -176,8 +191,8 @@ function buildHiddenReviewPresets(): Record<HiddenReviewPresetId, HiddenReviewPr
       appConfig: cloneAppConfig(DEFAULT_CONFIG),
       visualSettings: heroVisual,
       morphologyConfig: heroMorph,
-      notes: "Screenshot-oriented review preset. Keeps the default network config, raises tessellation, and uses the active-bright morphology-lighting split from /tmp/morph_view_active_bright_stats.json.",
-      payloadSource: "DEFAULT_* baseline + hero bloom/quality overrides + /tmp/morph_view_active_bright_stats.json lighting split",
+      notes: "Screenshot-oriented review preset. Keeps the default network config, raises tessellation, uses the active-bright morphology-lighting split, and maximises dendrite decoration (branchlets=1, twigs=2, decorGroupMax=16) for close-up shots.",
+      payloadSource: "DEFAULT_* baseline + hero bloom/quality overrides + /tmp/morph_view_active_bright_stats.json lighting split + Stream F max dendrite decoration",
     },
   };
 }
@@ -238,6 +253,20 @@ interface SliderSpec {
   changeOnly?: boolean;
 }
 
+interface NumericControlElements {
+  input: HTMLInputElement;
+  numberInput: HTMLInputElement;
+  decimals: number;
+}
+
+interface DevPanelInitialValues {
+  n: number;
+  k: number;
+  seed: number;
+  excitability: number;
+  tps: number;
+}
+
 // ── V2 Phase B: Select spec ───────────────────────────────────────────────────
 // Describes each integer-enum setting rendered as a <select>.
 
@@ -247,6 +276,18 @@ interface SelectSpec {
   options: { value: number; label: string }[];
   tooltip?: string; // one-sentence description shown via the instant tooltip
 }
+
+export const COLOR_BY_OPTIONS = [
+  { value: 0, label: "Region" },
+  { value: 1, label: "E/I" },
+  { value: 2, label: "Spike age" },
+  { value: 3, label: "Voltage (debug)" },
+  { value: 4, label: "Activity" },
+  { value: 5, label: "Identity" },
+  { value: 6, label: "Brain" },
+] as const;
+
+export const COLOR_BY_LABELS = COLOR_BY_OPTIONS.map((option) => option.label);
 
 // ── Apply-handler callbacks (provided by main.ts) ─────────────────────────────
 // V2 Phase B — wired in main.ts after boot().
@@ -296,6 +337,22 @@ function fmtRate(r: number): string {
 /** Format an integer with locale-style comma grouping. */
 function fmtInt(n: number): string {
   return Math.round(n).toLocaleString();
+}
+
+function decimalsForStep(step: number): number {
+  if (!Number.isFinite(step) || step <= 0 || Number.isInteger(step)) return 0;
+  const text = String(step);
+  if (text.includes("e-")) {
+    const [, exp] = text.split("e-");
+    return Number.parseInt(exp, 10);
+  }
+  const [, frac = ""] = text.split(".");
+  return frac.replace(/0+$/, "").length;
+}
+
+function clampControlValue(value: number, min: number, max: number, integer: boolean): number {
+  const clamped = Math.max(min, Math.min(max, value));
+  return integer ? Math.round(clamped) : clamped;
 }
 
 // ── DevPanel class ────────────────────────────────────────────────────────────
@@ -353,16 +410,15 @@ export class DevPanel {
     interpret:          HTMLSpanElement;
   } | null = null;
 
-  // V2 Phase B: rendering-tab slider elements (for syncing on external changes).
-  private sliderElements: Map<string, { input: HTMLInputElement; readout: HTMLSpanElement }> = new Map();
+  // V2 Phase B: settings slider elements (for syncing on external changes).
+  private sliderElements: Map<string, NumericControlElements> = new Map();
+  private selectElements: Map<string, HTMLSelectElement> = new Map();
 
   // V2 Phase E: debug view — live visual-mode readout spans.
   private debugViewFields: {
     colorBy:          HTMLSpanElement;
     neuronVisibility: HTMLSpanElement;
     connectionLayer:  HTMLSpanElement;
-    surface:          HTMLSpanElement;
-    signalSource:     HTMLSpanElement;
   } | null = null;
 
   // V2 Phase B: apply handlers (kept for API compat; brain-reset pending UI removed UX round 2).
@@ -378,7 +434,7 @@ export class DevPanel {
   // Pending edits to generator/render-quality groups; applied on Rebuild.
   private morphPending: MorphologyConfig = loadMorphConfig();
   // Descriptor rows for external sync (reset). Keyed by jsonPath.
-  private morphRows: Map<string, { input: HTMLInputElement; readout: HTMLSpanElement; decimals: number }> = new Map();
+  private morphRows: Map<string, NumericControlElements> = new Map();
 
   // UX overhaul: visibility callback(s) for main.ts canvas shrinking.
   private visibilityCallbacks: Array<(open: boolean) => void> = [];
@@ -411,7 +467,16 @@ export class DevPanel {
   // pair of listeners on `document` drives it (keyed off `data-tip`).
   private _tipEl: HTMLDivElement | null = null;
 
-  constructor() {
+  constructor(initialValues?: DevPanelInitialValues) {
+    if (initialValues) {
+      this._initN = initialValues.n;
+      this._initK = initialValues.k;
+      this._initSeed = initialValues.seed;
+      this._initExcitability = initialValues.excitability;
+      this._initTps = initialValues.tps;
+      this._currentSeed = initialValues.seed >>> 0;
+    }
+
     // UX round 2: affordance circle removed; gear button is the only opener.
     // Build the main panel container.
     this.container = this._buildPanel();
@@ -484,24 +549,14 @@ export class DevPanel {
     n: number; k: number; seed: number;
     excitability: number; tps: number;
   }): void {
-    this._initN           = opts.n;
-    this._initK           = opts.k;
-    this._initSeed        = opts.seed;
-    this._initExcitability = opts.excitability;
-    this._initTps         = opts.tps;
-    this._currentSeed     = opts.seed >>> 0;
-
-    // The Network tab is built eagerly in the constructor, before main.ts calls
-    // this method — so its sliders captured the field defaults, not the persisted
-    // config. Rebuild that one tab's content now that the real values are set, so
-    // the N / K / excitability / speed controls show what actually booted.
-    // (Without this, persisted values are applied to the sim but the panel still
-    // displays defaults, making persistence look broken.)
-    const networkContent = this.tabContents.get("network");
-    if (networkContent) {
-      networkContent.replaceChildren();
-      this._buildNetworkTab(networkContent);
-    }
+    this._syncNetworkControls({
+      ...DEFAULT_CONFIG,
+      n: opts.n,
+      k: opts.k,
+      seed: opts.seed >>> 0,
+      excitability: opts.excitability,
+      ticksPerSec: opts.tps,
+    });
   }
 
   /** Called from main.ts once-per-second when the panel is open. */
@@ -723,9 +778,12 @@ export class DevPanel {
       } else if (tab.id === "network") {
         // UX overhaul: real Network/Simulation controls.
         this._buildNetworkTab(content);
-      } else if (tab.id === "rendering") {
-        // V2 Phase B: real rendering tab with live knobs.
-        this._buildRenderingTab(content);
+      } else if (tab.id === "appearance") {
+        // V2 Phase B: real appearance tab with live knobs.
+        this._buildAppearanceTab(content);
+      } else if (tab.id === "morphology") {
+        // v0.3.1: morphology generator / render-quality / lighting controls.
+        this._buildMorphologyTab(content);
       } else if (tab.id === "storage") {
         // V2 Phase B: storage tab with reset + readout.
         this._buildStorageTab(content);
@@ -1029,10 +1087,12 @@ export class DevPanel {
       label: "N (neurons)",
       tooltip: "Number of neurons in the network — increasing N increases realism but costs GPU memory and compute.",
       impact: "renderer-rebuild",
-      min: 1000, max: 200_000, step: 1000,
+      min: 1000, max: PRODUCT_MAX_N, step: 1000,
       initialValue: this._initN,
+      defaultValue: DEFAULT_CONFIG.n,
+      integer: true,
     }, (n) => {
-      this.simHandlers?.onNetwork({ n, k: parseInt(kInput.value, 10), seed: this._currentSeed });
+      this.simHandlers?.onNetwork({ n: clampNeuronCount(n), k: parseInt(kInput.value, 10), seed: this._currentSeed });
     }, /* liveOnInput */ false);
     this._nSlider = nSlider;
     this._nInput = nInput;
@@ -1044,8 +1104,10 @@ export class DevPanel {
       impact: "renderer-rebuild",
       min: 4, max: 64, step: 1,
       initialValue: this._initK,
+      defaultValue: DEFAULT_CONFIG.k,
+      integer: true,
     }, (k) => {
-      this.simHandlers?.onNetwork({ n: parseInt(nInput.value, 10), k, seed: this._currentSeed });
+      this.simHandlers?.onNetwork({ n: clampNeuronCount(parseInt(nInput.value, 10)), k, seed: this._currentSeed });
     }, /* liveOnInput */ false);
     this._kSlider = kSlider;
     this._kInput = kInput;
@@ -1071,7 +1133,7 @@ export class DevPanel {
       this._currentSeed = (parseInt(seedInput.value, 10) || 0) >>> 0;
       seedInput.value = String(this._currentSeed);
       this.simHandlers?.onNetwork({
-        n: parseInt(nInput.value, 10),
+        n: clampNeuronCount(parseInt(nInput.value, 10)),
         k: parseInt(kInput.value, 10),
         seed: this._currentSeed,
       });
@@ -1093,7 +1155,7 @@ export class DevPanel {
       this._currentSeed = (this._currentSeed + 0x9e3779b9) >>> 0;
       seedInput.value = String(this._currentSeed);
       this.simHandlers?.onNetwork({
-        n: parseInt(nInput.value, 10),
+        n: clampNeuronCount(parseInt(nInput.value, 10)),
         k: parseInt(kInput.value, 10),
         seed: this._currentSeed,
       });
@@ -1116,6 +1178,7 @@ export class DevPanel {
       min: 0, max: 1, step: 0.01,
       decimals: 2,
       initialValue: this._initExcitability,
+      defaultValue: DEFAULT_CONFIG.excitability,
     }, (v) => {
       this.simHandlers?.onExcitability(v);
     }, /* liveOnInput */ true);
@@ -1130,6 +1193,8 @@ export class DevPanel {
       min: 1, max: 60, step: 1,
       decimals: 0,
       initialValue: this._initTps,
+      defaultValue: DEFAULT_CONFIG.ticksPerSec,
+      integer: true,
     }, (v) => {
       this.simHandlers?.onSpeed(Math.max(1, Math.min(60, Math.round(v))));
     }, /* liveOnInput */ true);
@@ -1169,9 +1234,9 @@ export class DevPanel {
       ],
     }, s.inputMode, "live");
 
-    // ── Structure (live) ──────────────────────────────────────────────────────
-    root.appendChild(this._sep("Structure"));
-    this._caption(root, "Structural params now read live from the integrate uniform.");
+    // ── Dynamics shape (live) ───────────────────────────────────────────────
+    root.appendChild(this._sep("Dynamics Shape"));
+    this._caption(root, "Structural dynamics params now read live from the integrate uniform.");
 
     // heterogeneity — now live (UX round 2)
     this._sliderRow(root, {
@@ -1193,6 +1258,28 @@ export class DevPanel {
         { value: 2, label: "K" },
       ],
     }, s.weightNormalization, "live");
+
+    // ── Reach (network/morphology rebuild) ──────────────────────────────────
+    root.appendChild(this._sep("Reach"));
+    this._caption(root, "Changes here re-derive target IDs and generated morphology.");
+
+    this._sliderRow(root, {
+      key: "longRangeReachFrac",
+      label: "Long-range fraction",
+      tooltip: "Fraction of synapses routed to distant neurons (0 = all local). Raises long axons that span the cortex (rebuilds the network).",
+      min: 0, max: 1, step: 0.01,
+      decimals: 2,
+      changeOnly: true,
+    }, s.longRangeReachFrac, "brain-reset");
+
+    this._sliderRow(root, {
+      key: "maxReachCells",
+      label: "Max reach (cells)",
+      tooltip: "How far a long-range synapse can jump, in grid cells (rebuilds the network).",
+      min: 2, max: 16, step: 1,
+      decimals: 0,
+      changeOnly: true,
+    }, s.maxReachCells, "brain-reset");
   }
 
   // ── UX round 2: Slider + number input helper ──────────────────────────────
@@ -1209,11 +1296,16 @@ export class DevPanel {
       min: number; max: number; step: number;
       decimals?: number;
       initialValue: number;
+      defaultValue?: number;
+      integer?: boolean;
     },
     onApply: (value: number) => void,
     liveOnInput: boolean,
   ): [HTMLInputElement, HTMLInputElement] {
-    const decimals = spec.decimals ?? (spec.step < 1 ? 2 : 0);
+    const integer = spec.integer ?? Number.isInteger(spec.step);
+    const decimals = spec.decimals ?? (integer ? 0 : decimalsForStep(spec.step));
+    const format = (value: number) => value.toFixed(decimals);
+    const normalize = (value: number) => clampControlValue(value, spec.min, spec.max, integer);
 
     // Label row (dot + label, no separate readout — number input serves as readout)
     const row = document.createElement("div");
@@ -1225,7 +1317,6 @@ export class DevPanel {
     lbl.className = "dp-label dp-ctrl-label";
     lbl.textContent = spec.label;
     row.appendChild(lbl);
-    parent.appendChild(row);
 
     // Slider + number input side-by-side
     const wrap = document.createElement("div");
@@ -1238,7 +1329,7 @@ export class DevPanel {
     slider.min = String(spec.min);
     slider.max = String(spec.max);
     slider.step = String(spec.step);
-    slider.value = String(spec.initialValue);
+    slider.value = String(normalize(spec.initialValue));
 
     const numInput = document.createElement("input");
     numInput.type = "number";
@@ -1246,12 +1337,29 @@ export class DevPanel {
     numInput.min = String(spec.min);
     numInput.max = String(spec.max);
     numInput.step = String(spec.step);
-    numInput.value = spec.initialValue.toFixed(decimals);
+    numInput.value = format(normalize(spec.initialValue));
+
+    if (spec.defaultValue !== undefined) {
+      const resetBtn = document.createElement("button");
+      resetBtn.type = "button";
+      resetBtn.className = "dp-regen-btn";
+      resetBtn.textContent = "Reset";
+      if (spec.tooltip) this._attachTip(resetBtn, `${spec.tooltip} Reset to ${format(spec.defaultValue)}.`);
+      resetBtn.addEventListener("click", () => {
+        const v = normalize(spec.defaultValue ?? spec.initialValue);
+        slider.value = String(v);
+        numInput.value = format(v);
+        onApply(v);
+      });
+      row.appendChild(resetBtn);
+    }
+    parent.appendChild(row);
 
     // Slider → number input sync
     const onSliderChange = () => {
-      const v = parseFloat(slider.value);
-      numInput.value = v.toFixed(decimals);
+      const v = normalize(parseFloat(slider.value));
+      slider.value = String(v);
+      numInput.value = format(v);
       onApply(v);
     };
     slider.addEventListener(liveOnInput ? "input" : "change", onSliderChange);
@@ -1260,9 +1368,9 @@ export class DevPanel {
     const onNumApply = () => {
       let v = parseFloat(numInput.value);
       if (isNaN(v)) v = spec.initialValue;
-      v = Math.max(spec.min, Math.min(spec.max, v));
+      v = normalize(v);
       slider.value = String(v);
-      numInput.value = v.toFixed(decimals);
+      numInput.value = format(v);
       onApply(v);
     };
     numInput.addEventListener("change", onNumApply);
@@ -1275,26 +1383,19 @@ export class DevPanel {
     return [slider, numInput];
   }
 
-  // ── V2 Phase B: Rendering tab DOM ──────────────────────────────────────────
+  // ── V2 Phase B: Appearance tab DOM ─────────────────────────────────────────
 
-  private _buildRenderingTab(root: HTMLDivElement): void {
+  private _buildAppearanceTab(root: HTMLDivElement): void {
     const s = getSettings();
 
-    // ── V2 Phase E: Appearance — orthogonal mode selects ─────────────────────
-    root.appendChild(this._sep("Appearance"));
+    // ── Color and visibility — orthogonal mode selects ───────────────────────
+    root.appendChild(this._sep("Color and Visibility"));
 
     this._selectRow(root, {
       key: "colorBy",
       label: "Color by",
-      tooltip: "Choose what neuron property determines the displayed color (region, E/I type, spike recency, voltage, or activity level).",
-      options: [
-        { value: 0, label: "Region" },
-        { value: 1, label: "E/I" },
-        { value: 2, label: "Spike age" },
-        { value: 3, label: "Voltage (debug)" },
-        { value: 4, label: "Activity" },
-        { value: 5, label: "Identity" },
-      ],
+      tooltip: "Choose what neuron property determines the displayed color.",
+      options: [...COLOR_BY_OPTIONS],
     }, s.colorBy, "live");
 
     this._selectRow(root, {
@@ -1314,19 +1415,8 @@ export class DevPanel {
     // Surface select removed from the panel — the morphology replaces the
     // brain-mesh context. The `surface` setting field remains (default off).
 
-    this._selectRow(root, {
-      key: "signalSource",
-      label: "Signal source",
-      tooltip: "Which per-neuron quantity drives visual glow/color: spike events, membrane voltage, or a smoothed activity estimate.",
-      options: [
-        { value: 0, label: "Spike" },
-        { value: 1, label: "Voltage" },
-        { value: 2, label: "Activity" },
-      ],
-    }, s.signalSource, "live");
-
-    // ── Neuron glow (all live, real effect now) ──────────────────────────────
-    root.appendChild(this._sep("Neuron Glow"));
+    // ── Neuron points (all live in the far billboard pass) ───────────────────
+    root.appendChild(this._sep("Neuron Points"));
 
     this._sliderRow(root, {
       key: "glowTau",
@@ -1337,29 +1427,9 @@ export class DevPanel {
     }, s.glowTau, "live");
 
     this._sliderRow(root, {
-      key: "pointRadius",
-      label: "Point radius",
-      tooltip: "Billboard radius of each neuron point in world units — larger values make individual neurons more visible.",
-      min: 0.001, max: 0.02, step: 0.0005,
-      decimals: 4,
-    }, s.pointRadius, "live");
-
-    this._sliderRow(root, {
-      key: "voltageGlowStrength",
-      label: "Voltage glow",
-      tooltip: "Strength of the membrane-voltage debug glow overlay (0 = off) — helps visualise sub-threshold dynamics.",
-      min: 0, max: 2, step: 0.05,
-      decimals: 2,
-    }, s.voltageGlowStrength, "live");
-
-    // ── Neuron body (no-op until Phase E) ────────────────────────────────────
-    root.appendChild(this._sep("Neuron Body"));
-    this._caption(root, "(applies in Phase E)");
-
-    this._sliderRow(root, {
       key: "neuronVisualRadius",
       label: "Visual radius",
-      tooltip: "Base mesh radius of neuron spheres in world units (distinct from point-sprite radius).",
+      tooltip: "Base billboard radius of neuron points in world units.",
       min: 0.001, max: 0.02, step: 0.0005,
       decimals: 4,
     }, s.neuronVisualRadius, "live");
@@ -1380,18 +1450,29 @@ export class DevPanel {
       decimals: 2,
     }, s.inactiveNeuronOpacity, "live");
 
-    // ── Morphology (procedural neuron connectivity) ─────────────────────────
-    root.appendChild(this._sep("Morphology"));
+    this._sliderRow(root, {
+      key: "voltageGlowStrength",
+      label: "Voltage glow",
+      tooltip: "Strength of the membrane-voltage debug glow overlay (0 = off) — helps visualise sub-threshold dynamics.",
+      min: 0, max: 2, step: 0.05,
+      decimals: 2,
+    }, s.voltageGlowStrength, "live");
 
-    // connection_layer: Off / On. On = resting structure (at resting opacity) +
-    // live signal flow racing outward from each firing neuron's soma.
+    // ── Morphology visibility (procedural neuron connectivity) ──────────────
+    root.appendChild(this._sep("Morphology Visibility"));
+
+    // connectionLayer: 0=Off (skips all morphology work including compute+tubes+somas),
+    // 1=Active/recent only (default: compacted GPU draw of recently-lit tubes + somas),
+    // 2=Resting debug (debug placeholder — currently behaves like 1; flip
+    //   DRAW_LEGACY_ALL_SEGMENTS in pipelines.rs to enable full all-segment draw).
     this._selectRow(root, {
       key: "connectionLayer",
       label: "Connections",
-      tooltip: "Show the procedural neuron morphology (dendrite trees + axon arbors) with spike-keyed connection lighting.",
+      tooltip: "Morphology rendering mode. Off: no morphology work (fastest). Active/recent: draw only segments near a spike (default). Resting debug: shows all resting segments — requires recompiling with DRAW_LEGACY_ALL_SEGMENTS=true; otherwise behaves like Active/recent.",
       options: [
         { value: 0, label: "Off" },
-        { value: 1, label: "On" },
+        { value: 1, label: "Active/recent" },
+        { value: 2, label: "Resting debug" },
       ],
     }, s.connectionLayer, "live");
 
@@ -1433,31 +1514,6 @@ export class DevPanel {
       changeOnly: true,
     }, s.connectionCurveLift, "renderer-rebuild");
 
-    // Heavy-tailed synapse reach: most synapses stay local; a tunable fraction
-    // jump up to maxReach cells away. Changing either re-derives target ids and
-    // rebuilds the morphology, so apply on release (changeOnly).
-    this._sliderRow(root, {
-      key: "longRangeReachFrac",
-      label: "Long-range fraction",
-      tooltip: "Fraction of synapses routed to distant neurons (0 = all local). Raises long axons that span the cortex (rebuilds the network).",
-      min: 0, max: 1, step: 0.01,
-      decimals: 2,
-      changeOnly: true,
-    }, s.longRangeReachFrac, "brain-reset");
-
-    this._sliderRow(root, {
-      key: "maxReachCells",
-      label: "Max reach (cells)",
-      tooltip: "How far a long-range synapse can jump, in grid cells (rebuilds the network).",
-      min: 2, max: 16, step: 1,
-      decimals: 0,
-      changeOnly: true,
-    }, s.maxReachCells, "brain-reset");
-
-    // v0.3.1: descriptor-driven morphology config (generator / render-quality /
-    // lighting). Rendered from MORPH_DESCRIPTORS — no hand-written rows.
-    this._buildMorphConfigRows(root);
-
     // ── Post (bloom on by default; morphology glow blooms out of the box) ──────
     root.appendChild(this._sep("Post"));
 
@@ -1476,17 +1532,49 @@ export class DevPanel {
     // The settings field at index 23 (adaptiveScalerEnabled) is kept RESERVED/INERT
     // to preserve the Rust↔TS VisualSettings contract; it is no longer exposed.
     // UX round 2: Sim Drive + Network Params moved to Network tab (Drive + Structure sections).
+
+    // ── Morphology Lighting (uniform-only; live green dot) ──────────────────
+    // Descriptor-driven lighting rows (applyKind="uniform") from MORPH_DESCRIPTORS.
+    // Generator and render-quality rows remain in the Morphology tab.
+    this._buildMorphLightingRows(root);
+  }
+
+  // ── v0.3.1: descriptor-driven lighting rows for the Appearance tab ────────
+  // Renders only group==="lighting" rows from MORPH_DESCRIPTORS. These are all
+  // applyKind="uniform" (live), so they call onMorphLive on every slider input.
+
+  private _buildMorphLightingRows(root: HTMLDivElement): void {
+    const GROUP_LABEL = "Morphology Lighting";
+    let sectionAdded = false;
+    for (const d of MORPH_DESCRIPTORS) {
+      if (d.group !== "lighting") continue;
+      if (!sectionAdded) {
+        root.appendChild(this._sep(GROUP_LABEL));
+        sectionAdded = true;
+      }
+      this._morphRow(root, d);
+    }
+  }
+
+  // ── v0.3.1: Morphology tab DOM ────────────────────────────────────────────
+
+  private _buildMorphologyTab(root: HTMLDivElement): void {
+    // Descriptor-driven morphology config (generator / render-quality only).
+    // Lighting rows have moved to the Appearance tab ("Morphology Lighting").
+    this._buildMorphConfigRows(root, ["generator", "renderQuality"]);
   }
 
   // ── v0.3.1: descriptor-driven morphology config rows ──────────────────────
-  // Renders one row per MORPH_DESCRIPTORS entry, grouped by generator /
-  // renderQuality / lighting. Lighting (applyKind "uniform") writes live on
-  // slider input; generator + renderQuality (regenerate / pipeline-rebuild) edit
-  // a pending config applied only on the "Rebuild Morphology" button.
+  // Renders one row per MORPH_DESCRIPTORS entry for the requested groups.
+  // Lighting (applyKind "uniform") writes live on slider input; generator +
+  // renderQuality (regenerate / pipeline-rebuild) edit a pending config applied
+  // only on the "Rebuild Morphology" button.
+  // Pass `groups` to restrict which groups are rendered (default: all).
 
-  private _buildMorphConfigRows(root: HTMLDivElement): void {
-    // Reset row registry (rebuilds happen e.g. on reset → re-entry).
-    this.morphRows.clear();
+  private _buildMorphConfigRows(
+    root: HTMLDivElement,
+    groups?: readonly MorphDescriptor["group"][],
+  ): void {
 
     const GROUP_LABELS: Record<MorphDescriptor["group"], string> = {
       generator:     "Morphology · Generator",
@@ -1496,6 +1584,7 @@ export class DevPanel {
 
     let lastGroup: MorphDescriptor["group"] | null = null;
     for (const d of MORPH_DESCRIPTORS) {
+      if (groups && !groups.includes(d.group)) continue;
       if (d.group !== lastGroup) {
         root.appendChild(this._sep(GROUP_LABELS[d.group]));
         lastGroup = d.group;
@@ -1508,64 +1597,36 @@ export class DevPanel {
   /** One descriptor-driven slider row for a morphology config control. */
   private _morphRow(parent: HTMLElement, d: MorphDescriptor): void {
     const isInt = d.type === "int";
-    const decimals = isInt ? 0 : Math.max(0, -Math.floor(Math.log10(d.step)));
+    const decimals = isInt ? 0 : decimalsForStep(d.step);
     const live = d.applyKind === "uniform";
     // Lighting reads from the applied config; pending groups read from pending.
     const initial = live
       ? getMorphValue(this.morphConfig, d.jsonPath)
       : getMorphValue(this.morphPending, d.jsonPath);
 
-    const row = document.createElement("div");
-    row.className = "dp-ctrl-row";
-    if (d.tooltip) this._attachTip(row, d.tooltip);
-
-    row.appendChild(this._impactDot(d.impact));
-
-    const lbl = document.createElement("span");
-    lbl.className = "dp-label dp-ctrl-label";
-    lbl.textContent = d.label;
-    row.appendChild(lbl);
-
-    const readout = document.createElement("span");
-    readout.className = "dp-value dp-ctrl-readout";
-    readout.textContent = initial.toFixed(decimals);
-    row.appendChild(readout);
-
-    const sliderWrap = document.createElement("div");
-    sliderWrap.className = "dp-slider-wrap";
-    if (d.tooltip) this._attachTip(sliderWrap, d.tooltip);
-
-    const input = document.createElement("input");
-    input.type = "range";
-    input.className = "dp-slider";
-    input.min = String(d.min);
-    input.max = String(d.max);
-    input.step = String(d.step);
-    input.value = String(initial);
-
-    input.addEventListener("input", () => {
-      const v = parseFloat(input.value);
-      readout.textContent = v.toFixed(decimals);
+    const [input, numberInput] = this._sliderWithInput(parent, {
+      label: d.label,
+      tooltip: d.tooltip,
+      impact: d.impact,
+      min: d.min,
+      max: d.max,
+      step: d.step,
+      decimals,
+      initialValue: initial,
+      defaultValue: d.default,
+      integer: isInt,
+    }, (v) => {
       if (d.applyKind === "uniform") {
         this._onMorphInput(d, v);
       } else {
         this.morphPending = setMorphValue(this.morphPending, d.jsonPath, v);
-      }
-    });
-
-    if (d.applyKind !== "uniform") {
-      input.addEventListener("change", () => {
         this.morphConfig = structuredClone(this.morphPending);
         saveMorphConfig(this.morphConfig);
         this.morphHandlers?.onMorphRebuild(JSON.stringify(this.morphConfig));
-      });
-    }
+      }
+    }, live);
 
-    sliderWrap.appendChild(input);
-    parent.appendChild(row);
-    parent.appendChild(sliderWrap);
-
-    this.morphRows.set(d.jsonPath, { input, readout, decimals });
+    this.morphRows.set(d.jsonPath, { input, numberInput, decimals });
   }
 
   /** Apply a live (uniform) morphology slider change immediately. */
@@ -1576,7 +1637,7 @@ export class DevPanel {
     this.morphHandlers?.onMorphLive(JSON.stringify(this.morphConfig));
   }
 
-  // ── V2 Phase E: Debug View tab DOM ────────────────────────────────────────
+  // ── V2 Phase E: Debug tab DOM ─────────────────────────────────────────────
 
   private _buildDebugViewTab(root: HTMLDivElement): void {
     const s = getSettings();
@@ -1587,37 +1648,28 @@ export class DevPanel {
     const colorBy          = this._row(root, "Color by");
     const neuronVisibility = this._row(root, "Neurons");
     const connectionLayer  = this._row(root, "Connection layer");
-    const surface          = this._row(root, "Surface");
-    const signalSource     = this._row(root, "Signal source");
 
     this.debugViewFields = {
       colorBy,
       neuronVisibility,
       connectionLayer,
-      surface,
-      signalSource,
     };
 
     // Populate immediately with current values.
     this._updateDebugViewFields(s);
   }
 
-  // V2 Phase E: update Debug View readouts from a settings snapshot.
+  // V2 Phase E: update Debug readouts from a settings snapshot.
   private _updateDebugViewFields(s: import("../core/settings").VisualizerSettings): void {
     if (!this.debugViewFields) return;
     const d = this.debugViewFields;
 
-    const COLOR_BY_LABELS   = ["Region", "E/I", "Spike age", "Voltage (debug)", "Activity", "Identity"];
     const NEURON_VIS_LABELS = ["All", "Active emphasis", "Active only"];
-    const CONN_LAYER_LABELS = ["Off", "On"];
-    const SURFACE_LABELS    = ["Off", "Dim", "Normal"];
-    const SIGNAL_SRC_LABELS = ["Spike", "Voltage", "Activity"];
+    const CONN_LAYER_LABELS = ["Off", "Active/recent", "Resting debug"];
 
     d.colorBy.textContent          = COLOR_BY_LABELS[s.colorBy]          ?? String(s.colorBy);
     d.neuronVisibility.textContent = NEURON_VIS_LABELS[s.neuronVisibility] ?? String(s.neuronVisibility);
     d.connectionLayer.textContent  = CONN_LAYER_LABELS[s.connectionLayer]  ?? String(s.connectionLayer);
-    d.surface.textContent          = SURFACE_LABELS[s.surface]             ?? String(s.surface);
-    d.signalSource.textContent     = SIGNAL_SRC_LABELS[s.signalSource]     ?? String(s.signalSource);
   }
 
   private _loadAcceptedDefaultBase(): void {
@@ -1707,63 +1759,27 @@ export class DevPanel {
     initialValue: number,
     impact: SettingImpact,
   ): void {
-    const row = document.createElement("div");
-    row.className = "dp-ctrl-row";
-    if (spec.tooltip) this._attachTip(row, spec.tooltip); // v0.1.2: instant tooltip
+    const [input, numberInput] = this._sliderWithInput(parent, {
+      label: spec.label,
+      tooltip: spec.tooltip,
+      impact,
+      min: spec.min,
+      max: spec.max,
+      step: spec.step,
+      decimals: spec.decimals,
+      initialValue,
+      defaultValue: DEFAULT_SETTINGS[spec.key] as number,
+      integer: spec.decimals === 0,
+    }, (value) => {
+      // setSetting triggers the subscribe callback in main.ts -> pendingSettingsPush.
+      setSetting(spec.key, value as never);
+    }, !spec.changeOnly);
 
-    // Impact dot.
-    const dot = this._impactDot(impact);
-    row.appendChild(dot);
-
-    // Label.
-    const lbl = document.createElement("span");
-    lbl.className = "dp-label dp-ctrl-label";
-    lbl.textContent = spec.label;
-    row.appendChild(lbl);
-
-    // Numeric readout.
-    const readout = document.createElement("span");
-    readout.className = "dp-value dp-ctrl-readout";
-    readout.textContent = initialValue.toFixed(spec.decimals);
-    row.appendChild(readout);
-
-    // Slider (full row beneath).
-    const sliderWrap = document.createElement("div");
-    sliderWrap.className = "dp-slider-wrap";
-    if (spec.tooltip) this._attachTip(sliderWrap, spec.tooltip); // v0.1.2: instant tooltip
-
-    const input = document.createElement("input");
-    input.type = "range";
-    input.className = "dp-slider";
-    input.min = String(spec.min);
-    input.max = String(spec.max);
-    input.step = String(spec.step);
-    input.value = String(initialValue);
-
-    // Morphology controls: curve-lift uses 'change' (release/Enter) so geometry
-    // regenerates once per release, not on every drag tick. All other sliders
-    // stay live on 'input'. The readout still tracks the slider live in both.
-    input.addEventListener("input", () => {
-      readout.textContent = parseFloat(input.value).toFixed(spec.decimals);
-      if (!spec.changeOnly) {
-        // setSetting triggers the subscribe callback in main.ts → pendingSettingsPush.
-        setSetting(spec.key, parseFloat(input.value) as never);
-      }
+    this.sliderElements.set(spec.key, {
+      input,
+      numberInput,
+      decimals: spec.decimals,
     });
-    if (spec.changeOnly) {
-      input.addEventListener("change", () => {
-        const v = parseFloat(input.value);
-        readout.textContent = v.toFixed(spec.decimals);
-        setSetting(spec.key, v as never);
-      });
-    }
-
-    sliderWrap.appendChild(input);
-    parent.appendChild(row);
-    parent.appendChild(sliderWrap);
-
-    // Register for external sync (e.g. resetSettings).
-    this.sliderElements.set(spec.key, { input, readout });
   }
 
   // ── V2 Phase B: Select row builder ───────────────────────────────────────
@@ -1808,16 +1824,7 @@ export class DevPanel {
     row.appendChild(sel);
     parent.appendChild(row);
 
-    // Register the select for external sync.
-    // We repurpose the sliderElements map — store a synthetic object.
-    // For selects we only need to sync .value; readout is the select itself.
-    const fakeInput = { value: String(initialValue) } as HTMLInputElement;
-    // Store select reference under a special key so _syncSliders can update it.
-    this.sliderElements.set(`${spec.key}__select`, {
-      input: sel as unknown as HTMLInputElement,
-      readout: document.createElement("span"), // unused for selects
-    });
-    void fakeInput; // suppress unused-variable warning
+    this.selectElements.set(spec.key, sel);
   }
 
   // ── V2 Phase B: impact dot helper ────────────────────────────────────────
@@ -1848,7 +1855,7 @@ export class DevPanel {
       const src = d.applyKind === "uniform" ? this.morphConfig : this.morphPending;
       const v = getMorphValue(src, d.jsonPath);
       el.input.value = String(v);
-      el.readout.textContent = v.toFixed(el.decimals);
+      el.numberInput.value = v.toFixed(el.decimals);
     }
   }
 
@@ -1856,26 +1863,20 @@ export class DevPanel {
   // Called when settings change from any source (including resetSettings).
 
   private _syncSliders(s: import("../core/settings").VisualizerSettings): void {
-    for (const [key, el] of this.sliderElements) {
-      // Select elements are stored with "__select" suffix.
-      if (key.endsWith("__select")) {
-        const realKey = key.replace("__select", "") as keyof import("../core/settings").VisualizerSettings;
-        const val = s[realKey];
-        if (val !== undefined) {
-          el.input.value = String(val);
-        }
-        continue;
+    for (const [key, el] of this.selectElements) {
+      const realKey = key as keyof import("../core/settings").VisualizerSettings;
+      const val = s[realKey];
+      if (val !== undefined) {
+        el.value = String(val);
       }
-      // Slider elements.
+    }
+
+    for (const [key, el] of this.sliderElements) {
       const realKey = key as keyof import("../core/settings").VisualizerSettings;
       const val = s[realKey];
       if (val !== undefined) {
         el.input.value = String(val);
-        // Find the spec's decimals by looking at the current readout format.
-        // Cheapest approach: re-derive decimals from step stored in input.step.
-        const step = parseFloat(el.input.step);
-        const decimals = step < 0.001 ? 4 : step < 0.01 ? 3 : step < 0.1 ? 2 : step < 1 ? 1 : 0;
-        el.readout.textContent = (val as number).toFixed(decimals);
+        el.numberInput.value = (val as number).toFixed(el.decimals);
       }
     }
   }
@@ -1904,14 +1905,15 @@ export class DevPanel {
   }
 
   private _syncNetworkControls(config: AppConfig): void {
-    this._initN = config.n;
+    const n = clampNeuronCount(config.n);
+    this._initN = n;
     this._initK = config.k;
     this._initSeed = config.seed >>> 0;
     this._initExcitability = config.excitability;
     this._initTps = config.ticksPerSec;
     this._currentSeed = config.seed >>> 0;
 
-    this._setSliderInputPair(this._nSlider, this._nInput, config.n, 0);
+    this._setSliderInputPair(this._nSlider, this._nInput, n, 0);
     this._setSliderInputPair(this._kSlider, this._kInput, config.k, 0);
     if (this._seedInput) this._seedInput.value = String(config.seed >>> 0);
     this._setSliderInputPair(this._excitabilitySlider, this._excitabilityInput, config.excitability, 2);

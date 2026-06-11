@@ -17,10 +17,14 @@ const K: usize = 32;
 // Tuning matching examples/sim_check.rs (documented in the phase-2 closeout).
 const I_EXT: f32 = 0.040;
 const SYN_SCALE: f32 = 0.03;
+const HETEROGENEITY: f32 = 0.0;
 
 fn mean_rate_hz(backend: &mut GpuBackend, excit: f32, warmup: u32, measure: u32) -> f32 {
     backend.set_i_ext(I_EXT);
     backend.set_synaptic_scale(SYN_SCALE);
+    // This test guards the original dynamics envelope, independent of product
+    // visual defaults. Heterogeneity 0.0 is the documented pre-V2 baseline.
+    backend.set_heterogeneity(HETEROGENEITY);
     let cfg = SimConfig {
         n: N,
         k: K,

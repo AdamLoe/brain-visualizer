@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-08
+last_updated:  2026-06-11
 ---
 
 # Cortical Manifold
@@ -18,7 +18,7 @@ life of the network.
 
 - `Manifold` + `ManifoldParams` — `crates/brain-visualizer/src/manifold/mod.rs → Manifold`
 - Icosphere mesh generation — `crates/brain-visualizer/src/manifold/icosphere.rs → icosphere`
-- Gyrification noise — `crates/brain-visualizer/src/manifold/gyrify.rs → GyrifyParams, gyrify`
+- Structured fold field / gyrification — `crates/brain-visualizer/src/manifold/gyrify.rs → GyrifyParams, FoldField, gyrify_with_field`
 - Brain-envelope shaping primitive — `crates/brain-visualizer/src/manifold/mod.rs → brain_outer_radius, brain_surface_point`
 - Neuron volume placement — `crates/brain-visualizer/src/manifold/mod.rs → place_neurons`
 - Region assignment — `crates/brain-visualizer/src/manifold/regions.rs → RegionKind, assign_regions`
@@ -57,25 +57,28 @@ The six-step pipeline runs synchronously in `crates/brain-visualizer/src/manifol
    surface mesh and neuron placement, so those two views of the arena cannot
    drift.
 
-3. **Gyrification** (`crates/brain-visualizer/src/manifold/gyrify.rs → gyrify`): three octaves of
-   OpenSimplex noise displace each shaped envelope vertex along its outward
-   direction. Coarse lumps use `lump_freq ≈ 0.8` at `lump_amp ≈ 12%` of local
-   radius (large slow bulges → a lumpier silhouette); gyri/ridges use
-   `gyri_freq ≈ 1.5` at `gyri_amp ≈ 15%`; fine sulci/folds use `sulci_freq ≈ 4.0`
-   at `sulci_amp ≈ 5%`. The three octaves use independent noise instances —
-   distinct seed offsets (`seed`, `+0x9e3779b9`, `+0x85ebca6b`) derived from the
-   network seed — so they decorrelate. See
-   `crates/brain-visualizer/src/manifold/gyrify.rs → GyrifyParams` for all tunable
-   defaults (a tracked drift-verification surface).
+3. **Structured fold field** (`crates/brain-visualizer/src/manifold/gyrify.rs →
+   FoldField`): the surface pass creates one deterministic `FoldField` from
+   `GyrifyParams` and the network seed, then uses it for both surface vertices
+   and neuron placement. The field combines bounded OpenSimplex texture with
+   explicit cortical masks and major-groove terms so folds read as organized
+   sulci/gyri rather than isotropic noise. `gyrify_with_field` applies the
+   field radially to the shaped envelope and keeps the folded radius inside the
+   interaction/framing bounds guarded by tests. The visual-polish verification
+   log for the current pass recorded folded radii `dorsal_mid = 0.4303` and
+   `fissure_mid = 0.4545`, with `max_surface = 1.2407` and `max_neuron =
+   1.2389`.
 
-4. **Neuron placement** (`crates/brain-visualizer/src/manifold/mod.rs → place_neurons`): neurons are
-   sampled from the same deterministic hash namespace as the rest of the app.
-   Direction comes from spherical coordinates (cos θ uniform, φ uniform), then
-   the shared brain envelope supplies the local outer radius for that direction.
-   Depth is shell-biased rather than full-volume uniform: most neurons are
-   placed in the outer cortical band (`~0.72..1.0` of the local envelope
-   radius), with a small deterministic interior-fill fraction (`~8%`) so the
-   cloud keeps some depth instead of becoming a perfectly hollow rind.
+4. **Folded-shell neuron placement** (`crates/brain-visualizer/src/manifold/mod.rs →
+   place_neurons`): neurons are sampled from the same deterministic hash
+   namespace as the rest of the app. Direction comes from spherical coordinates
+   (cos theta uniform, phi uniform), then the shared `FoldField` supplies the
+   local folded outer radius for that direction. Depth is shell-biased rather
+   than full-volume uniform: most neurons are placed in the outer cortical band
+   of the **folded** envelope, with a small deterministic interior-fill fraction
+   (~8%) so the cloud keeps some depth instead of becoming a perfectly hollow
+   rind. This makes the neuron cloud follow the visible folds even when the
+   optional surface pass is off.
 
 5. **Region assignment** (`crates/brain-visualizer/src/manifold/regions.rs → assign_regions`): the
    30/40/30 split (Input/Association/Output) is applied by shuffling neuron
@@ -89,7 +92,8 @@ The six-step pipeline runs synchronously in `crates/brain-visualizer/src/manifol
 6. **Spatial grid** (`crates/brain-visualizer/src/manifold/mod.rs`): after placement, a uniform integer
    grid (`DEFAULT_GRID_DIM = 16`, giving 4096 cells) is built over the neuron
    positions for O(1) neighborhood lookup during connectivity generation and
-   cursor stimulation.
+   cursor stimulation. The current folded-placement verification recorded
+   `occupied_cells = 1409` and `max_cell_occupancy = 43`.
 
 ## Region encoding invariant
 
@@ -113,29 +117,48 @@ default is `MorphologyParams::locked_default`; a dev-panel-supplied
 `MorphologyConfig::to_params` before regeneration (see Exposed vs protected
 parameters below).
 
-Each neuron gets a deterministic arbor: a local dendrite tree plus a single
+Each neuron gets deterministic target-owned incoming dendrites plus a single
 **Prim-like axon tree grown by greedy attach + local relaxation**, not K
 independent sin-bow curves and not the old hand-tuned trunk→cluster→twig fan.
 
-- **Dendrites** (kind 0): a stable local tree of primary branches and twigs
-  around the soma, used as visible landing context for sockets. Each stem/twig
-  is emitted as a short sampled cubic-Bezier chain rather than a single chord,
-  so close-up branches curve through multiple `MorphSegment`s while keeping the
-  same 48-byte layout. This block is unchanged by the tree rewrite — reach,
-  count, and taper still come from named morphology budgets.
-- **Axon tree** (kind 1): one leaf per unique non-self target (resolved by the
-  production `target_with_cell` rule, deduped, ordered by target id). For a
-  multi-target neuron the tree seeds a shared trunk node along the mean target
-  direction, then grows by **Prim-like greedy attach**: each iteration adds the
-  one globally-best `(leaf, attach-point)` edge, scored by
+- **Incoming dendrites** (kind 0): generated from the build-time reverse view of
+  production `target_with_cell`, not from decorative local hashes. Every
+  non-self raw incoming synapse is stored in `Morphology::incoming_synapses` and
+  sorted by `Morphology::incoming_ranges`; duplicate `(source,target,socket)`
+  records aggregate into `Morphology::incoming_socket_groups` by summed absolute
+  weight. The renderer draws every unique incoming socket group at the default
+  N=1200/K=16 scale. Geometry is target-owned (`neuron_id = target_id`) but no
+  longer emits one long shared bucket stem. Instead, each target organizes
+  incoming groups into bounded soma-surface root collars, close first forks, and
+  per-group child/terminal branches. Root collars start just outside the soma
+  surface, first forks default around `1.45 * base_radius`, tangential curvature
+  is controlled by `dendriteCurveTightness`, and individual group spacing keeps
+  dense incoming groups legible. Shared internal roots/forks carry `target_id =
+  neuron_id`; source-specific terminal leaves carry `target_id = source_id` so
+  they can use the presynaptic source's activity. Terminal leaves are emitted
+  from the stored socket inward toward the soma, so packet direction reads
+  synapse-to-soma.
+- **Axon tree** (kind 1): one leaf per unique non-self target (resolved from the
+  same incoming socket groups, ordered by target id). Each source neuron first
+  gets one host-side `ProcessRoot` descriptor containing the soma
+  center, dominant direction, soma-surface root point, first-fork point, root
+  radius, summed root weight, and unique target count. The emitted arbor roots at
+  `ProcessRoot::soma_root`, then emits a protected source-lit trunk to
+  `ProcessRoot::first_fork` before any real target branch can begin. The greedy
+  attach loop cannot attach leaves directly to the soma root or split the
+  root→first-fork edge, and relaxation holds both the root and descriptor
+  first-fork fixed. Single-target neurons use this same descriptor trunk before
+  their terminal target edge.
+
+  After that fixed trunk, the tree grows by **Prim-like greedy attach**: each
+  iteration adds the one globally-best `(leaf, attach-point)` edge, scored by
   `distance + tree_score_curvature·curvature + tree_score_density·density +
   tree_score_degree·degree`. An attach point may **split an existing edge**,
   inserting an internal node — this is where shared trunks and forks emerge.
   After each attach, a `relax_window`-deep pass pulls internal nodes toward the
   mean of parent+children (`relax_lerp`) and repels nearby branches
-  (`relax_repel`); the soma root and the fixed leaf sockets are never moved. A
-  single-target neuron takes the trivial fast path (root → one leaf, no shared
-  root). All draws use `mix_key`/`hash32` with the `salt::TREE_*` constants,
+  (`relax_repel`); protected trunk nodes and the fixed leaf sockets are never
+  moved. All draws use `mix_key`/`hash32` with the `salt::TREE_*` constants,
   disjoint from connectivity and dendrite draws; tie-breaks are by
   `(leaf target_id, node index)` so generation is fully seed-reproducible.
 - **Lighting `target_id` contract** (preserved): every internal trunk/fork edge
@@ -149,11 +172,15 @@ leaf's weight is the sum of `connectivity::weight(id, j, src_type)` over the
 draws that resolved to it, taken as `unsigned_abs().max(1)` so inhibitory
 (negative) weights still give a visible positive-width twig. A bottom-up pass
 (descending depth, deterministic order) sums each node's subtree weight, and
+internal nodes use
 `radius = R_trunk · √(subtree_weight / total_weight)`, floored at
-`R_trunk · twig_radius_fraction`. `R_trunk = base_radius · axon_root_radius_fraction`.
-The trunk carries 100% of the weight at full radius; each fork sheds its
-children's share. The √ (Murray/Rall, area-preserving) keeps trunks substantial
-and the thinnest twig still visible — see [`../decisions/manifold.md`](../decisions/manifold.md).
+`R_trunk · twig_radius_fraction`. `R_trunk = base_radius · axon_root_radius_fraction`
+and the locked root fraction is `0.90`. Terminal leaf nodes are set directly to
+the twig floor so every terminal edge has a fair trunk-to-tip taper, including
+single-target arbors. The protected trunk carries 100% of the weight at full
+radius; each fork sheds its children's share. The √ (Murray/Rall,
+area-preserving) keeps trunks substantial and the thinnest twig still visible —
+see [`../decisions/manifold.md`](../decisions/manifold.md).
 
 **Soft fork degree.** The `tree_score_degree` term makes a node resist its
 3rd/4th child (penalty monotonic in current child count), biasing toward 2-3-way
@@ -164,34 +191,113 @@ fork-degree histogram, index 5 = "5+") plus `tree_depth_max/mean` and
 
 Source-type bytes are built from the same region+seed contract used for
 production connectivity, so morphology target resolution matches the sim's real
-`target_with_cell` rule. Duplicate and self targets are filtered before
-generation, unique-target coverage is the acceptance target, and the shared
-arbor is budgeted with named segment classes plus slack rather than an opaque
-fixed cap.
+`target_with_cell` rule. Self targets are filtered out of the stored incoming
+view. Duplicate targets are retained as raw incoming records, then aggregated
+only for visible socket groups and axon leaves by summed absolute weight.
+Unique-target coverage is the acceptance target, and the shared arbor is
+budgeted with named segment classes plus slack rather than an opaque fixed cap.
 
 `MorphSegment` is the **branch-only** contract: 48 bytes, std430, 16-aligned. It carries two endpoints (`a`, `b`), `radius_a`, `radius_b`, `neuron_id`, `path_len`, `kind` (0=dendrite, 1=axon), and `target_id`. Field order is a hard Rust ↔ WGSL contract — see `crates/brain-visualizer/src/sim/morphology.rs → MorphSegment` and the matching WGSL struct in `render_morphology.wgsl`. The size assert is `crates/brain-visualizer/src/sim/morphology.rs → segment_layout_is_48_bytes`.
 
-`MorphSphereInstance` is the **soma-only** contract: 32 bytes, 16-aligned. One instance per neuron, emitted at `initialize()` time by `crates/brain-visualizer/src/sim/morphology.rs → emit_soma_spheres` from the neuron position arrays. Fields: `center: [f32; 3]`, `radius: f32` (= `params::R0`), `neuron_id: u32`, `kind: u32` (= 2 for soma), `_pad0`, `_pad1`. The size assert is `crates/brain-visualizer/src/sim/morphology.rs → sphere_instance_layout_is_32_bytes`.
+`MorphSphereInstance` is the **soma-only** contract: 48 bytes, 16-aligned. One instance per neuron, emitted at `initialize()` time by `crates/brain-visualizer/src/sim/morphology.rs → emit_soma_spheres` from the neuron position arrays plus the matching host-side `ProcessRoot` descriptor. Fields: `center: [f32; 3]`, `radius: f32` (= `params::R0`), `neuron_id: u32`, `kind: u32` (= 2 for soma), `_pad0`, `_pad1`, `root_dir: [f32; 3]`, and `root_pull: f32`. `root_dir/root_pull` carry the dominant axon root direction and bounded deformation strength consumed by `render_morphology.wgsl → vs_sphere`; neurons with no unique outgoing target get zero pull. The size assert is `crates/brain-visualizer/src/sim/morphology.rs → sphere_instance_layout_is_48_bytes`.
 
-`path_len` is the cumulative path length from the soma to endpoint `a`. The
-generator computes it from the emitted sampled chain distance, and sibling
+`path_len` is the cumulative path length from the branch root to endpoint `a`:
+incoming source-specific dendrite leaves root at their stored socket and travel
+inward, shared dendrite stems root at their aggregate branch point, and axons
+root at `ProcessRoot::soma_root`.
+The generator computes it from the emitted sampled chain distance, and sibling
 branches start from their parent's endpoint path instead of accumulating across
 unrelated siblings. The morphology renderer uses it again in v0.3.3 by adding a
 local segment interpolant (`t * length(b-a)`) to recover per-fragment path
-position for the traveling packet in `render_morphology.wgsl`. All hash inputs use
-`crates/brain-visualizer/src/connectivity/hash.rs → mix_key, hash32` with salts
-defined in `crates/brain-visualizer/src/sim/morphology.rs → salt` so
+position for the traveling packet in `render_morphology.wgsl`. All hash inputs
+use `crates/brain-visualizer/src/connectivity/hash.rs → mix_key, hash32` with
+salts defined in `crates/brain-visualizer/src/sim/morphology.rs → salt` so
 morphology draws stay disjoint from connectivity target/weight draws.
+
+**Adaptive edge subdivision.** Every emitted edge is tessellated by
+`crates/brain-visualizer/src/sim/morphology.rs → adaptive_subsegments(edge_len,
+curvature, is_long_range, params)`, which is length- and curvature-aware:
+`subs = clamp(ceil(edge_len / max_len) + round(curvature · curvature_subsegment_boost),
+min_subsegments, edge_subsegments_max)`. `max_len` is
+`long_range_max_segment_length` for long-range hops and `max_segment_length`
+otherwise — long-range uses the *smaller* max so long fibers get more spatial
+samples for readable pulse motion. `curvature` is `|bend| / edge_len` from the
+salt-seeded bend vector, so the count is fully deterministic (no
+runtime/camera/float-reduction input). The locked defaults are
+`max_segment_length = 0.05`, `long_range_max_segment_length = 0.025`,
+`curvature_subsegment_boost = 2.0`, `edge_subsegments_max = EDGE_SUBSEGMENTS_MAX`,
+`min_subsegments = 1`. The legacy flat `edge_subsegments` knob is retained as a
+floor/legacy control (it still drives a dev-panel slider) but is no longer the
+sole subdivision control. `MorphSegment.path_len` cumulative continuity is
+preserved across the adaptively-tessellated chain.
+
+**Long-range axon waypoint routing.** A long axon leaf no longer crosses the
+volume as one giant span. `crates/brain-visualizer/src/sim/morphology.rs →
+long_range_waypoints` inserts 1–3 deterministic intermediate waypoints (terminal
+socket excluded), each placed on the parent→socket chord then bowed outward from
+the brain-volume centroid (`4·t·(1−t)` so the bow peaks mid-edge and vanishes at
+the anchors) plus salt-seeded lateral detours (`salt::TREE_BEND` /
+`salt::TREE_SPLIT`). The leaf is then emitted as `waypoints.len() + 1` bowed
+Bezier hops, each with its own bend and its own adaptive subdivision. An edge is
+classified "visually long" by **world distance** — the leaf chord parent→socket
+exceeding `long_range_chord_cells · grid.cell_size` (see
+[`connectivity.md`](connectivity.md) for why distance, not a connectivity flag).
+Waypoints are pure visual route geometry: the leaf still carries the real target
+id and the connectivity target/weight rule is untouched (guarded by
+`deterministic_with_long_range_waypoints` and `waypoints_preserve_leaf_target_identity`).
+Locked params: `long_range_chord_cells = 3.0`, `long_range_max_waypoints = 3`
+(mirrored by `LONG_RANGE_MAX_WAYPOINTS`), `long_range_waypoint_span = 0.20`,
+`long_range_lateral_offset = 0.12`.
+
+**Bushy local dendrite decoration.** Beyond the real presynaptic incoming
+geometry, `emit_incoming_dendrites` grows a bushy local arbor off each incoming
+group's tip: secondary branchlets (outward processes with curl + 3D splay) and
+terminal twigs (a thin splayed brush, each twig with its own salt-seeded curl so
+curvature varies per branch rather than one bow per edge), with a trunk→twig
+radius taper (`dendrite_twig_radius_fraction ≈ 0.18` of base). The new locked
+controls are `dendrite_branchlet_count/length_fraction/radius_fraction`,
+`dendrite_twig_count/length_fraction/radius_fraction`, `dendrite_twig_curl`, and
+`dendrite_decor_group_max`; new salts are `salt::DENDRITE_BRANCHLET`,
+`DENDRITE_TWIG`, `DENDRITE_TWIG_CURL`.
+
+**Activity-owner invariant (contract).** Real presynaptic incoming leaves keep
+`kind == 0`, `neuron_id` = the receiving neuron, `target_id` = the source id, and
+`path_len = 0` — the renderer derives their activity from `target_id`. Decorative
+branchlets and twigs are **self-owned** (`target_id == neuron_id`) and never
+invent target ids, so they light with the neuron and can never corrupt
+presynaptic semantics (guarded by
+`bushy_dendrite_decorations_preserve_presynaptic_owner_rule`).
+
+**Decoration ramp with N.** Dendrite decoration density is neuron-count-aware
+(`crates/brain-visualizer/src/sim/morphology.rs → effective_decor_group_max`):
+full below `DECOR_FULL_N ≈ 2400`, ramped linearly to 0 by `DECOR_ZERO_N = 8000`,
+because the morphology segments are bound as a single GPU storage buffer near the
+128 MiB binding limit (~2.76 M segment ceiling at the high-N stress scale). The
+ramp is part of the config (N is an input), so same config+seed stays
+bit-identical, and it never drops real presynaptic geometry. The binding-ceiling
+detail is owned by [`scaling.md`](scaling.md). Three of the new dendrite controls
+are user-exposed as generator controls (regenerate `applyKind`):
+`dendriteBranchletCount`, `dendriteTwigCount`, `dendriteDecorGroupMax`
+(runtime-clamped to compile-time maxes); the rest stay locked. The dev-panel
+wiring is owned by [`dev-panel.md`](dev-panel.md).
 
 The buffer cap is `n * max_segs_per_neuron(k)`, where the per-neuron cap is
 `dendrite_budget + trunk_cluster_budget + k·terminal_twig_budget + cap_slack`
 (`crates/brain-visualizer/src/sim/morphology.rs → segment_cap, max_segs_per_neuron`)
-rather than a fixed constant. The Prim tree emits roughly `2k` edges ×
-`edge_subsegments` axon segments, so the per-target budget is sized for the
-descriptor-max `edge_subsegments` (`EDGE_SUBSEGMENTS_MAX`) — the cap never
-under-allocates regardless of where the live `edge_subsegments` slider sits. If
-the cap is hit, the excess is counted in `Morphology::dropped` and printed; no
-silent truncation.
+rather than a fixed constant. The Prim tree emits roughly `2k` edges, and each
+edge's subsegment count is set by the adaptive rule (see below), bounded above by
+the descriptor-max `EDGE_SUBSEGMENTS_MAX`; a long-range leaf can additionally
+route through up to `LONG_RANGE_MAX_WAYPOINTS + 1` hops, so the per-target budget
+is sized for `(LONG_RANGE_MAX_WAYPOINTS + 1) · EDGE_SUBSEGMENTS_MAX` — the cap
+never under-allocates regardless of edge length, waypoint count, or where the
+live subdivision sliders sit. If the cap is hit, the excess is counted in
+`Morphology::dropped` and printed; no silent truncation.
+
+`MorphologyStats` reports the reverse incoming profile used by review artifacts:
+raw incoming count, unique visible socket groups, mean/p99/max raw in-degree,
+mean/p99/max visible groups per target, incoming capped/dropped counts, storage
+bytes for raw/range/group vectors, total segment count, cap, p99/max segments
+per neuron, and total dropped count.
 
 ## Exposed vs protected parameters
 
@@ -199,9 +305,11 @@ silent truncation.
 splits into two classes:
 
 - **Exposed (tunable):** the generator shape fields — branch counts, reach,
-  socket placement, radius/taper fractions, and the tree-grammar knobs
+  socket placement, radius/taper fractions, the tree-grammar knobs
   (`tree_score_curvature/density/degree`, `relax_lerp/repel/window`,
-  `edge_subsegments`). These are surfaced to the hidden dev
+  the legacy floor `edge_subsegments`), and three bushy-decoration controls
+  (`dendriteBranchletCount`, `dendriteTwigCount`, `dendriteDecorGroupMax`,
+  runtime-clamped to their compile-time maxes). These are surfaced to the hidden dev
   panel as a `MorphologyConfig` (see [`dev-panel.md`](dev-panel.md)) and reach
   the backend through the WASM entry point
   `crates/brain-visualizer/src/lib.rs → WasmGpuBackend::set_morphology_config` →
@@ -216,6 +324,17 @@ splits into two classes:
   `GeneratorConfig::apply_to` even when a config is applied, so the buffer cap
   and determinism namespace cannot be moved from the UI. Exposing them risks
   silent truncation/OOM or breaking seed reproducibility, with no visual upside.
+
+The older dead `dendritePrimaryMin` / `dendritePrimarySpan` controls are no
+longer in the exposed config surface. The current target-owned incoming
+dendrite generator's effective placement controls are `socketCount*`,
+`socketRadius*`, `socketTipPreference`, `dendritePrimaryRootCount`,
+`dendriteForkDistance`, `dendriteCurveTightness`,
+`dendriteMidRadiusFraction`, `dendriteTipRadiusFraction`, and
+`dendriteGroupSpacing`. Old persisted morphology payloads that still contain
+removed fields are accepted and normalized away by the web loader/Rust JSON
+deserializer. The duplicate `generator.axonCurveLift` descriptor is also not
+exposed; `connectionCurveLift` is the user-facing curve control.
 
 ## Rendering
 
@@ -248,9 +367,15 @@ model and pass order are owned by
 
 The `crates/brain-visualizer/examples/morph_view.rs` harness exercises the full pipeline: N=1200/K=16,
 250 warm-up ticks, three camera distances, plus a `morph_resting_opacity=0` frame
-to verify the lit-connections-only look. Its artifact JSON now snapshots the full
+to verify the lit-connections-only look. Its artifact JSON snapshots the full
 `MorphologyConfig` (all three groups) and emits a stronger-active-brightness
-variant to `/tmp/morph_view_active_bright_stats.json` for the tuning pass.
+variant to `/tmp/morph_view_active_bright_stats.json` for the tuning pass. In
+the visual-product-polish consolidated gate, the default artifact reported
+`segment_count=103526`, `dropped_count=0`, `incoming_dropped_count=0`,
+`segment_cap_per_neuron=296`, `segment_cap=355200`, p99/max segments
+`159/242`, and incoming visible groups mean/p99/max `10.356667/29/45`.
+Converted frames were nonblank and showed close soma-proximal dendrite
+branching.
 
 ## Update when
 
@@ -261,6 +386,12 @@ variant to `/tmp/morph_view_active_bright_stats.json` for the tuning pass.
   blocking instead of the current hash-shuffle.
 - `MorphologyParams`, `MorphologyStats`, or the source-type bytes contract
   change.
+- The adaptive-subdivision rule (`adaptive_subsegments`), the long-range
+  classification/waypoint routing (`long_range_waypoints`, `LONG_RANGE_MAX_WAYPOINTS`),
+  the bushy local decoration grammar, or the decoration ramp
+  (`effective_decor_group_max`, `DECOR_FULL_N`/`DECOR_ZERO_N`) change.
+- The activity-owner invariant (presynaptic leaf `kind/neuron_id/target_id/path_len`
+  vs self-owned decoration) changes.
 - The exposed-vs-protected split changes (a field is added to/removed from the
   `MorphologyConfig` generator surface, or a budget/salt becomes exposed), or the
   `set_morphology_config` apply path changes.

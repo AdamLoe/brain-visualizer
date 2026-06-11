@@ -25,6 +25,7 @@ not live per-frame metrics.
 - `parseMetrics` layout mapping — `web/src/core/settings.ts → parseMetrics, METRICS_LAYOUT`
 - Branching-ratio rolling history — `crates/brain-visualizer/src/sim/gpu/mod.rs` (`METRICS_HISTORY_LEN = 64`)
 - Morphology build/review stats and artifact JSON — `crates/brain-visualizer/examples/morph_view.rs`
+- Morphology active/recent draw-count readback — `crates/brain-visualizer/src/sim/gpu/mod.rs → GpuBackend::read_active_segment_count`
 
 ## What it does NOT own
 
@@ -137,6 +138,19 @@ successive spike-count samples averaged over the window, approximating the
 avalanche branching parameter σ. The dev panel's Dynamics tab classifies σ
 into subcritical (< 0.9) / critical (0.9–1.1) / supercritical (> 1.1) bands.
 
+## Morphology draw-count (selected active/recent segments)
+
+The morphology active/recent compaction (see [`gpu-rendering.md`](gpu-rendering.md))
+exposes a draw-count metric: the number of segments the last `render_full`
+selected for the tube passes versus the total generated segment count.
+`crates/brain-visualizer/src/sim/gpu/mod.rs → GpuBackend::read_active_segment_count`
+copies the GPU-written `active_selected` counter into `selected_staging` and maps
+it, returning `(selected, total)`. This is the morphology draw-count metric for
+profiler/HUD diagnostics — selected stays near ~0.6% of total at the low-firing
+default and rises with activity. It is a **blocking** readback off the per-frame
+path (the live draw sizes itself from GPU indirect args, never from this count),
+so it is native-only diagnostics, not an always-on HUD counter.
+
 ## Morphology review stats
 
 `crates/brain-visualizer/examples/morph_view.rs` writes artifact-only
@@ -161,6 +175,7 @@ but the timing field is not comparable to native runs.
 - The profiler dump JSON schema changes (`crates/brain-visualizer/src/profiler.rs → ProfileSnapshot`
   and `web/src/render/profiler.ts → ProfileSnapshot` must stay in sync).
 - Morphology review artifact contents or timing sources change.
+- The morphology selected-segment draw-count readback (`read_active_segment_count` / `active_selected`) changes shape or wiring.
 
 ## See also
 

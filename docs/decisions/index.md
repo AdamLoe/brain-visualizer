@@ -16,8 +16,8 @@ constrains.
 | Self-organized criticality target, region topology + ambient drive, heterogeneity determinism, weight norm, input modes | [`dynamics.md`](dynamics.md) |
 | Procedurally folded brain surface, region assignment, per-neuron morphology geometry | [`manifold.md`](manifold.md) |
 | LOD glow→bodies, active-connections-only-by-default, morphology supersedes ribbons/cylinders | [`rendering.md`](rendering.md) |
-| Three tiers built+benchmarked, K as a per-tier scaler axis, 1M-default / 10M-gated honest adaptation | [`scaling.md`](scaling.md) |
-| "Pretty toy" interaction model, natural start (no scripted intro), sonification opt-in, speed presets, brain-state presets | [`interaction.md`](interaction.md) |
+| Three tiers, K as a per-tier scaler axis, 20k product cap separate from GPU capacity | [`scaling.md`](scaling.md) |
+| "Pretty toy" interaction model, natural start (no scripted intro), speed presets, brain-state presets | [`interaction.md`](interaction.md) |
 | First-class profiling + corner HUD, periodic GPU reduction + async readback, cheap hot-loop counters | [`profiling.md`](profiling.md) |
 | Hidden dev panel + impact-dot metadata, versioned localStorage, no preset manager | [`dev-tooling.md`](dev-tooling.md) |
 

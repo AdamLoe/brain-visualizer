@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-06
+last_updated:  2026-06-11
 ---
 
 # Dev Panel
@@ -42,31 +42,55 @@ when the panel is hidden.
 
 ## Tabs
 
-Six tabs are defined in the `TABS` constant in `web/src/ui/dev-panel.ts`:
+Seven tabs are defined in the `TABS` constant in `web/src/ui/dev-panel.ts`:
 
 | Tab | Content |
 |---|---|
 | Monitor | Live spike/voltage/E-I metrics + network-state classifier |
 | Dynamics | E/I balance bar, branching-ratio band, per-region rates, interpretive summary |
 | Network | Rebuild controls (N/K/seed) + live Drive and Structure knobs |
-| Rendering | Visual knobs with impact dots |
-| Debug View | Read-only string labels for current visual-mode settings |
+| Appearance | Color, neuron glow/body, morphology visibility, reach, bloom knobs, and morphology lighting |
+| Morphology | Descriptor-driven generator and render-quality knobs |
+| Debug | Read-only string labels for current visual-mode settings |
 | Storage | Reset-to-defaults button + hidden review presets + localStorage key/size readout |
 
-The Rendering tab includes a compact Morphology subsection. The top of it groups
-the live render knobs that live in the `VisualSettings` Float32Array:
-`connectionLayer`, `connectionLightNext`, `morphRestingOpacity`,
-`connectionVisualWidth`, and `connectionCurveLift`. (`connectionLightPast` was
-removed; Float32Array index 9 is tombstoned as `reserved_zero`.) That grouping is
-UI consolidation only; it does not add new Float32Array indices.
+The Appearance tab groups the live render knobs that live in the
+`VisualSettings` Float32Array: `colorBy`, `neuronVisibility`, `glowTau`,
+`neuronVisualRadius`, `activeNeuronRadiusBoost`, `inactiveNeuronOpacity`,
+`voltageGlowStrength`, `connectionLayer`, `connectionLightNext`,
+`morphRestingOpacity`, `connectionVisualWidth`, `connectionCurveLift`,
+`longRangeReachFrac`, `maxReachCells`, and `bloomStrength`.
+`connectionLightPast` was removed; Float32Array index 9 is tombstoned as
+`reserved_zero`.
 
-The `Color by` selector includes the additive identity-color mode; it reuses
-the existing `colorBy` setting and does not add a Float32Array index or a
-persistence key. Below those, the subsection renders the **morphology config** controls — a
-separate surface (see the Morphology config controls section below) that does
-**not** touch the Float32Array. These expose the generator/render-quality/lighting
+`connectionLayer` (index 17, default 1) is a 3-mode enum surfaced as a
+labeled "Connections" dropdown in the "Morphology Visibility" section:
+
+| Value | Label | Behaviour |
+|---|---|---|
+| 0 | Off | Skips all morphology work — compaction compute, tube passes, soma passes |
+| 1 | Active/recent | Draws only segments near a spike (DEFAULT) |
+| 2 | Resting debug | Full resting morphology; currently requires a build with `DRAW_LEGACY_ALL_SEGMENTS`; otherwise behaves like mode 1 |
+
+The tab also contains a "Morphology Lighting" section that renders the
+`MORPH_DESCRIPTORS` rows with `group === "lighting"` via
+`_buildMorphLightingRows`. These are `live`/`uniform` lighting controls;
+`applyKind === "uniform"` rows call `onMorphLive` immediately.
+
+The `Color by` selector includes `Brain` (`colorBy = 6`) and Brain is the clean
+default. It reuses the existing `colorBy` setting at Float32Array index 18 and
+does not add a persistence key. The older `pointRadius`, `surfaceOpacity`, and
+`surface` controls are no longer exposed or persisted. Their Float32Array slots
+remain for compatibility and are written from defaults (`pointRadius` index 1,
+`surfaceOpacity` index 11, `surface` index 20). The Rust optional surface path
+still exists and Brain mode can tint it pink when it is explicitly on, but the
+current product settings UI keeps surface controls quarantined and default-off.
+
+The Morphology tab renders the **morphology config** controls: a separate
+surface (see the Morphology config controls section below) that does **not**
+touch the Float32Array. These expose the generator and render-quality
 parameters of the procedural neuron geometry, backed by their own
-`bv2_morph_v1` localStorage key and a dedicated WASM entry point.
+`bv2_morph_v2` localStorage key and a dedicated WASM entry point.
 
 ## Network-state classifier
 
@@ -113,11 +137,21 @@ As of the current codebase, every `VisualizerSettings` field except
 `"brain-reset"` to `"live"` once the integrate uniform was read every tick.
 N/K/seed live in `AppConfig` and are out of scope for `SETTING_IMPACT`.
 
-The `adaptiveScalerEnabled` field (Float32Array index 23) is **reserved/inert**:
-runtime auto-scaling was removed, so its "Adaptive scaler" select is gone from
-the panel. The field and its index are kept only to preserve the Rust↔TS
-`VisualSettings` contract (see the index-contract section below); no decision path
-reads it. Re-arming a scaler is deferred — see
+The `pointRadius`, `surfaceOpacity`, `surface`, and `adaptiveScalerEnabled`
+fields are **reserved/inert** in the panel:
+
+- `pointRadius` (index 1) is stale because live far billboards size from
+  `neuronVisualRadius`; it is not saved in `SavedDev` and `toFloat32Array()`
+  writes `DEFAULT_SETTINGS.pointRadius`.
+- `surfaceOpacity` (index 11) and `surface` (index 20) feed a dormant optional
+  surface path; both are absent from public persistence/debug UI and are written
+  from defaults.
+- `adaptiveScalerEnabled` (index 23) stays zero-written because runtime
+  auto-scaling was removed.
+
+The fields and indices are kept only to preserve the Rust<->TypeScript
+`VisualSettings` contract (see the index-contract section below). Re-arming a
+scaler is deferred — see
 [`../plans/future_roadmap.md`](../plans/future_roadmap.md) and
 [`scaling.md`](scaling.md).
 
@@ -145,27 +179,34 @@ the already-hidden dev panel, intended only for review and comparison.
 
 ## Morphology config controls
 
-The morphology generator, render-quality, and lighting parameters of the
-procedural neuron geometry are exposed through a **descriptor-driven** surface
-that is independent of the `VisualizerSettings` Float32Array. The descriptor
-array is the single source of truth for the controls — `web/src/core/morph-config.ts → MORPH_DESCRIPTORS`.
+The morphology generator and render-quality parameters of the procedural
+neuron geometry are exposed through a **descriptor-driven** surface that is
+independent of the `VisualizerSettings` Float32Array. The descriptor array is
+the single source of truth for the controls — `web/src/core/morph-config.ts → MORPH_DESCRIPTORS`.
 Each descriptor carries its json path, group, label, min/max/step, default,
 impact, and apply kind; the dev panel renders one row per descriptor
 (`web/src/ui/dev-panel.ts → _buildMorphConfigRows, _morphRow`) rather than
-hand-written rows. To change which controls exist, edit the descriptor array —
-not the panel.
+hand-written rows. Rows use the same slider + number input + reset button +
+tooltip helper as numeric rendering controls. To change which controls exist,
+edit the descriptor array — not the panel. A unit test in
+`web/src/ui/dev-panel.test.ts` asserts each descriptor default matches
+`DEFAULT_MORPH_CONFIG`.
 
-Three groups (the structure is the nested `MorphologyConfig` shape in
-`web/src/core/morph-config.ts → MorphologyConfig`):
+Three descriptor groups exist in `MORPH_DESCRIPTORS` (the nested
+`MorphologyConfig` shape is in `web/src/core/morph-config.ts → MorphologyConfig`):
 
 - **generator** — maps into the Rust `MorphologyParams` generator fields (branch
   counts, reach, radius/taper fractions, socket placement). Impact
-  `renderer-rebuild`; applied by morphology regeneration.
+  `renderer-rebuild`; applied by morphology regeneration. Rendered in the
+  Morphology tab by `_buildMorphConfigRows`.
 - **renderQuality** — `tubeSides` and soma sphere tessellation (`sphereSlices`,
-  `sphereStacks`). Impact `renderer-rebuild`; applied by a morph pipeline rebuild.
-- **lighting** — light direction x/y/z, ambient/diffuse/rim, plus the
-  resting/active brightness split (`restingBrightness`, `activeBoost`). Impact
-  `live`; applied by a uniform-only write.
+  `sphereStacks`). Impact `renderer-rebuild`; applied by a morph pipeline
+  rebuild. Also rendered in the Morphology tab.
+- **lighting** — light direction x/y/z, ambient/diffuse/rim, the
+  resting/active brightness split (`restingBrightness`, `activeBoost`), and the
+  active-opacity layer controls (`activeOpacity`, `inactiveOpacityFloor`).
+  Impact `live`; applied by a uniform-only write. Rendered in the
+  **Appearance** tab under "Morphology Lighting" by `_buildMorphLightingRows`.
 
 Ranges are deliberately **narrow bounds around the locked generator default**
 (`crates/brain-visualizer/src/sim/morphology.rs → MorphologyParams::locked_default`) —
@@ -184,20 +225,55 @@ narrowest update. The impact-dot colors mean the same thing as in the table
 above; the only difference is that for morphology the red-dot controls are
 batched behind the Rebuild button instead of pushing on each change.
 
+**Dendrite generator controls.** The target-owned incoming dendrite generator is
+controlled by the live socket-placement controls (`socketCount*`,
+`socketRadius*`, `socketTipPreference`) plus the soma-proximal branching
+controls and dendrite decoration controls:
+
+| Control | Default | Range |
+|---|---:|---:|
+| `dendritePrimaryRootCount` | `4` | `1..6` |
+| `dendriteForkDistance` | `1.45` | `1.15..2.20` |
+| `dendriteCurveTightness` | `0.55` | `0..1.25` |
+| `dendriteMidRadiusFraction` | `0.78` | `0.45..0.90` |
+| `dendriteTipRadiusFraction` | `0.42` | `0.22..0.62` |
+| `dendriteGroupSpacing` | `0.55` | `0..1.50` |
+| `dendriteBranchletCount` | `1` | `0..1` |
+| `dendriteTwigCount` | `1` | `0..2` |
+| `dendriteDecorGroupMax` | `12` | `0..16` |
+
+The three decoration controls (`dendriteBranchletCount`, `dendriteTwigCount`,
+`dendriteDecorGroupMax`) are runtime-clamped to the compile-time buffer maxes;
+the `hero-review` preset maximizes them for close-up screenshots but they are
+NOT the product defaults. Buffer-sized knobs (subdivision lengths,
+`edgeSubsegments`, waypoint counts) remain locked in the descriptor — changing
+them at runtime without resizing the pre-allocated GPU buffer would drop
+segments silently.
+
+The older dead `dendritePrimaryMin` / `dendritePrimarySpan` fields and duplicate
+`generator.axonCurveLift` descriptor are removed from the exposed descriptor
+surface. Old persisted morphology payloads that still contain those fields are
+accepted, normalized to the current known key set, and omitted on the next save.
+
 ## Settings persistence contract
 
-**Keys:** `bv2_settings_v1`, `bv2_morph_v1`, `bv2_config_v1`.
+**Keys:** `bv2_settings_v2`, `bv2_morph_v2`, `bv2_config_v2`.
 
-**Schema:** settings persist as `{ version: 5, public: {…}, dev: {…} }`. The `public` sub-object
-holds user-facing beauty knobs; `dev` holds tuning/debug knobs. The split is
-defined by the `SavedPublic` and `SavedDev` interfaces in `web/src/core/settings.ts`.
+**Schema:** settings persist as `{ version: 5, public: {…}, dev: {…} }`. The
+`public` sub-object holds user-facing beauty knobs; `dev` holds tuning/debug
+knobs. The split is defined by the `SavedPublic` and `SavedDev` interfaces in
+`web/src/core/settings.ts`. Current clean defaults include `colorBy = 6`
+(`Brain`), `glowTau = 10`, `heterogeneity = 0.50`, `iExt = 0.014`,
+`morphRestingOpacity = 0.0`, `longRangeReachFrac = 0.14`, and
+`maxReachCells = 14`.
 
-**Version sentinel:** any saved settings object whose `version` field is not `5` is
-silently discarded and defaults are used. No migration is attempted. (The
-sentinel is bumped whenever a Float32Array index is repurposed or a default
-changes so old saves cannot silently mislead.) The v0.2.1 Morphology tuning
-did require a bump because the shipped render defaults changed even though the
-float-array contract stayed intact.
+**Version sentinel:** any saved settings object whose `version` field is not `5`
+is silently discarded and defaults are used. No migration is attempted. The
+high-scale default changes bumped `bv2_settings_v1` → `bv2_settings_v2` so
+old high-excitability/high-`iExt` saved values are discarded rather than
+masking the new low-firing defaults. Removed fields (`pointRadius`,
+`surfaceOpacity`, `surface`) are ignored and fall back to defaults because
+they are no longer in the saved schema.
 
 **Merge-over-defaults:** on load, each saved key is merged over
 `DEFAULT_SETTINGS` with `?? base_value` guards (`web/src/core/settings.ts → mergeOver`).
@@ -211,12 +287,27 @@ configuration knobs. Runtime metrics (`spikesPerSec`, `branchingRatio`, etc.)
 are on the separate `Metrics` interface and are never written to localStorage.
 
 **Separate morphology config key.** The morphology config (see Morphology config
-controls above) persists under its **own** key `bv2_morph_v1`, independent of
-`bv2_settings_v1`. Same versioned + merge-over-defaults shape:
+controls above) persists under its **own** key `bv2_morph_v2`, independent of
+`bv2_settings_v2`. Same versioned + merge-over-defaults shape:
 `web/src/core/morph-config.ts → loadMorphConfig, saveMorphConfig, resetMorphConfig`,
-with a `version` sentinel and `MorphologyConfig` defaults. It is deliberately
-NOT folded into `bv2_settings_v1` because it does not cross the frozen
-Float32Array boundary — see [`../decisions/dev-tooling.md`](../decisions/dev-tooling.md).
+with a `version` sentinel and `MorphologyConfig` defaults. Additive fields such
+as the active-opacity lighting knobs and the dendrite branching controls are
+backfilled from defaults when older saved `bv2_morph_v2` payloads omit them.
+The high-scale default changes bumped `bv2_morph_v1` → `bv2_morph_v2` so
+stale `lighting.restingBrightness` values do not suppress the new hidden-resting
+default (`restingBrightness = 0.0`). The loader also normalizes to the current
+known key set, so obsolete morphology fields from older saved payloads are
+ignored on load and omitted on the next save/send to WASM. It is deliberately
+NOT folded into `bv2_settings_v2` because it does not cross the frozen
+Float32Array boundary — see
+[`../decisions/dev-tooling.md`](../decisions/dev-tooling.md).
+
+At boot, `web/src/main.ts` queues `morphConfigToJson(loadMorphConfig())` before
+the backend exists and queues it again after `WasmGpuBackend.create()` succeeds,
+so persisted morphology config reaches Rust on the first live frame without a
+slider interaction. The dev panel constructor receives persisted Network/Drive
+initial values from `main.ts`, so the Network tab no longer builds with defaults
+and then rebuilds itself after `setInitialValues()`.
 
 **Reset:** `web/src/core/settings.ts → resetSettings` removes the settings
 localStorage key, restores `current` to `DEFAULT_SETTINGS`, and notifies all
@@ -228,7 +319,7 @@ the Network tab controls to `DEFAULT_CONFIG`, updates `main.ts`'s in-memory
 `AppConfig`, and schedules a rebuild back to the default N/K/seed. That means
 reset now restores the live network to the clean default values instead of only
 changing the stored controls. The storage readout shows all three app-owned
-keys, including `bv2_morph_v1`.
+keys, including `bv2_morph_v2`.
 
 ## Float32Array index contract (corruption risk)
 
@@ -239,6 +330,11 @@ assignment is the **shared contract** with `crates/brain-visualizer/src/sim/gpu/
 updating the other silently corrupts all downstream visual settings.** The
 authoritative index list is in the inline comments of `web/src/core/settings.ts →
 VisualizerSettings` and `crates/brain-visualizer/src/sim/gpu/mod.rs → VisualSettings`.
+Index 9 (`connectionLightPast`), index 16 (`signalSource`), and index 23
+(`adaptiveScalerEnabled`) are zero-written tombstones. Index 1 (`pointRadius`),
+index 11 (`surfaceOpacity`), and index 20 (`surface`) are default-written
+quarantined slots: TypeScript keeps runtime fields where needed for the frozen
+type/metadata surface, but persistence and the panel omit the removed settings.
 
 ## Slider/select sync
 
@@ -258,7 +354,7 @@ stored as `_unsubSettings` and called in `destroy()`.
 - The localStorage version sentinel changes, or a UI consolidation repurposes a
   saved setting without changing the underlying float-array contract.
 - A morphology control is added/removed/re-ranged (edit `MORPH_DESCRIPTORS`), or
-  the `MorphologyConfig` shape / `bv2_morph_v1` schema changes.
+  the `MorphologyConfig` shape / `bv2_morph_v2` schema changes.
 - The instant-tooltip mechanism (`_buildTooltip` / `_attachTip` / `data-tip`) changes.
 
 ## See also

@@ -48,8 +48,8 @@
 ## Versioned localStorage with merge-over-defaults; static hidden review presets only
 
 - **Decision.** Dev-panel settings persist under a versioned key
-  (`bv2_settings_v1`), morphology config persists under `bv2_morph_v1`, and app
-  runtime config persists under `bv2_config_v1`. On load, saved fields are
+  (`bv2_settings_v2`), morphology config persists under `bv2_morph_v2`, and app
+  runtime config persists under `bv2_config_v2`. On load, saved fields are
   merged over defaults field-by-field with `?? base` guards. There is still no
   public preset manager; the only presets are the static hidden review buttons
   `accepted-default`, `performance-review`, and `hero-review` in the Storage tab.
@@ -57,25 +57,31 @@
   version bump and without migration logic: the new field simply falls back to
   its default for existing saves. A version bump is reserved for semantically
   breaking changes (repurposed indices, changed defaults) where old data would
-  actively mislead. The review presets cover the reproducibility need without
+  actively mislead. Morphology loading also filters each group to known current
+  fields, so obsolete config keys from older saves are ignored rather than sent
+  back to Rust. The review presets cover the reproducibility need without
   growing a user-editable preset system.
 - **Applies to.** [`../architecture/dev-panel.md`](../architecture/dev-panel.md).
 - **Code anchors.** `web/src/core/settings.ts → loadSettings, mergeOver, resetSettings`;
   `web/src/core/morph-config.ts → loadMorphConfig, resetMorphConfig`;
   `web/src/core/types.ts → loadConfig, resetConfig`;
   `web/src/ui/dev-panel.ts → HIDDEN_REVIEW_PRESETS`.
-- **Tradeoffs.** No migration: users who had meaningful `dev` knob values set
-  before a breaking change lose them silently. Acceptable for a dev panel.
+- **Tradeoffs.** Default changes do not automatically reset old saved
+  visual/morph values unless the version sentinel is bumped. App config is the
+  exception for scale safety: saved `n` is clamped to the product cap on
+  load/save.
 
 ## Morphology config on a separate key + WASM entry point, not the Float32Array
 
 - **Decision.** The dev-panel morphology config (generator / render-quality /
-  lighting) persists under its own `bv2_morph_v1` localStorage key and reaches
+  lighting) persists under its own `bv2_morph_v2` localStorage key and reaches
   the backend through a dedicated `set_morphology_config(json)` WASM entry point
   that takes a JSON string — **not** by adding slots to the `VisualSettings`
-  Float32Array or to `bv2_settings_v1`. The dev panel renders its rows from a
-  typed descriptor array (`MORPH_DESCRIPTORS`) rather than bespoke per-control
-  code.
+  Float32Array or to `bv2_settings_v2`. The boot path queues the persisted
+  morphology config before backend creation and again after backend creation, so
+  Rust receives it without any slider interaction. The dev panel renders its rows
+  from a typed descriptor array (`MORPH_DESCRIPTORS`) rather than bespoke
+  per-control code, and descriptor defaults must match `DEFAULT_MORPH_CONFIG`.
 - **Why.** The 26-slot Float32Array index contract is a frozen, corruption-prone
   Rust↔TS boundary (see Float32Array decision below); the morphology config is a
   larger, nested, evolving surface where adding/removing a field should not risk
@@ -94,6 +100,94 @@
   (the reset path must clear both); a JSON round-trip per apply instead of a raw
   byte slice. Acceptable — morphology config is applied on explicit edits, not
   per-frame.
+
+## Numeric dev controls share one slider/input/reset widget
+
+- **Decision.** Rendering and morphology numeric controls use the shared
+  slider + number input + reset button + instant-tooltip helper in
+  `web/src/ui/dev-panel.ts`; morphology rows remain descriptor-driven.
+- **Why.** Tiny morphology ranges are not usable as drag-only sliders, and reset
+  buttons are only trustworthy when they read the same defaults the backend sees.
+  A shared helper keeps the panel's numeric controls mechanically consistent
+  while preserving the existing impact-dot model.
+- **Applies to.** [`../architecture/dev-panel.md`](../architecture/dev-panel.md).
+- **Code anchors.** `web/src/ui/dev-panel.ts → _sliderWithInput, _sliderRow,
+  _morphRow`; `web/src/core/morph-config.ts → MORPH_DESCRIPTORS`; `web/src/ui/dev-panel.test.ts`.
+
+## Tombstone or quarantine dead Float32Array slots instead of renumbering
+
+- **Decision.** `connectionLightPast` (index 9), `signalSource` (index 16), and
+  `adaptiveScalerEnabled` (index 23) are removed from UI/debug persistence paths
+  and zero-written, but the 26-slot `VisualSettings` array is not renumbered.
+  `pointRadius` (index 1), `surfaceOpacity` (index 11), and `surface` (index
+  20) are also removed from UI/persistence and default-written rather than
+  renumbered or exposed.
+- **Why.** Renumbering the Rust/TypeScript flat-array contract is a corruption
+  risk with little payoff. Tombstoning/quarantining removes misleading controls
+  while keeping old positional meaning stable and keeping dormant Rust render
+  paths available for explicit future work.
+- **Applies to.** [`../architecture/dev-panel.md`](../architecture/dev-panel.md),
+  [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md).
+- **Code anchors.** `web/src/core/settings.ts → SavedDev, toFloat32Array`;
+  `web/src/ui/dev-panel.ts → _buildRenderingTab, _buildDebugViewTab`;
+  `crates/brain-visualizer/src/sim/gpu/mod.rs → VisualSettings::from_slice`.
+
+## Version-reset over migration for semantically breaking default changes
+
+- **Decision.** When a wave of default changes would cause old saved values to
+  actively mislead — such as high-excitability/high-`iExt` saves masking the
+  new quiet-network defaults — the LS key version string is bumped (e.g.
+  `bv2_settings_v1` → `bv2_settings_v2`) rather than writing migration logic.
+  All three keys were bumped together in the high-scale defaults wave.
+- **Why.** A migration that rewrites old high-excitability saves to the new
+  low-firing defaults is indistinguishable from a reset for the user; a version
+  bump is simpler, audit-proof, and has no edge cases. The cost is that saved
+  visual preferences are discarded — acceptable for a dev-tool panel where users
+  can re-tune in a few seconds. The merge-over-defaults shape means the reset
+  leaves the user on the new clean defaults immediately.
+- **Applies to.** [`../architecture/dev-panel.md`](../architecture/dev-panel.md).
+- **Code anchors.** `web/src/core/settings.ts → SETTINGS_LS_KEY`;
+  `web/src/core/morph-config.ts → MORPH_CONFIG_LS_KEY`;
+  `web/src/core/types.ts → CONFIG_LS_KEY`.
+
+## Expose only bounded runtime-safe morphology knobs; lock buffer-sized ones
+
+- **Decision.** The dev panel exposes only a small, bounded set of new
+  morphology generator knobs at runtime (currently the three dendrite decoration
+  controls: `dendriteBranchletCount`, `dendriteTwigCount`,
+  `dendriteDecorGroupMax`). Buffer-sized knobs — subdivision lengths,
+  `edgeSubsegments`, waypoint counts — remain locked in the descriptor table
+  (max=current default, or simply omitted) and cannot be changed via the UI.
+- **Why.** The GPU morphology buffers are pre-allocated to fixed maxes at
+  pipeline build time. Changing a buffer-sized parameter without resizing the
+  buffer silently drops segments or overruns memory. The decoration controls are
+  safe to vary because they add detail within the existing buffer headroom.
+  Exposing a knob that appears interactive but corrupts data is worse than not
+  exposing it at all.
+- **Applies to.** [`../architecture/dev-panel.md`](../architecture/dev-panel.md),
+  [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md).
+- **Code anchors.** `web/src/core/morph-config.ts → MORPH_DESCRIPTORS`
+  (dendriteBranchletCount, dendriteTwigCount, dendriteDecorGroupMax entries);
+  `crates/brain-visualizer/src/sim/morphology.rs → MorphologyParams::locked_default`.
+- **Revisit when.** The pipeline rebuild path accepts dynamic buffer sizes, or a
+  separate "needs-rebuild" flow is added for buffer-sized changes.
+
+## Task-oriented settings IA over one oversized rendering tab
+
+- **Decision.** The dev panel uses Monitor / Dynamics / Network / Appearance /
+  Morphology / Debug / Storage tabs. Appearance owns live visual settings and
+  morphology lighting; Morphology owns descriptor-driven generator/render-quality
+  config; Debug is read-only current-state labels.
+- **Why.** The old Rendering tab mixed color, glow, connection visibility,
+  morphology generation, lighting, reach, quality, and stale surface state. A
+  task-oriented split keeps live tuning surfaces easier to trust while letting
+  advanced/debug capability remain hidden rather than deleted wholesale. Lighting
+  controls (uniform/live) sit in Appearance because they feel like live render
+  knobs, not geometry parameters; generator/quality controls (rebuild-backed)
+  stay in Morphology where users expect to rebuild.
+- **Applies to.** [`../architecture/dev-panel.md`](../architecture/dev-panel.md).
+- **Code anchors.** `web/src/ui/dev-panel.ts → TABS, _buildAppearanceTab,
+  _buildMorphLightingRows, _buildMorphConfigRows, _buildDebugViewTab`.
 
 ## Custom instant tooltips, not native `title=`
 

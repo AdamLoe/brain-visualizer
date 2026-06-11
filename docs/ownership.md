@@ -10,7 +10,7 @@ owner doc + allowed referencers; no code anchors).
   `owner` is the doc you edit; every other doc *links* to it.
 - **The rule itself** ("edit the owner; non-owners link, never redefine; move
   drift back to the owner") is generic and lives in the global authoring rules
-  (`~/.claude/agent-docs/v1/rules/authoring-rules.md`, rule 1).
+  (`~/agent-docs/v1/rules/authoring-rules.md`, rule 1).
 - **Adding owners:** when a concept gets a new owner or a cross-doc conflict
   appears, edit `_meta/ownership.json`.
 

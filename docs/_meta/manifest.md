@@ -1,7 +1,7 @@
 # Agent-docs manifest — brain_visualizer
 
 App-specific bindings for the global agent-docs kit. The generic skills and
-rules in `~/.claude/agent-docs/v1/` read the slots below; everything
+rules in `~/agent-docs/v1/` read the slots below; everything
 app-specific lives here, nothing generic does.
 
 ```yaml
@@ -53,11 +53,11 @@ Consult before declaring a commit done. "If you changed X → update Y."
 | `crates/brain-visualizer/src/sim/gpu/shaders/render_*.wgsl`, `bloom.wgsl`, `frustum_cull.wgsl`, `draw_indirect.wgsl` | `architecture/gpu-rendering.md`, `decisions/rendering.md` |
 | `crates/brain-visualizer/src/sim/gpu/shaders/{emit_edges,render_ribbon}.wgsl` (retired ribbon path) | `architecture/active-edges.md` |
 | `crates/brain-visualizer/src/sim/cpu/*`, `web/src/cpu/cpu-worker.ts`, `web/src/cpu/cpu-renderer.ts`, the `cpu-threads` feature | `architecture/cpu-backend.md`, `decisions/backends.md` |
-| `web/src/main.ts`, `camera.ts`, `controls.ts`, `renderer.ts`, `types.ts`, `sonification.ts` | `architecture/web-frontend.md`, `decisions/interaction.md` |
+| `web/src/main.ts`, `camera.ts`, `controls.ts`, `renderer.ts`, `types.ts` | `architecture/web-frontend.md`, `decisions/interaction.md` |
 | `web/src/ui/dev-panel.ts`, `settings.ts`, `setting-metadata.ts` (persistence, impact table) | `architecture/dev-panel.md`, `decisions/dev-tooling.md` |
-| `web/src/core/morph-config.ts` (`MorphologyConfig`, `MORPH_DESCRIPTORS`, `bv2_morph_v1`), `set_morphology_config` (`lib.rs` / `sim/gpu/mod.rs`), `MorphologyConfig`/`GeneratorConfig`/`RenderQualityConfig`/`LightingConfig` in `sim/morphology.rs` | `architecture/dev-panel.md`, `architecture/manifold.md`, `architecture/gpu-rendering.md`, `decisions/dev-tooling.md`, `decisions/manifold.md` |
+| `web/src/core/morph-config.ts` (`MorphologyConfig`, `MORPH_DESCRIPTORS`, `bv2_morph_v2`), `set_morphology_config` (`lib.rs` / `sim/gpu/mod.rs`), `MorphologyConfig`/`GeneratorConfig`/`RenderQualityConfig`/`LightingConfig` in `sim/morphology.rs` | `architecture/dev-panel.md`, `architecture/manifold.md`, `architecture/gpu-rendering.md`, `decisions/dev-tooling.md`, `decisions/manifold.md` |
 | `web/src/render/profiler.ts`, `hud.ts`, `crates/brain-visualizer/src/profiler.rs`, `metrics.wgsl`, the metrics readback | `architecture/profiling.md`, `decisions/profiling.md` |
-| `crates/brain-visualizer/src/sim/scaler.rs`, `crates/brain-visualizer/src/gpu_limits.rs`, tier presets in `web/src/core/types.ts` | `architecture/scaling.md`, `decisions/scaling.md` |
+| `crates/brain-visualizer/src/sim/scaler.rs`, `crates/brain-visualizer/src/gpu_limits.rs`, product scale constants in `web/src/core/types.ts`, tier presets in `web/src/ui/controls.ts` | `architecture/scaling.md`, `decisions/scaling.md` |
 | `web/package.json`, `web/*` (vite/vitest/playwright/tsconfig), `crates/brain-visualizer/Cargo.toml`, COOP/COEP shim, `crates/brain-visualizer/examples/*`, `crates/brain-visualizer/tests/*` | `architecture/build-and-deploy.md`, `agent-context/testing-how-to.md` |
 | A new/removed/re-routed architecture doc | `architecture/index.md`, `_meta/ownership.json` if ownership changes |
 | A new/removed decisions domain | `decisions/index.md`, this manifest's `decisions-domains` slot |
@@ -70,7 +70,7 @@ spot-checks these against code:
 
 - The `MorphSegment` field order/size (48 B, branch-only; Rust `crates/brain-visualizer/src/sim/morphology.rs` ↔ WGSL
   `render_morphology.wgsl`) and any edge-event layout.
-- The `MorphSphereInstance` field order/size (32 B, soma-only; Rust `crates/brain-visualizer/src/sim/morphology.rs → MorphSphereInstance` ↔ the WGSL sphere struct in `render_morphology.wgsl`).
+- The `MorphSphereInstance` field order/size (48 B, soma-only; Rust `crates/brain-visualizer/src/sim/morphology.rs → MorphSphereInstance` ↔ the WGSL sphere struct in `render_morphology.wgsl`; includes `root_dir`/`root_pull` fields added for the axon-root pull pass).
 - `MorphUniforms` size (192 B; Rust `crates/brain-visualizer/src/sim/gpu/resources.rs → MorphUniforms` ↔ WGSL `render_morphology.wgsl`; must update both sides atomically). Includes the lighting/brightness fields `resting_brightness`/`active_boost` and the true-opacity fields `active_opacity`/`inactive_opacity_floor` (the latter two repurposed from the former trailing `_pad4`/`_pad5` — size unchanged at 192 B).
 - The `VisualSettings` Float32Array index contract (`web/src/core/settings.ts` ↔
   `crates/brain-visualizer/src/sim/gpu/mod.rs`), including the heavy-tailed-reach
@@ -79,11 +79,12 @@ spot-checks these against code:
   slots (Rust `resources.rs` ↔ WGSL `scatter.wgsl`, still 32 B).
 - The packed `last_spike` masks and the locked hash constants (Rust ↔ WGSL).
 - The `DRAW_LEGACY_*` guard flags (which passes are live vs retired).
-- `DEFAULT_CONFIG` scale (`web/src/core/types.ts`).
+- `DEFAULT_CONFIG` scale and LS key (`web/src/core/types.ts → DEFAULT_CONFIG, CONFIG_LS_KEY`); current key `bv2_config_v2`.
+- `SETTINGS_LS_KEY` and `MORPH_CONFIG_LS_KEY` (`web/src/core/settings.ts`, `web/src/core/morph-config.ts`); current keys `bv2_settings_v2` / `bv2_morph_v2`.
 
 ## Notes
 
 - The generic kit (authoring rules, coding-style, repo-rules, orchestrating)
-  lives at `~/.claude/agent-docs/v1/`; workflow commands are global skills. This
+  lives at `~/agent-docs/v1/`; workflow commands are global skills. This
   manifest is the only app-specific binding the kit reads.
 - `ownership.md` is a thin pointer; the owner data is `_meta/ownership.json`.

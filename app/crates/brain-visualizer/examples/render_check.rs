@@ -283,12 +283,12 @@ async fn run() {
     );
 
     // --- 12. True-opacity active layer check ---------------------------------
-    // The NEW depth-tested, alpha-blended active passes (active-tube +
-    // active-soma) render firing geometry opaque so it OCCLUDES the additive
-    // background. Prove: (a) with active_opacity=1 the active layer draws solid,
-    // near-opaque pixels; (b) with active_opacity=0 the pass is skipped on the
-    // CPU side (no panic, no occlusion) and the frame matches the additive
-    // baseline; (c) it composites correctly with bloom both off and on.
+    // The depth-tested, alpha-blended active passes (active-tube + active-soma)
+    // render firing geometry over the additive background. Prove:
+    // (a) active_opacity=0 remains a valid low-emphasis active layer, not a CPU
+    // pass skip; (b) small/high active_opacity values measurably change the
+    // frame, proving the shader alpha is continuous rather than 0-or-not-0;
+    // (c) it composites correctly with bloom both off and on.
     println!("[render_check] active-opacity: warming firing scene (connection_layer=2) …");
     backend.set_bloom_strength(0.0);
     backend.set_connection_layer(2);
@@ -296,60 +296,60 @@ async fn run() {
         backend.tick(1, 0.55);
     }
 
-    // (b) Active layer SKIPPED (active_opacity=0): pure additive baseline.
+    // (a) Low end: active_opacity=0 still encodes the active layer with the
+    // shader's soft low-emphasis ceiling.
     backend
         .set_morphology_config(r#"{"lighting":{"activeOpacity":0.0,"inactiveOpacityFloor":0.0}}"#)
-        .expect("set_morphology_config (active off) should parse");
+        .expect("set_morphology_config (active low) should parse");
     backend.render(&color_view, &mvp, camera_right, camera_up, 100.0, 0.012);
-    let skipped_pixels =
+    let low_pixels =
         readback_rgba(backend.device(), backend.queue(), &color_tex, WIDTH, HEIGHT).await;
 
-    // (a) Active layer ON (active_opacity=1, floor=0): firing geometry opaque.
+    // (b) Small positive value: should differ from the low end without a binary
+    // skip cliff.
+    backend
+        .set_morphology_config(r#"{"lighting":{"activeOpacity":0.05,"inactiveOpacityFloor":0.0}}"#)
+        .expect("set_morphology_config (active small) should parse");
+    backend.render(&color_view, &mvp, camera_right, camera_up, 100.0, 0.012);
+    let small_pixels =
+        readback_rgba(backend.device(), backend.queue(), &color_tex, WIDTH, HEIGHT).await;
+
+    // High end: firing geometry should be much more opaque.
     backend
         .set_morphology_config(r#"{"lighting":{"activeOpacity":1.0,"inactiveOpacityFloor":0.0}}"#)
-        .expect("set_morphology_config (active on) should parse");
+        .expect("set_morphology_config (active high) should parse");
     backend.render(&color_view, &mvp, camera_right, camera_up, 100.0, 0.012);
-    let active_pixels =
+    let high_pixels =
         readback_rgba(backend.device(), backend.queue(), &color_tex, WIDTH, HEIGHT).await;
 
-    // Occlusion proof: the alpha-blended active pass writes solid color over the
-    // additive background, so at least one pixel must DIFFER between the
-    // active-on and active-skipped frames by more than the llvmpipe-dither
-    // epsilon (the same `> 2` channel epsilon used elsewhere in this file).
-    // (With straight-alpha SrcAlpha/OneMinusSrcAlpha blending, an opaque active
-    // fragment REPLACES the additive sum behind it rather than adding to it, so
-    // the two frames diverge wherever a firing neuron sits in front.)
-    let mut occlusion_diffs = 0u32;
-    for (a, s) in active_pixels.chunks(4).zip(skipped_pixels.chunks(4)) {
-        let dr = (a[0] as i32 - s[0] as i32).abs();
-        let dg = (a[1] as i32 - s[1] as i32).abs();
-        let db = (a[2] as i32 - s[2] as i32).abs();
-        if dr > 2 || dg > 2 || db > 2 {
-            occlusion_diffs += 1;
-        }
-    }
+    let (low_small_diffs, low_small_delta) = pixel_delta_stats(&small_pixels, &low_pixels);
+    let (small_high_diffs, small_high_delta) = pixel_delta_stats(&high_pixels, &small_pixels);
+    let low_luma = luma_sum(&low_pixels);
+    let small_luma = luma_sum(&small_pixels);
     println!(
-        "[render_check] active-opacity: pixels changed by active layer = {occlusion_diffs}/{}",
+        "[render_check] active-opacity: low→small diffs={low_small_diffs}/{} delta={low_small_delta}; \
+         small→high diffs={small_high_diffs}/{} delta={small_high_delta}; \
+         luma low={low_luma} small={small_luma}",
+        WIDTH * HEIGHT,
         WIDTH * HEIGHT
     );
     assert!(
-        occlusion_diffs > 0,
-        "Active opacity layer produced NO change vs the additive-only frame \
-         (the depth+alpha active pass did not draw / did not occlude)"
+        low_small_diffs > 0 && low_small_delta > 0,
+        "activeOpacity 0.0 and 0.05 produced identical frames; low-end alpha is still binary/skipped"
+    );
+    assert!(
+        small_high_diffs > 0 && small_high_delta > low_small_delta,
+        "activeOpacity did not continue changing between 0.05 and 1.0"
+    );
+    assert!(
+        low_luma <= small_luma + small_luma / 10,
+        "activeOpacity 0.0 was more than 10% brighter than 0.05; zero-end blowout regressed"
     );
 
-    // Skip-at-zero proof: active_opacity=0 must not panic and must not write
-    // occluding geometry. Re-render with it off and assert the frame is still a
-    // valid, non-black additive frame (the CPU-side pass skip held).
-    let mut skipped_non_black = 0u32;
-    for chunk in skipped_pixels.chunks(4) {
-        if chunk[0] > 2 || chunk[1] > 2 || chunk[2] > 2 {
-            skipped_non_black += 1;
-        }
-    }
+    let low_non_black = non_black_count(&low_pixels);
     assert!(
-        skipped_non_black > 0,
-        "Active-skipped (active_opacity=0) frame was all black — additive baseline broke"
+        low_non_black > 0,
+        "activeOpacity=0 frame was all black — low-emphasis active rendering broke"
     );
 
     // (c) Bloom ON with the active layer ON: both must composite without panic.
@@ -374,9 +374,195 @@ async fn run() {
         .set_morphology_config("{}")
         .expect("set_morphology_config (defaults) should parse");
     println!(
-        "[render_check] active-opacity check PASS: active layer occludes (diffs={occlusion_diffs}), \
-         skip-at-zero held, bloom-on composited"
+        "[render_check] active-opacity check PASS: continuous low/small/high opacity, \
+         zero-end stayed low-emphasis, bloom-on composited"
     );
+
+    // --- 13. Stream A baseline: N=6000/K=16 morphology generation stats ------
+    // Spin up a fresh backend at the new web default (N=6000, K=16), initialize
+    // with connection_layer=1 to trigger morphology generation, then read and
+    // print MorphologyStats for the baseline reference table.  No rendering —
+    // stats-only so this section doesn't double GPU memory.
+    println!("[render_check] Stream A baseline: building N=6000/K=16 morphology …");
+    {
+        const N6K: usize = 6_000;
+        const K16: usize = 16;
+        let ctx6k = match GpuBackend::acquire_native().await {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[render_check] Stream A N=6000 SKIP (no GPU): {e}");
+                println!("=== render_check PASSED ===");
+                return;
+            }
+        };
+        let config6k = SimConfig {
+            n: N6K,
+            k: K16,
+            ..SimConfig::default()
+        };
+        let mut backend6k = GpuBackend::new(ctx6k, config6k.clone());
+        backend6k.set_connection_layer(1);
+        backend6k.initialize(&config6k);
+        if let Some(mb) = backend6k.resources().morph_buffers.as_ref() {
+            let s = &mb.stats;
+            let t = &s.timings;
+            let dominant = {
+                let phases = [
+                    ("incoming", t.incoming_ms),
+                    ("dendrite", t.dendrite_ms),
+                    ("axon",     t.axon_ms),
+                    ("setup",    t.setup_ms),
+                    ("finalize", t.finalize_ms),
+                ];
+                phases.iter().max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+                      .map(|p| p.0).unwrap_or("?")
+            };
+            println!(
+                "[render_check] BASELINE N={n} K={k}  segments={seg}  dropped={drop}  \
+                 cap={cap}  cap_util={util:.1}%  p99={p99}  max={max}  \
+                 draw_instances={seg}  (both tube passes draw {seg} instances each)",
+                n = s.neuron_count,
+                k = s.fanout_k,
+                seg = s.segment_count,
+                drop = s.dropped_count,
+                cap = s.segment_cap,
+                util = s.cap_utilization * 100.0,
+                p99 = s.segments_per_neuron_p99,
+                max = s.segments_per_neuron_max,
+            );
+            println!(
+                "[render_check] TIMINGS setup={:.1}ms  incoming={:.1}ms  dendrite={:.1}ms  \
+                 axon={:.1}ms  finalize={:.1}ms  TOTAL={:.1}ms  dominant={}",
+                t.setup_ms, t.incoming_ms, t.dendrite_ms, t.axon_ms, t.finalize_ms, t.total_ms,
+                dominant,
+            );
+        } else {
+            println!("[render_check] Stream A N=6000: morph_buffers absent (connection_layer=0?)");
+        }
+    }
+
+    // --- 14. Stream B/C: active/recent compaction at the low-firing default ---
+    // THE headline result. Build a fresh backend at the new high-N default
+    // (N=6000, K=16) with the low-firing dynamics (excitability=0.10,
+    // iExt=0.014), settle to a typical tick, render (which dispatches the GPU
+    // compaction), then read back the GPU-written selected-segment count and
+    // assert it is MUCH lower than the total generated segment count. Also prove
+    // selection is non-trivial: stimulate hard so neurons fire and confirm the
+    // selected count jumps (the test cannot pass by always selecting zero).
+    println!("[render_check] Stream B/C: active/recent compaction at low-firing default …");
+    {
+        const NLOW: usize = 6_000;
+        const KLOW: usize = 16;
+        const SETTLE_TICKS: u32 = 200;
+        const LOW_EXCIT: f32 = 0.10;
+        const LOW_IEXT: f32 = 0.014;
+
+        let ctx_low = match GpuBackend::acquire_native().await {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[render_check] Stream B/C SKIP (no GPU): {e}");
+                println!("=== render_check PASSED ===");
+                return;
+            }
+        };
+        let config_low = SimConfig {
+            n: NLOW,
+            k: KLOW,
+            ..SimConfig::default()
+        };
+        let mut bk = GpuBackend::new(ctx_low, config_low.clone());
+        bk.set_i_ext(LOW_IEXT);
+        // Match the documented low-firing dynamics tuning. The backend's raw
+        // synaptic_scale default is 1.0 (only the visual-settings default is
+        // 0.03); without this the recurrent drive runs away and ~15% of neurons
+        // fire every tick, which is NOT the low-firing default the plan targets.
+        bk.set_synaptic_scale(0.03);
+        bk.set_connection_layer(2); // active/recent morphology on
+        bk.initialize(&config_low);
+        bk.build_render_pipelines(color_format);
+        bk.resize_render_targets(WIDTH, HEIGHT);
+
+        let low_tex = bk.device().create_texture(&wgpu::TextureDescriptor {
+            label: Some("offscreen-color-low"),
+            size: wgpu::Extent3d {
+                width: WIDTH,
+                height: HEIGHT,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: color_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let low_view = low_tex.create_view(&Default::default());
+
+        // Settle to a typical low-firing tick.
+        let mut last_spikes = 0u64;
+        for _ in 0..SETTLE_TICKS {
+            last_spikes = bk.tick(1, LOW_EXCIT).spikes;
+        }
+        println!("[render_check] low-firing settle: spikes/tick = {last_spikes}");
+        bk.render(&low_view, &mvp, camera_right, camera_up, 100.0, 0.012);
+        let (settled_selected, total) = bk
+            .read_active_segment_count()
+            .expect("morph buffers should exist with connection_layer=2");
+        let settled_frac = settled_selected as f32 / total.max(1) as f32;
+        println!(
+            "[render_check] COMPACTION (low-firing default N={NLOW} K={KLOW}, \
+             excit={LOW_EXCIT} iExt={LOW_IEXT}): selected={settled_selected} / total={total} \
+             ({:.2}% of segments drawn)",
+            settled_frac * 100.0
+        );
+
+        // Headline assertion: active/recent must be MUCH lower than total. At the
+        // low-firing default a tiny fraction of the tree is lit per tick. Allow a
+        // generous ceiling (50%) so the gate is robust across llvmpipe timing,
+        // while still proving frame cost no longer scales with total segments.
+        // Headline assertion: active/recent must be MUCH lower than total. At the
+        // low-firing default (~1 spike/tick) the measured selection is ~0.6% of
+        // total segments; gate generously at <20% so the test is robust across
+        // llvmpipe timing while still proving frame cost no longer scales with
+        // total segment count.
+        assert!(
+            (settled_selected as u64) * 5 < total as u64,
+            "Compacted active-segment count {settled_selected} is not MUCH lower than \
+             total {total} ({:.2}%) at the low-firing default — compaction is not gating draws",
+            settled_frac * 100.0
+        );
+
+        // Non-zero proof: drive the network hard (stimulate + high excitability)
+        // so many neurons fire, render, and confirm the selected count rises above
+        // the settled count. Guards against a predicate that always selects zero.
+        for _ in 0..5 {
+            bk.stimulate([0.0, 0.0, 0.0], 0.6, 0.6);
+            bk.tick(1, 0.9);
+        }
+        bk.render(&low_view, &mvp, camera_right, camera_up, 100.0, 0.012);
+        let (fired_selected, _) = bk
+            .read_active_segment_count()
+            .expect("morph buffers should exist");
+        println!(
+            "[render_check] COMPACTION after hard stimulation: selected={fired_selected} / \
+             total={total} ({:.2}%)",
+            fired_selected as f32 / total.max(1) as f32 * 100.0
+        );
+        assert!(
+            fired_selected > 0,
+            "Compaction selected ZERO segments even after hard stimulation — the \
+             selection predicate (owner rule / glow decode) is broken"
+        );
+        assert!(
+            fired_selected >= settled_selected,
+            "Hard-stimulated frame selected fewer segments ({fired_selected}) than the \
+             settled low-firing frame ({settled_selected}) — selection is not tracking activity"
+        );
+        println!(
+            "[render_check] Stream B/C compaction check PASS: active << total at rest, \
+             selection rises with firing"
+        );
+    }
 
     println!("=== render_check PASSED ===");
 }
@@ -494,6 +680,38 @@ fn mat4_mul(a: [f32; 16], b: [f32; 16]) -> [f32; 16] {
         }
     }
     out
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn pixel_delta_stats(a: &[u8], b: &[u8]) -> (u32, u64) {
+    let mut changed = 0u32;
+    let mut total_delta = 0u64;
+    for (pa, pb) in a.chunks(4).zip(b.chunks(4)) {
+        let dr = (pa[0] as i32 - pb[0] as i32).abs() as u64;
+        let dg = (pa[1] as i32 - pb[1] as i32).abs() as u64;
+        let db = (pa[2] as i32 - pb[2] as i32).abs() as u64;
+        if dr > 2 || dg > 2 || db > 2 {
+            changed += 1;
+        }
+        total_delta += dr + dg + db;
+    }
+    (changed, total_delta)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn luma_sum(pixels: &[u8]) -> u64 {
+    pixels
+        .chunks(4)
+        .map(|p| p[0] as u64 + p[1] as u64 + p[2] as u64)
+        .sum()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn non_black_count(pixels: &[u8]) -> u32 {
+    pixels
+        .chunks(4)
+        .filter(|p| p[0] > 2 || p[1] > 2 || p[2] > 2)
+        .count() as u32
 }
 
 #[cfg(not(target_arch = "wasm32"))]

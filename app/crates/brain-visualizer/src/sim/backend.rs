@@ -6,6 +6,12 @@
 
 /// Locked fixed-point current scale factor S = 2^12 (BV19).
 pub const FIXED_POINT_SCALE: i32 = 4096;
+pub const PRODUCT_MAX_N: usize = 20_000;
+
+#[inline]
+pub fn clamp_neuron_count(n: usize) -> usize {
+    n.clamp(1, PRODUCT_MAX_N)
+}
 
 /// One interchangeable simulation backend.
 pub trait SimBackend {
@@ -57,13 +63,13 @@ impl SimConfig {
 impl Default for SimConfig {
     fn default() -> Self {
         Self {
-            n: 50_000,
-            k: 32,
+            n: 1_200,
+            k: 16,
             seed: 0x5eed_5eed,
-            tier: Tier::Balanced,
+            tier: Tier::Low,
             speed: SpeedPreset::Normal,
             backend: BackendKind::Gpu,
-            i_ext: 0.06,
+            i_ext: 0.055,
             fixed_point_scale: FIXED_POINT_SCALE,
         }
     }
@@ -239,6 +245,14 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(c.seed_lo(), 0x5678_9ABC);
+    }
+
+    #[test]
+    fn sim_config_default_respects_product_cap() {
+        let c = SimConfig::default();
+        assert_eq!(c.n, 1_200);
+        assert!(c.n <= PRODUCT_MAX_N);
+        assert_eq!(clamp_neuron_count(PRODUCT_MAX_N + 1), PRODUCT_MAX_N);
     }
 
     #[test]

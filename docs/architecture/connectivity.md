@@ -85,6 +85,40 @@ Excitatory weights land in `[1000, 4095]` fixed-point units; inhibitory in
 There is **no float distance comparison** anywhere on this path. All
 arithmetic after the initial world→cell quantization is integer.
 
+## Build-time reverse view for morphology
+
+Connectivity remains source-out and implicit for simulation. The morphology
+builder is the one exception: at network build time it evaluates the production
+`target_with_cell` rule once for every `(source_id, synapse_index)` and stores a
+deterministic host-side reverse view for rendering incoming dendrites. This does
+not alter `target`, `target_with_cell`, `weight`, or the CPU/GPU scatter path.
+
+The stored shape is:
+
+- `IncomingSynapse`: every non-self raw incoming record, sorted into the target
+  neuron's range, carrying `(source_id, synapse_index, target_id)`, the
+  deterministic target socket index/position, and raw signed weight.
+- `IncomingRange`: one half-open range per target neuron into the raw incoming
+  vector.
+- `IncomingSocketGroup`: visible socket groups aggregated by duplicate
+  `(source_id, target_id, socket_idx)` with absolute weights summed.
+- `incoming_socket_group_ranges`: one range per target neuron into those visible
+  groups.
+
+At the default review scale (N=1200/K=16), v1 draws every unique incoming socket
+group; it does not sample or silently drop dense targets. If density becomes too
+high at a later scale, lower K or add an explicit cap policy before hiding
+groups.
+
+**No per-synapse long-range flag.** The heavy-tail reach coin (step 3 above) is
+baked into the resulting target id; `target` / `target_with_cell` return only the
+target, never a "this synapse is long-range" flag. So when morphology wants to
+route a long axon through curved waypoints it classifies "visually long" by
+**world distance** (leaf chord vs a cell-size threshold), read-only — it cannot
+and does not consult connectivity for a flag. The target/weight rule is unchanged
+and waypoints are pure visual route geometry; routing detail lives in
+[`manifold.md`](manifold.md).
+
 ## Spatial grid
 
 `SpatialGrid` (`crates/brain-visualizer/src/connectivity/spatial.rs`) partitions neuron positions into
@@ -152,6 +186,8 @@ expand K within a tier alongside N.
   determinism test).
 - `SpatialGrid` packing formula changes.
 - Per-tier K ranges or the store-once threshold change.
+- `target` / `target_with_cell` start returning a per-synapse long-range flag
+  (today they return target id only, and morphology classifies by world distance).
 
 ## See also
 

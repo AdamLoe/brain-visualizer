@@ -26,13 +26,11 @@
     </style>
   </head>
   <body>
-    <!-- UX overhaul: minimal top-right controls — sound + settings only.
+    <!-- UX overhaul: minimal top-right controls — settings only.
          Speed/Tier/Brain-state moved into the settings panel. -->
     <div id="controls-top">
       <div><!-- left side intentionally empty --></div>
-      <div style="display:flex;gap:8px;align-items:center;pointer-events:auto;"><!-- UX round 2: pointer-events:auto so gear+sound buttons receive clicks -->
-        <!-- Sound toggle (BV11 — Phase 7): muted by default, opt-in. Hidden on mobile. -->
-        <button id="sound-toggle" title="Enable sound" style="background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.2);border-radius:6px;color:#fff;cursor:pointer;font-size:16px;padding:6px 10px;min-width:44px;min-height:44px;">🔇</button>
+      <div style="display:flex;gap:8px;align-items:center;pointer-events:auto;"><!-- UX round 2: pointer-events:auto so the gear button receives clicks -->
         <!-- Settings / gear button (UX overhaul): opens the settings panel. -->
         <button id="settings-toggle" title="Settings" style="background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.2);border-radius:6px;color:#fff;cursor:pointer;font-size:18px;padding:6px 10px;min-width:44px;min-height:44px;">⚙</button>
       </div>

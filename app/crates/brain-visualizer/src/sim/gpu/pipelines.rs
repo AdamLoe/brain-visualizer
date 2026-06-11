@@ -12,6 +12,13 @@
 
 use super::resources::GpuLayouts;
 
+/// Morphology debug flag: when true the tube pipelines draw ALL segments (the
+/// legacy pre-compaction path) instead of the compacted active/recent list.
+/// Kept only for debugging / Stream D inspection — default false so the
+/// active/recent compaction is the path that runs. Mirrors the WGSL
+/// `DRAW_LEGACY_ALL_SEGMENTS` override constant.
+pub const DRAW_LEGACY_ALL_SEGMENTS: bool = false;
+
 /// BV22 hash WGSL — prepended to any shader that derives synapse targets.
 /// MUST match `connectivity::hash` (see that module's tests + the native
 /// determinism test).
@@ -66,6 +73,9 @@ pub const BLOOM_WGSL: &str = include_str!("shaders/bloom.wgsl");
 /// Prepended with HASH_WGSL for identity color.
 pub const RENDER_MORPHOLOGY_WGSL: &str = include_str!("shaders/render_morphology.wgsl");
 
+/// Morphology: active/recent segment compaction compute (reset/compact/write_args).
+pub const COMPACT_MORPH_WGSL: &str = include_str!("shaders/compact_morph_segments.wgsl");
+
 /// Holds compiled compute pipelines for the per-tick sim passes.
 pub struct GpuPipelines {
     pub integrate: Option<wgpu::ComputePipeline>,
@@ -96,6 +106,11 @@ pub struct GpuPipelines {
     pub render_ribbon: Option<wgpu::RenderPipeline>,
     /// Morphology: procedural neuron geometry render pipeline (tubes).
     pub render_morphology: Option<wgpu::RenderPipeline>,
+    /// Morphology: active/recent compaction compute pipelines (reset → compact →
+    /// write_args). Built alongside the morph render pipelines.
+    pub compact_morph_reset: Option<wgpu::ComputePipeline>,
+    pub compact_morph: Option<wgpu::ComputePipeline>,
+    pub compact_morph_write_args: Option<wgpu::ComputePipeline>,
     /// Morphology: soma sphere render pipeline (Wave 2).
     pub render_soma_spheres: Option<wgpu::RenderPipeline>,
     /// Morphology: true-opacity active tube pipeline — depth-tested, alpha-blended
@@ -141,6 +156,9 @@ impl GpuPipelines {
             render_ribbon: None,
             // Morphology
             render_morphology: None,
+            compact_morph_reset: None,
+            compact_morph: None,
+            compact_morph_write_args: None,
             render_soma_spheres: None,
             render_morphology_active: None,
             render_soma_spheres_active: None,
@@ -610,7 +628,13 @@ impl GpuPipelines {
 
         // WGSL override constants. Keyed by the WGSL identifier; values are f64
         // (wgpu casts to the override's declared type, u32 here).
-        let tube_consts: &[(&str, f64)] = &[("TUBE_SIDES", rq.tube_sides as f64)];
+        let tube_consts: &[(&str, f64)] = &[
+            ("TUBE_SIDES", rq.tube_sides as f64),
+            (
+                "DRAW_LEGACY_ALL_SEGMENTS",
+                if DRAW_LEGACY_ALL_SEGMENTS { 1.0 } else { 0.0 },
+            ),
+        ];
         let sphere_consts: &[(&str, f64)] = &[
             ("SPHERE_SLICES", rq.sphere_slices as f64),
             ("SPHERE_STACKS", rq.sphere_stacks as f64),
@@ -810,6 +834,35 @@ impl GpuPipelines {
                 cache: None,
             },
         ));
+
+        // ── Active/recent compaction compute pipelines ──────────────────────────
+        // One module, three entry points (reset → compact → write_args). Reads
+        // segments + last_spike; writes active_segment_indices + draw args. Built
+        // here so the set_morphology_config render-quality rebuild keeps them in
+        // sync (they carry no override constants, so rebuild is harmless).
+        let compact_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("compact_morph_segments.wgsl"),
+            source: wgpu::ShaderSource::Wgsl(COMPACT_MORPH_WGSL.into()),
+        });
+        let compact_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("compact-morph-pl"),
+            bind_group_layouts: &[Some(&layouts.compact_morph_bgl)],
+            immediate_size: 0,
+        });
+        let make_compact = |entry: &str, label: &str| {
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some(label),
+                layout: Some(&compact_pl),
+                module: &compact_module,
+                entry_point: Some(entry),
+                compilation_options: Default::default(),
+                cache: None,
+            })
+        };
+        self.compact_morph_reset = Some(make_compact("reset", "compact_morph_reset"));
+        self.compact_morph = Some(make_compact("compact", "compact_morph"));
+        self.compact_morph_write_args =
+            Some(make_compact("write_args", "compact_morph_write_args"));
     }
 
     /// Build Phase 4 near-LOD compute + render pipelines.
@@ -1095,6 +1148,16 @@ mod tests {
         // draw_indirect.wgsl
         assert!(DRAW_INDIRECT_WGSL.contains("fn write_indirect"));
         assert!(DRAW_INDIRECT_WGSL.contains("neuron_draw_args"));
+        // compact_morph_segments.wgsl — active/recent compaction entry points +
+        // mirrored owner rule + impulse constants must stay present.
+        assert!(COMPACT_MORPH_WGSL.contains("fn compact"));
+        assert!(COMPACT_MORPH_WGSL.contains("fn reset"));
+        assert!(COMPACT_MORPH_WGSL.contains("fn write_args"));
+        assert!(COMPACT_MORPH_WGSL.contains("presynaptic_dendrite"));
+        assert!(COMPACT_MORPH_WGSL.contains("AXON_IMPULSE_SPEED"));
+        // render_morphology.wgsl — compacted instance remap present.
+        assert!(RENDER_MORPHOLOGY_WGSL.contains("active_segment_indices"));
+        assert!(RENDER_MORPHOLOGY_WGSL.contains("DRAW_LEGACY_ALL_SEGMENTS"));
         // render_sphere.wgsl
         assert!(RENDER_SPHERE_WGSL.contains("fn vs_main"));
         assert!(RENDER_SPHERE_WGSL.contains("fn fs_main"));

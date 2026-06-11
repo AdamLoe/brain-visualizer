@@ -11,7 +11,7 @@
 // `{ generator, renderQuality, lighting }` with camelCase keys — both Rust and
 // TS verify against that table, not against each other.
 //
-// Persistence: versioned localStorage key "bv2_morph_v1", version sentinel = 1.
+// Persistence: versioned localStorage key "bv2_morph_v2", version sentinel = 1.
 // On version mismatch → ignore saved data, use defaults (no migration), mirroring
 // the loadSettings/saveSettings/resetSettings pattern in settings.ts.
 
@@ -21,10 +21,6 @@ import type { SettingImpact } from "./setting-metadata";
 
 export interface MorphGeneratorConfig {
   baseRadius:                  number;
-  dendritePrimaryMin:          number;
-  dendritePrimarySpan:         number;
-  dendriteReachLo:             number;
-  dendriteReachHi:             number;
   axonStopFraction:            number;
   axonRootRadiusFraction:      number;
   axonCurveLift:               number;
@@ -36,8 +32,12 @@ export interface MorphGeneratorConfig {
   trunkLengthFraction:         number;
   twigRadiusFraction:          number;
   taperCurve:                  number;
+  dendritePrimaryRootCount:    number;
+  dendriteForkDistance:        number;
+  dendriteCurveTightness:      number;
   dendriteMidRadiusFraction:   number;
   dendriteTipRadiusFraction:   number;
+  dendriteGroupSpacing:        number;
   treeScoreCurvature:          number;
   treeScoreDensity:            number;
   treeScoreDegree:             number;
@@ -45,6 +45,13 @@ export interface MorphGeneratorConfig {
   relaxRepel:                  number;
   relaxWindow:                 number;
   edgeSubsegments:             number;
+  // ── Dendrite decoration controls (Stream F) ──────────────────────────────
+  /** Decorative secondary branchlets per group (0 = none, 1 = one per group). */
+  dendriteBranchletCount:      number;
+  /** Decorative terminal twigs per group (0 = none, 1–2 = bushy). */
+  dendriteTwigCount:           number;
+  /** How many incoming groups (per neuron) receive the bushy decoration. */
+  dendriteDecorGroupMax:       number;
 }
 
 export interface MorphRenderQualityConfig {
@@ -63,6 +70,8 @@ export interface MorphLightingConfig {
   rimPower:          number;
   restingBrightness: number;
   activeBoost:       number;
+  activeOpacity:     number;
+  inactiveOpacityFloor: number;
 }
 
 export interface MorphologyConfig {
@@ -71,17 +80,13 @@ export interface MorphologyConfig {
   lighting:      MorphLightingConfig;
 }
 
-// ─── Defaults (every default from the contract table) ─────────────────────────
+// ─── Defaults (current product defaults) ──────────────────────────────────────
 
 export const DEFAULT_MORPH_CONFIG: MorphologyConfig = {
   generator: {
     baseRadius:                0.006,
-    dendritePrimaryMin:        3,
-    dendritePrimarySpan:       2,
-    dendriteReachLo:           0.035,
-    dendriteReachHi:           0.058,
     axonStopFraction:          0.85,
-    axonRootRadiusFraction:    0.66,
+    axonRootRadiusFraction:    0.90,
     axonCurveLift:             0.15,
     socketCountMin:            2,
     socketCountMax:            4,
@@ -91,8 +96,12 @@ export const DEFAULT_MORPH_CONFIG: MorphologyConfig = {
     trunkLengthFraction:       0.32,
     twigRadiusFraction:        0.16,
     taperCurve:                2.1,
-    dendriteMidRadiusFraction: 0.6,
-    dendriteTipRadiusFraction: 0.3,
+    dendritePrimaryRootCount:  4,
+    dendriteForkDistance:      1.45,
+    dendriteCurveTightness:    0.55,
+    dendriteMidRadiusFraction: 0.78,
+    dendriteTipRadiusFraction: 0.42,
+    dendriteGroupSpacing:      0.55,
     treeScoreCurvature:        0.5,
     treeScoreDensity:          0.5,
     treeScoreDegree:           0.7,
@@ -100,6 +109,10 @@ export const DEFAULT_MORPH_CONFIG: MorphologyConfig = {
     relaxRepel:                0.15,
     relaxWindow:               3,
     edgeSubsegments:           3,
+    // Dendrite decoration (Stream F). Defaults match locked_default() values.
+    dendriteBranchletCount:    1,
+    dendriteTwigCount:         1,
+    dendriteDecorGroupMax:     12,
   },
   renderQuality: {
     tubeSides:    6,
@@ -114,8 +127,10 @@ export const DEFAULT_MORPH_CONFIG: MorphologyConfig = {
     diffuseIntensity:   0.35,
     rimIntensity:       0.30,
     rimPower:           2.0,
-    restingBrightness:  0.20,
+    restingBrightness:  0.0,
     activeBoost:        1.8,
+    activeOpacity:      1.0,
+    inactiveOpacityFloor: 0.0,
   },
 };
 
@@ -148,13 +163,8 @@ export interface MorphDescriptor {
 export const MORPH_DESCRIPTORS: readonly MorphDescriptor[] = [
   // ── generator (regenerate; red renderer-rebuild dot) ───────────────────────
   { jsonPath: "generator.baseRadius",                group: "generator", label: "Base radius",              type: "number", min: 0.004, max: 0.010, step: 0.0005, default: 0.006, impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Base cell/body scale that cascades into branch and sphere size." },
-  { jsonPath: "generator.dendritePrimaryMin",        group: "generator", label: "Dendrite primary min",     type: "int",    min: 2,     max: 5,     step: 1,      default: 3,     impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Minimum number of primary dendrites." },
-  { jsonPath: "generator.dendritePrimarySpan",       group: "generator", label: "Dendrite primary span",    type: "int",    min: 1,     max: 4,     step: 1,      default: 2,     impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Random span added to the primary dendrite count." },
-  { jsonPath: "generator.dendriteReachLo",           group: "generator", label: "Dendrite reach lo",        type: "number", min: 0.020, max: 0.050, step: 0.001,  default: 0.035, impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Lower bound of dendrite reach range." },
-  { jsonPath: "generator.dendriteReachHi",           group: "generator", label: "Dendrite reach hi",        type: "number", min: 0.040, max: 0.080, step: 0.001,  default: 0.058, impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Upper bound of dendrite reach range." },
   { jsonPath: "generator.axonStopFraction",          group: "generator", label: "Axon stop fraction",       type: "number", min: 0.60,  max: 0.98,  step: 0.01,   default: 0.85,  impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "How close terminal axons stop before their targets." },
-  { jsonPath: "generator.axonRootRadiusFraction",    group: "generator", label: "Axon root radius frac",    type: "number", min: 0.40,  max: 0.90,  step: 0.01,   default: 0.66,  impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Axon root radius as a fraction of base radius." },
-  { jsonPath: "generator.axonCurveLift",             group: "generator", label: "Axon curve lift",          type: "number", min: 0.0,   max: 0.40,  step: 0.01,   default: 0.15,  impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Axon bow/lift; also influenced by the live Curve setting." },
+  { jsonPath: "generator.axonRootRadiusFraction",    group: "generator", label: "Axon root radius frac",    type: "number", min: 0.40,  max: 0.90,  step: 0.01,   default: 0.90,  impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Axon root radius as a fraction of base radius." },
   { jsonPath: "generator.socketCountMin",            group: "generator", label: "Socket count min",         type: "int",    min: 1,     max: 4,     step: 1,      default: 2,     impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Minimum dendrite/socket anchor density." },
   { jsonPath: "generator.socketCountMax",            group: "generator", label: "Socket count max",         type: "int",    min: 1,     max: 6,     step: 1,      default: 4,     impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Maximum dendrite/socket anchor density." },
   { jsonPath: "generator.socketRadiusLo",            group: "generator", label: "Socket radius lo",         type: "number", min: 0.004, max: 0.016, step: 0.0005, default: 0.008, impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Lower bound of socket placement radius." },
@@ -163,8 +173,12 @@ export const MORPH_DESCRIPTORS: readonly MorphDescriptor[] = [
   { jsonPath: "generator.trunkLengthFraction",       group: "generator", label: "Trunk length fraction",    type: "number", min: 0.15,  max: 0.50,  step: 0.01,   default: 0.32,  impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Where the shared trunk node ends relative to mean target distance." },
   { jsonPath: "generator.twigRadiusFraction",        group: "generator", label: "Twig radius fraction",     type: "number", min: 0.08,  max: 0.35,  step: 0.01,   default: 0.16,  impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Axon tip (twig) radius floor as a fraction of trunk radius." },
   { jsonPath: "generator.taperCurve",                group: "generator", label: "Taper curve",              type: "number", min: 1.0,   max: 3.5,   step: 0.1,    default: 2.1,   impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Taper exponent along branches." },
-  { jsonPath: "generator.dendriteMidRadiusFraction", group: "generator", label: "Dendrite mid radius frac", type: "number", min: 0.30,  max: 0.90,  step: 0.01,   default: 0.6,   impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Dendrite mid-section radius fraction." },
-  { jsonPath: "generator.dendriteTipRadiusFraction", group: "generator", label: "Dendrite tip radius frac", type: "number", min: 0.10,  max: 0.60,  step: 0.01,   default: 0.3,   impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Dendrite tip radius fraction." },
+  { jsonPath: "generator.dendritePrimaryRootCount",  group: "generator", label: "Dendrite root count",      type: "int",    min: 1,     max: 6,     step: 1,      default: 4,     impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Maximum primary soma-surface dendrite collars used to organize incoming groups." },
+  { jsonPath: "generator.dendriteForkDistance",      group: "generator", label: "Dendrite fork distance",   type: "number", min: 1.15,  max: 2.20,  step: 0.05,   default: 1.45,  impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "First fork distance from the soma center, measured in base-radius multiples." },
+  { jsonPath: "generator.dendriteCurveTightness",    group: "generator", label: "Dendrite curve tightness", type: "number", min: 0.0,   max: 1.25,  step: 0.05,   default: 0.55,  impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Tangential bend strength for soma-proximal dendrite roots and forks." },
+  { jsonPath: "generator.dendriteMidRadiusFraction", group: "generator", label: "Dendrite branch thickness", type: "number", min: 0.45,  max: 0.90,  step: 0.01,   default: 0.78,  impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Primary dendrite branch radius as a fraction of base radius." },
+  { jsonPath: "generator.dendriteTipRadiusFraction", group: "generator", label: "Dendrite taper",           type: "number", min: 0.22,  max: 0.62,  step: 0.01,   default: 0.42,  impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Terminal dendrite radius as a fraction of base radius." },
+  { jsonPath: "generator.dendriteGroupSpacing",      group: "generator", label: "Dendrite group spacing",   type: "number", min: 0.0,   max: 1.50,  step: 0.05,   default: 0.55,  impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Tangential spacing between individual incoming source-group branches." },
   { jsonPath: "generator.treeScoreCurvature",        group: "generator", label: "Tree curvature weight",   type: "number", min: 0.0,   max: 2.0,   step: 0.05,   default: 0.5,   impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Axon-tree attach score: penalty for sharp bends (smoother forks)." },
   { jsonPath: "generator.treeScoreDensity",          group: "generator", label: "Tree density weight",     type: "number", min: 0.0,   max: 2.0,   step: 0.05,   default: 0.5,   impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Axon-tree attach score: penalty for crowding near existing branches." },
   { jsonPath: "generator.treeScoreDegree",           group: "generator", label: "Tree degree weight",      type: "number", min: 0.0,   max: 2.0,   step: 0.05,   default: 0.7,   impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Axon-tree attach score: soft 2-3-child fork tendency (no hard cap)." },
@@ -172,6 +186,10 @@ export const MORPH_DESCRIPTORS: readonly MorphDescriptor[] = [
   { jsonPath: "generator.relaxRepel",                group: "generator", label: "Relax repel strength",    type: "number", min: 0.0,   max: 0.8,   step: 0.01,   default: 0.15,  impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Relaxation repulsion of nearby branches (spreads forks)." },
   { jsonPath: "generator.relaxWindow",               group: "generator", label: "Relax window depth",      type: "int",    min: 0,     max: 6,     step: 1,      default: 3,     impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Ancestor-window depth relaxed per attach." },
   { jsonPath: "generator.edgeSubsegments",           group: "generator", label: "Edge subsegments",        type: "int",    min: 1,     max: 4,     step: 1,      default: 3,     impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Bezier samples per axon-tree edge (curvature smoothness)." },
+  // ── Dendrite decoration (Stream F) ─────────────────────────────────────────
+  { jsonPath: "generator.dendriteBranchletCount",    group: "generator", label: "Dendrite branchlets",     type: "int",    min: 0,     max: 1,     step: 1,      default: 1,     impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Decorative secondary branchlets per group (0 = none, 1 = one per group). Adds soma-proximal bushy offshoots." },
+  { jsonPath: "generator.dendriteTwigCount",         group: "generator", label: "Dendrite twigs",          type: "int",    min: 0,     max: 2,     step: 1,      default: 1,     impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "Decorative terminal twigs per group (0 = none, 2 = bushier). Adds thin hair-like tips at group forks." },
+  { jsonPath: "generator.dendriteDecorGroupMax",     group: "generator", label: "Decor group cap",         type: "int",    min: 0,     max: 16,    step: 1,      default: 12,    impact: "renderer-rebuild", applyKind: "regenerate", tooltip: "How many incoming groups (per neuron) receive bushy decoration. 0 = none, 16 = all first-16 groups. Higher values add more detail near the soma." },
 
   // ── renderQuality (pipeline-rebuild; red renderer-rebuild dot) ─────────────
   { jsonPath: "renderQuality.tubeSides",    group: "renderQuality", label: "Tube sides",    type: "int", min: 3, max: 12, step: 1, default: 6, impact: "renderer-rebuild", applyKind: "pipeline-rebuild", tooltip: "Tube tessellation quality (sides per tube cross-section)." },
@@ -186,8 +204,10 @@ export const MORPH_DESCRIPTORS: readonly MorphDescriptor[] = [
   { jsonPath: "lighting.diffuseIntensity",  group: "lighting", label: "Diffuse intensity",  type: "number", min:  0.0,  max: 1.0,  step: 0.01, default: 0.35, impact: "live", applyKind: "uniform", tooltip: "Diffuse (Lambert) lighting intensity." },
   { jsonPath: "lighting.rimIntensity",      group: "lighting", label: "Rim intensity",      type: "number", min:  0.0,  max: 1.0,  step: 0.01, default: 0.30, impact: "live", applyKind: "uniform", tooltip: "Rim/fresnel highlight intensity." },
   { jsonPath: "lighting.rimPower",          group: "lighting", label: "Rim power",          type: "number", min:  1.0,  max: 6.0,  step: 0.1,  default: 2.0,  impact: "live", applyKind: "uniform", tooltip: "Rim highlight falloff exponent." },
-  { jsonPath: "lighting.restingBrightness", group: "lighting", label: "Resting brightness", type: "number", min:  0.0,  max: 1.0,  step: 0.01, default: 0.20, impact: "live", applyKind: "uniform", tooltip: "Brightness of resting (non-active) structure." },
+  { jsonPath: "lighting.restingBrightness", group: "lighting", label: "Resting brightness", type: "number", min:  0.0,  max: 1.0,  step: 0.01, default: 0.0,  impact: "live", applyKind: "uniform", tooltip: "Brightness of resting (non-active) structure." },
   { jsonPath: "lighting.activeBoost",       group: "lighting", label: "Active boost",       type: "number", min:  0.0,  max: 4.0,  step: 0.05, default: 1.8,  impact: "live", applyKind: "uniform", tooltip: "Brightness multiplier on active structure." },
+  { jsonPath: "lighting.activeOpacity",     group: "lighting", label: "Active opacity",     type: "number", min:  0.0,  max: 1.0,  step: 0.01, default: 1.0,  impact: "live", applyKind: "uniform", tooltip: "Opacity ceiling for firing geometry in the depth-tested active layer." },
+  { jsonPath: "lighting.inactiveOpacityFloor", group: "lighting", label: "Inactive opacity floor", type: "number", min: 0.0, max: 1.0, step: 0.01, default: 0.0, impact: "live", applyKind: "uniform", tooltip: "Opacity floor for non-overlapped geometry in the active layer." },
 ] as const;
 
 // ─── Nested path get/set helpers ──────────────────────────────────────────────
@@ -213,7 +233,7 @@ export function setMorphValue(
 
 // ─── Persistence (mirrors loadSettings/saveSettings/resetSettings) ─────────────
 
-export const MORPH_CONFIG_LS_KEY = "bv2_morph_v1";
+export const MORPH_CONFIG_LS_KEY = "bv2_morph_v2";
 const LS_KEY = MORPH_CONFIG_LS_KEY;
 const MORPH_VERSION = 1;
 
@@ -222,21 +242,47 @@ interface SavedMorphConfig {
   config: MorphologyConfig;
 }
 
+function mergeKnownNumberGroup<T extends object>(
+  defaults: T,
+  saved: unknown,
+  ignoredKeys: readonly string[] = [],
+): T {
+  const result = { ...defaults };
+  if (!saved || typeof saved !== "object") return result;
+
+  const source = saved as Record<string, unknown>;
+  for (const key of Object.keys(defaults)) {
+    if (ignoredKeys.includes(key)) continue;
+    const value = source[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      (result as Record<string, number>)[key] = value;
+    }
+  }
+  return result;
+}
+
+function normalizeMorphConfig(config: unknown): MorphologyConfig {
+  const saved = config && typeof config === "object"
+    ? config as Partial<Record<MorphGroup, unknown>>
+    : {};
+  return {
+    generator:     mergeKnownNumberGroup(DEFAULT_MORPH_CONFIG.generator,     saved.generator, ["axonCurveLift"]),
+    renderQuality: mergeKnownNumberGroup(DEFAULT_MORPH_CONFIG.renderQuality, saved.renderQuality),
+    lighting:      mergeKnownNumberGroup(DEFAULT_MORPH_CONFIG.lighting,      saved.lighting),
+  };
+}
+
 /** Load from localStorage. Returns defaults on version mismatch or parse error. */
 export function loadMorphConfig(): MorphologyConfig {
   try {
     const raw = localStorage.getItem(LS_KEY);
     if (!raw) return structuredClone(DEFAULT_MORPH_CONFIG);
-    const parsed = JSON.parse(raw) as { version?: number; config?: MorphologyConfig };
+    const parsed = JSON.parse(raw) as { version?: number; config?: unknown };
     if (parsed.version !== MORPH_VERSION || !parsed.config) {
       return structuredClone(DEFAULT_MORPH_CONFIG);
     }
-    // Merge saved over defaults per-group so a missing field falls back to default.
-    return {
-      generator:     { ...DEFAULT_MORPH_CONFIG.generator,     ...parsed.config.generator },
-      renderQuality: { ...DEFAULT_MORPH_CONFIG.renderQuality, ...parsed.config.renderQuality },
-      lighting:      { ...DEFAULT_MORPH_CONFIG.lighting,      ...parsed.config.lighting },
-    };
+    // Merge saved known fields over defaults per-group; obsolete fields are dropped.
+    return normalizeMorphConfig(parsed.config);
   } catch {
     return structuredClone(DEFAULT_MORPH_CONFIG);
   }
@@ -245,7 +291,7 @@ export function loadMorphConfig(): MorphologyConfig {
 /** Persist the morphology config to localStorage. */
 export function saveMorphConfig(cfg: MorphologyConfig): void {
   try {
-    const saved: SavedMorphConfig = { version: MORPH_VERSION, config: cfg };
+    const saved: SavedMorphConfig = { version: MORPH_VERSION, config: normalizeMorphConfig(cfg) };
     localStorage.setItem(LS_KEY, JSON.stringify(saved));
   } catch {
     // localStorage unavailable (private browsing, quota, etc.) — silent.
@@ -260,5 +306,5 @@ export function resetMorphConfig(): MorphologyConfig {
 
 /** Serialize to the JSON string the WASM `set_morphology_config(json)` expects. */
 export function morphConfigToJson(cfg: MorphologyConfig): string {
-  return JSON.stringify(cfg);
+  return JSON.stringify(normalizeMorphConfig(cfg));
 }

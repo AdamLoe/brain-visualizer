@@ -30,6 +30,28 @@
 - **Code anchors.** `crates/brain-visualizer/src/sim/gpu/shaders/render_far.wgsl → identity_color`; `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl → identity_color`; `crates/brain-visualizer/src/sim/gpu/pipelines.rs → build_render / build_morph_pipelines`; `web/src/ui/dev-panel.ts → _buildRenderingTab`
 - **Revisit when.** Visual review shows too many near-duplicate hues or colourblind-safe tracing becomes a requirement.
 
+## Brain color mode as the default activity language
+
+- **Decision.** `color_by = 6` (`Brain`) is the clean default color mode. Resting
+  visible structure is pink; firing neuron cores, active morphology packets, and
+  active-adjacent highlights are blue. Brain mode is a color branch only: it
+  respects `surface = off`, `connection_layer = off`, and `neuron_visibility`
+  instead of forcing hidden layers on.
+- **Why.** The product goal is a coherent brain-themed activity view rather than
+  separate debug encodings. Pink resting structure keeps the whole sculpture
+  readable, while blue current activity gives spikes and traveling packets a
+  single clear focal language. Reusing `color_by` index 18 avoids a settings
+  contract migration.
+- **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md),
+  [`../architecture/dev-panel.md`](../architecture/dev-panel.md).
+- **Code anchors.** `web/src/core/settings.ts → DEFAULT_SETTINGS.colorBy`;
+  `web/src/ui/dev-panel.ts → COLOR_BY_OPTIONS`;
+  `crates/brain-visualizer/src/sim/gpu/shaders/render_far.wgsl`;
+  `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl`;
+  `crates/brain-visualizer/src/sim/gpu/shaders/render_manifold.wgsl`.
+  `crates/brain-visualizer/src/sim/gpu/resources.rs → ManifoldUniforms` threads
+  `color_by` to the optional surface without increasing the uniform size.
+
 ## Morphology pass supersedes ribbon and cylinder as the connection visual
 
 - **Decision.** Procedural neuron morphology (soma + dendrite tree + shared
@@ -127,7 +149,7 @@
 
 ## Morphology as shader-generated 3D tubes + soma spheres, additive/no-depth
 
-- **Decision.** Branch segments are drawn as shader-generated tapered cylinders; soma bodies are a separate morphology-owned UV-sphere sub-pass. Both sub-passes keep additive blend and no depth write. A simple ambient + half-Lambert diffuse + rim lighting model in `render_morphology.wgsl → fs_main / fs_sphere` makes curvature readable without abandoning the additive glow aesthetic. Tessellation (`TUBE_SIDES`, `SPHERE_SLICES`, `SPHERE_STACKS`) and the lighting/brightness values are runtime-configurable rather than baked shader constants: tessellation rides WGSL `override` consts set at pipeline build, and lighting/brightness come from the `MorphologyConfig` lighting group. Defaults remain conservative; both are exposed to the hidden dev panel for tuning.
+- **Decision.** Branch segments are drawn as shader-generated tapered cylinders; soma bodies are a separate morphology-owned UV-sphere sub-pass. Both sub-passes keep additive blend and no depth write. The soma sphere is procedurally deformed in `vs_sphere` toward the dominant axon root carried by `MorphSphereInstance::root_dir/root_pull`, then lit by the same soma material and spike pulse path. A simple ambient + half-Lambert diffuse + rim lighting model in `render_morphology.wgsl → fs_main / fs_sphere` makes curvature readable without abandoning the additive glow aesthetic. Tessellation (`TUBE_SIDES`, `SPHERE_SLICES`, `SPHERE_STACKS`) and the lighting/brightness values are runtime-configurable rather than baked shader constants: tessellation rides WGSL `override` consts set at pipeline build, and lighting/brightness come from the `MorphologyConfig` lighting group. Defaults remain conservative; both are exposed to the hidden dev panel for tuning.
 - **Why.** Billboard quads give no sense of volume or curvature — the arbor reads as a glowing ribbon cloud rather than a cellular structure. Shader-generated tubes (Q1=A from the plan) require no new buffer or layout change to `MorphSegment`, are fully GPU-side, and immediately read as cylindrical branches. Keeping additive/no-depth (Q2=A) avoids a render pipeline compositing rework while still delivering the 3D curvature impression through lighting rather than occlusion. The rim lighting choice (Q3=B) keeps the SNN glow aesthetic dominant while making curvature visible in screenshots.
 - **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md), [`../architecture/manifold.md`](../architecture/manifold.md)
 - **Alternatives considered.** Pre-built indexed mesh per neuron arbor (Q1=B) — correct junctions and caps, but requires a new mesh-buffer layout and a much more complex generator; deferred. Depth writes for correct self-occlusion (Q2=B) — requires sorting render passes and manifold-after-morphology ordering; deferred as a render pipeline rework.
@@ -136,8 +158,8 @@
 
 ## True opacity for active geometry, layered over the additive resting passes
 
-- **Decision.** Firing geometry gets a genuine depth-tested, alpha-blended redraw (active tube + active soma passes) on top of the unchanged additive resting passes, so it occludes. Opacity is keyed off `last_spike` recency (`active_alpha = mix(inactive_opacity_floor, active_opacity, activity)`), not brightness. The additive resting layer is kept exactly as-is for the translucent background; only the active layer is depth-correct.
-- **Why.** Additive blending physically cannot occlude — it can only make things brighter, so everything read as uniformly muddy translucency. A real depth + alpha path lets active neurons read as solid and inactive structure drop to near-invisible. Layering the active redraw over the additive passes (rather than converting them) avoids reworking the whole bloom/HDR compositing pipeline: the active passes write the same HDR `scene_view` color, so bloom composes over them with zero bloom-path edits, and at `active_opacity == 0` the frame is bit-for-bit the old additive look.
+- **Decision.** Firing geometry gets a genuine depth-tested, alpha-blended redraw (active tube + active soma passes) on top of the unchanged additive resting passes, so it occludes. Tube opacity is keyed off continuous segment packet proximity from `inactive_opacity_floor` to an active ceiling, while brightness remains fragment-local so the impulse still travels. Soma opacity uses the same floor/ceiling model from soma activity. `active_opacity = 0` is a soft low-emphasis ceiling, not a disabled active layer.
+- **Why.** Additive blending physically cannot occlude — it can only make things brighter, so everything read as uniformly muddy translucency. A real depth + alpha path lets active neurons read as solid and inactive structure drop to near-invisible. Keeping the active redraw encoded at the low end avoids the additive blowout caused by removing the only depth-tested morphology layer, while the soft ceiling preserves the expected "least emphasis" slider meaning. Layering the active redraw over the additive passes (rather than converting them) avoids reworking the whole bloom/HDR compositing pipeline: the active passes write the same HDR `scene_view` color, so bloom composes over them with zero bloom-path edits.
 - **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md)
 - **Alternatives considered.** Fake opacity by making active geometry brighter-additive — rejected because additive cannot occlude, which was the actual defect. Convert the resting passes to depth-tested too — rejected: needs pass sorting and breaks the bloom-friendly additive resting glow; resting self-occlusion stays deferred.
 - **Tradeoffs.** The active passes redraw the same tube/soma geometry a second time (one extra draw each), and the active layer owns its own depth clear because the surface/near-LOD depth users are off by default. The two new opacity knobs ride repurposed `MorphUniforms` pads, so the 192 B layout is unchanged.
@@ -157,6 +179,61 @@
 - **Why.** `LightingConfig` is the established, contract-light path for morphology beauty knobs (it already carries `resting_brightness` / `active_boost` through `MorphUniforms`). Growing the Float32Array would touch the locked Rust↔TS index contract and the persistence schema for no benefit; repurposing reserved `MorphUniforms` pads keeps the 192 B layout assert green.
 - **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md)
 - **Code anchors.** `crates/brain-visualizer/src/sim/morphology.rs → LightingConfig` (`active_opacity`, `inactive_opacity_floor`); `crates/brain-visualizer/src/sim/gpu/resources.rs → MorphUniforms` (the two trailing fields, formerly `_pad4`/`_pad5`).
+
+## Draw only active/recent morphology segments, not all of them
+
+- **Decision.** A GPU compute pass (`compact_morph_segments.wgsl`) selects each
+  frame the segments that are about-to-be-lit / lit / recently-lit, and both
+  morphology tube passes draw only that compacted subset via `draw_indirect`.
+  The full all-segment draw is preserved behind `DRAW_LEGACY_ALL_SEGMENTS`
+  (default off). Soma sphere passes are per-neuron and unaffected.
+- **Why.** Frame cost must scale with *visible activity* (~0.6% of segments at
+  rest), not with total generated segment count, so N / K / branch detail can
+  grow without the tube passes becoming the bottleneck.
+- **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md), [`../architecture/gpu-backend.md`](../architecture/gpu-backend.md), [`../architecture/scaling.md`](../architecture/scaling.md)
+- **Code anchors.** `crates/brain-visualizer/src/sim/gpu/shaders/compact_morph_segments.wgsl → reset / compact / write_args`; `crates/brain-visualizer/src/sim/gpu/mod.rs → render_full`; `crates/brain-visualizer/src/sim/gpu/pipelines.rs → DRAW_LEGACY_ALL_SEGMENTS / build_morph_pipelines`; `crates/brain-visualizer/src/sim/gpu/resources.rs → MorphBuffers`.
+
+## Per-frame segment selection is GPU-indirect, never CPU readback
+
+- **Decision.** The compacted segment count flows from compaction into the tube
+  passes entirely through GPU indirect draw args (`active_draw_args`); the CPU
+  never reads back the selection to size the draw. A blocking selected-count
+  readback exists only for profiler/test diagnostics.
+- **Why.** Per-frame selection must not stall the render loop on a GPU→CPU map,
+  which would break the no-readback-in-the-loop policy the whole backend is built
+  around.
+- **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md), [`../architecture/gpu-backend.md`](../architecture/gpu-backend.md)
+- **Code anchors.** `crates/brain-visualizer/src/sim/gpu/mod.rs → render_full` (`draw_indirect(&mb.active_draw_args, 0)`), `GpuBackend::read_active_segment_count` (diagnostics-only).
+
+## Select the packet band, not the whole fired arbor
+
+- **Decision.** The compaction predicate selects only the segments under the
+  traveling impulse **packet band** (a `HEAD_HEADROOM` lead plus a `TAIL_REACH`
+  tail around `front = age * speed` along `path_len`), mirroring the render
+  shader's per-segment activity exactly — not a fired neuron's entire arbor for
+  the whole glow lifetime.
+- **Why.** Selecting the whole arbor for the full glow lifetime would keep
+  nearly all segments and defeat the scaling goal; it would also re-expose the
+  resting structure that is deliberately hidden by default.
+- **Tradeoffs.** A deliberate visual trade-off: there is no bounded whole-arbor
+  afterglow today. Adding one (a capped afterglow window) is a possible future
+  addition, not a bug.
+- **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md)
+- **Code anchors.** `crates/brain-visualizer/src/sim/gpu/shaders/compact_morph_segments.wgsl → compact` (`HEAD_HEADROOM_MUL` / `TAIL_REACH_MUL`); `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl → fs_main`.
+
+## Faster, wider pulse for long-range axon segments
+
+- **Decision.** Axon segments whose cumulative `path_len` passes
+  `LONG_RANGE_PATH = 0.18` use a faster, wider impulse packet
+  (`LONG_RANGE_IMPULSE_SPEED = 0.045` ≈ 2.5×, `LONG_RANGE_IMPULSE_WIDTH = 0.060`
+  ≈ 2.1×) than local arbors. Both shaders carry the split; no uniform was added
+  (`MorphUniforms` stays 192 B).
+- **Why.** Waypoint-routed long axons are far longer than local arbors; at the
+  local speed/width a single packet reads as the fiber blinking rather than a
+  signal sweeping the projection. A faster, wider packet reads as motion along
+  the long fiber.
+- **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md)
+- **Code anchors.** `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl` (`AXON_IMPULSE_SPEED` / `IMPULSE_WIDTH` / `LONG_RANGE_IMPULSE_SPEED` / `LONG_RANGE_IMPULSE_WIDTH` / `LONG_RANGE_PATH`); mirrored in `crates/brain-visualizer/src/sim/gpu/shaders/compact_morph_segments.wgsl`.
 
 ## See also
 

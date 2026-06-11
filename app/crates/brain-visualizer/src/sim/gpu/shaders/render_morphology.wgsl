@@ -86,10 +86,20 @@ struct MorphUniforms {
     inactive_opacity_floor: f32,  // inactive-opacity floor (was _pad5)
 }
 
-// ── Tube pass bindings (group 0, bindings 0/1/2) ──────────────────────────────
+// ── Tube pass bindings (group 0, bindings 0/1/2 + 6) ──────────────────────────
 @group(0) @binding(0) var<storage, read> segments: array<MorphSegment>;
 @group(0) @binding(1) var<storage, read> last_spike: array<u32>;
 @group(0) @binding(2) var<uniform> u: MorphUniforms;
+// Active/recent compaction: instance_index → original segment index map. Filled
+// by compact_morph_segments.wgsl; the tube passes draw `active_segment_count`
+// instances and fetch segments[active_segment_indices[inst]]. Binding 6 is used
+// (not 3/4/5) so it does not collide with the soma pass bindings in this shared
+// module. When DRAW_LEGACY_ALL_SEGMENTS is on, `inst` indexes `segments`
+// directly (the old all-segment path, kept for debugging).
+@group(0) @binding(6) var<storage, read> active_segment_indices: array<u32>;
+
+// Pipeline-overridable: 0 = compacted draw (default), 1 = legacy all-segment.
+override DRAW_LEGACY_ALL_SEGMENTS: u32 = 0u;
 
 // ── Soma sphere pass bindings (group 0, bindings 3/4/5) ──────────────────────
 // The sphere pipeline uses its OWN bind group layout (render_soma_spheres_bgl)
@@ -99,9 +109,9 @@ struct MorphUniforms {
 //
 //   binding 3: sphere_instances (STORAGE, read)  ← MorphSphereInstance array
 //   binding 4: sphere_last_spike (STORAGE, read) ← same last_spike buffer
-//   binding 5: su (UNIFORM)                      ← same morph_uniform buffer (176 B)
+//   binding 5: su (UNIFORM)                      ← same morph_uniform buffer (192 B)
 
-/// Per-soma sphere instance. 32 B, 16-aligned. Field order MUST match
+/// Per-soma sphere instance. 48 B, 16-aligned. Field order MUST match
 /// `MorphSphereInstance` in src/sim/morphology.rs.
 struct SphereInstance {
     center: vec3<f32>,
@@ -110,6 +120,8 @@ struct SphereInstance {
     kind: u32,
     _pad0: u32,
     _pad1: u32,
+    root_dir: vec3<f32>,
+    root_pull: f32,
 }
 
 @group(0) @binding(3) var<storage, read> sphere_instances: array<SphereInstance>;
@@ -125,12 +137,37 @@ const SOMA_CORE_TICKS: f32 = 2.2;
 const SOMA_RADIUS_GLOW: f32 = 0.08;
 const SOMA_RADIUS_FLASH: f32 = 0.16;
 const LEGACY_WHOLE_GLOW: f32 = 0.10;
+// ── Travelling-packet timing ──────────────────────────────────────────────────
+// A single moving Gaussian "packet" sweeps each lit path at `*_SPEED` path-units
+// per tick, with a Gaussian half-width of `*_WIDTH` path-units. Two regimes:
+//   • LOCAL arbors (path span < LONG_RANGE_PATH): tight, slow packet so the pulse
+//     reads inside a dense local arbor without smearing across sibling twigs.
+//   • LONG-RANGE projections (path span ≥ LONG_RANGE_PATH): a FASTER, WIDER packet
+//     so the eye can follow one blue bolus travelling across the brain instead of
+//     the whole fiber blinking. Long axons route through waypoints (path_len up to
+//     ~0.8+), so the local speed/width would make the packet crawl and read as a
+//     glow rather than motion.
+// Classification is per-segment and deterministic: `seg.path_len >= LONG_RANGE_PATH`
+// (cumulative path position from the soma). It is MIRRORED verbatim in
+// compact_morph_segments.wgsl so the selection window uses the same speed/width.
 const AXON_IMPULSE_SPEED: f32 = 0.018;
 const DENDRITE_ECHO_SPEED: f32 = 0.006;
 const IMPULSE_WIDTH: f32 = 0.028;
+// Long-range axon packet (faster + wider; see note above).
+const LONG_RANGE_IMPULSE_SPEED: f32 = 0.045;
+const LONG_RANGE_IMPULSE_WIDTH: f32 = 0.060;
+// Path-position threshold (cumulative path-units from soma) above which a segment
+// is treated as a long-range projection segment. Local arbor/trunk segments stay
+// well below this; waypoint-routed axons cross it. MUST match the mirror in
+// compact_morph_segments.wgsl.
+const LONG_RANGE_PATH: f32 = 0.18;
 const IMPULSE_TAIL_STRENGTH: f32 = 0.28;
 const DENDRITE_ECHO_STRENGTH: f32 = 0.28;
 const DENDRITE_ECHO_RANGE: f32 = 0.075;
+const ACTIVE_OPACITY_SOFT_MIN: f32 = 0.10;
+const BRAIN_REST_PINK: vec3<f32> = vec3<f32>(1.0, 0.18, 0.54);
+const BRAIN_ACTIVE_BLUE: vec3<f32> = vec3<f32>(0.08, 0.56, 1.0);
+const BRAIN_SOFT_BLUE: vec3<f32> = vec3<f32>(0.30, 0.68, 1.0);
 
 fn has_spiked(packed: u32) -> bool {
     return (packed & HAS_SPIKED_MASK) != 0u;
@@ -196,6 +233,22 @@ fn soma_radius_scale(glow: f32, flash: f32) -> f32 {
     return 1.0 + glow * SOMA_RADIUS_GLOW + flash * SOMA_RADIUS_FLASH;
 }
 
+fn deform_soma_dir(dir: vec3<f32>, pull_dir: vec3<f32>, pull: f32) -> vec3<f32> {
+    let strength = clamp(pull, 0.0, 0.55);
+    let facing = dot(dir, pull_dir);
+    let forward = max(facing, 0.0);
+    let back = max(-facing, 0.0);
+    let front = forward * forward;
+    let shoulder = pow(max(1.0 - abs(facing), 0.0), 2.0);
+
+    // Trunk-dominant fairing: elongate toward the dominant root, add a small
+    // shoulder around the root, and compress the opposite side just enough that
+    // the body reads pulled rather than uniformly scaled.
+    let radial = max(0.75, 1.0 + strength * (0.28 * front + 0.08 * shoulder - 0.05 * back));
+    let axial = strength * (0.34 * front + 0.08 * forward - 0.04 * back);
+    return dir * radial + pull_dir * axial;
+}
+
 fn material_hash(seed: u32) -> f32 {
     return f32(hash32(seed)) / 4294967295.0;
 }
@@ -211,6 +264,9 @@ fn material_noise3(p: vec3<f32>, seed: u32) -> f32 {
 }
 
 fn branch_base_color(kind: u32, region: u32, ei: u32, color_by: u32, neuron_id: u32) -> vec3<f32> {
+    if color_by == 6u {
+        return BRAIN_REST_PINK;
+    }
     var color: vec3<f32>;
     if kind == 0u {
         color = vec3<f32>(0.22, 0.34, 0.5);
@@ -232,6 +288,9 @@ fn branch_base_color(kind: u32, region: u32, ei: u32, color_by: u32, neuron_id: 
 }
 
 fn soma_base_color(region: u32, ei: u32, color_by: u32, neuron_id: u32) -> vec3<f32> {
+    if color_by == 6u {
+        return BRAIN_REST_PINK;
+    }
     var color: vec3<f32>;
     if color_by == 0u {
         if region == 0u {
@@ -248,6 +307,17 @@ fn soma_base_color(region: u32, ei: u32, color_by: u32, neuron_id: u32) -> vec3<
         color = mix(color, identity_color(neuron_id), IDENTITY_MORPH_BLEND);
     }
     return color;
+}
+
+fn brain_tube_tint(material: vec3<f32>, legacy: f32, packet: f32) -> vec3<f32> {
+    let halo_t = clamp(legacy * 0.35, 0.0, 0.25);
+    let packet_t = clamp(packet * 1.6, 0.0, 1.0);
+    return mix(mix(material, BRAIN_SOFT_BLUE, halo_t), BRAIN_ACTIVE_BLUE, packet_t);
+}
+
+fn brain_soma_material(material: vec3<f32>, glow: f32, flash: f32) -> vec3<f32> {
+    let active_t = clamp(glow * 0.25 + flash * 0.75, 0.0, 1.0);
+    return mix(material, BRAIN_SOFT_BLUE, active_t);
 }
 
 fn tube_material(
@@ -291,13 +361,29 @@ fn soma_material(
     return base * shade + vec3<f32>(flash * 0.10 + glow * 0.04);
 }
 
-fn impulse_packet(path_pos: f32, age: f32, glow: f32, kind: u32) -> f32 {
+// Per-segment packet speed. Long-range axon segments sweep faster so one bolus
+// travels visibly across the brain; local arbors and all dendrites keep the
+// tight local timing. `long_range` is true only for axon segments past
+// LONG_RANGE_PATH (kind is folded into the caller's flag).
+fn impulse_speed(kind: u32, long_range: bool) -> f32 {
+    let axon_speed = select(AXON_IMPULSE_SPEED, LONG_RANGE_IMPULSE_SPEED, long_range);
+    return select(DENDRITE_ECHO_SPEED, axon_speed, kind == 1u);
+}
+
+fn impulse_width(kind: u32, long_range: bool) -> f32 {
+    return select(IMPULSE_WIDTH, LONG_RANGE_IMPULSE_WIDTH, long_range && kind == 1u);
+}
+
+fn impulse_travel(age: f32, kind: u32, long_range: bool) -> f32 {
+    return age * impulse_speed(kind, long_range);
+}
+
+fn impulse_packet(path_pos: f32, age: f32, glow: f32, kind: u32, long_range: bool) -> f32 {
     if glow <= 0.0 {
         return 0.0;
     }
-    let speed = select(DENDRITE_ECHO_SPEED, AXON_IMPULSE_SPEED, kind == 1u);
-    let travel = age * speed;
-    let width = IMPULSE_WIDTH;
+    let travel = impulse_travel(age, kind, long_range);
+    let width = impulse_width(kind, long_range);
     let delta = path_pos - travel;
     let head = exp(-(delta * delta) / max(width * width, 1e-4));
     let behind = max(travel - path_pos, 0.0);
@@ -307,6 +393,26 @@ fn impulse_packet(path_pos: f32, age: f32, glow: f32, kind: u32) -> f32 {
         packet = packet * DENDRITE_ECHO_STRENGTH * exp(-path_pos / DENDRITE_ECHO_RANGE);
     }
     return packet;
+}
+
+fn impulse_segment_activity(seg_start: f32, seg_end: f32, age: f32, glow: f32, kind: u32, long_range: bool) -> f32 {
+    if glow <= 0.0 {
+        return 0.0;
+    }
+    let travel = impulse_travel(age, kind, long_range);
+    let width = impulse_width(kind, long_range);
+    let a = min(seg_start, seg_end);
+    let b = max(seg_start, seg_end);
+    let inside = travel >= a && travel <= b;
+    let distance_to_segment = select(min(abs(travel - a), abs(travel - b)), 0.0, inside);
+    let proximity = 1.0 - smoothstep(width, width * 3.0, distance_to_segment);
+    return clamp(proximity * glow, 0.0, 1.0);
+}
+
+fn active_opacity_ceiling(active_opacity: f32, inactive_floor: f32) -> f32 {
+    let floor = clamp(inactive_floor, 0.0, 1.0);
+    let requested = clamp(active_opacity, 0.0, 1.0);
+    return max(floor, mix(ACTIVE_OPACITY_SOFT_MIN, 1.0, requested));
 }
 
 struct TubeVertOut {
@@ -320,6 +426,9 @@ struct TubeVertOut {
     @location(6) glow: f32,
     @location(7) @interpolate(flat) kind: u32,
     @location(8) @interpolate(flat) neuron_id: u32,
+    @location(9) @interpolate(flat) segment_start: f32,
+    @location(10) @interpolate(flat) segment_end: f32,
+    @location(11) @interpolate(flat) long_range: u32,
 }
 
 struct SphereVertOut {
@@ -357,7 +466,10 @@ fn vs_main(
     @builtin(vertex_index) vid: u32,
     @builtin(instance_index) inst: u32,
 ) -> TubeVertOut {
-    let seg = segments[inst];
+    // Compacted path (default): remap the instance through the active-segment
+    // index list. Legacy path (DRAW_LEGACY_ALL_SEGMENTS=1): instance == segment.
+    let seg_index = select(active_segment_indices[inst], inst, DRAW_LEGACY_ALL_SEGMENTS == 1u);
+    let seg = segments[seg_index];
     let a = seg.a;
     let b = seg.b;
 
@@ -421,12 +533,16 @@ fn vs_main(
     let V = normalize(world_to_cam);
 
     // ── Source timing + structural color ─────────────────────────────────────
-    let packed = last_spike[seg.neuron_id];
-    let ty = neuron_type(packed);
+    let owner_packed = last_spike[seg.neuron_id];
+    let presynaptic_dendrite = seg.kind == 0u && seg.target_id != seg.neuron_id;
+    let activity_id = select(seg.neuron_id, seg.target_id, presynaptic_dendrite);
+    let activity_packed = last_spike[activity_id];
+    let ty = neuron_type(owner_packed);
     let ei = ty & 1u;
     let region = (ty >> 2u) & 0x3u;
-    let glow = select(0.0, spike_glow(u.tick, packed, u.glow_tau), u.connection_layer >= 1u && u.light_next == 1u);
-    let age = select(0.0, spike_age(u.tick, packed), glow > 0.0);
+    let light_enabled = u.light_next == 1u || (presynaptic_dendrite && u.light_past == 1u);
+    let glow = select(0.0, spike_glow(u.tick, activity_packed, u.glow_tau), u.connection_layer >= 1u && light_enabled);
+    let age = select(0.0, spike_age(u.tick, activity_packed), glow > 0.0);
     let color = branch_base_color(seg.kind, region, ei, u.color_by, seg.neuron_id);
 
     var out: TubeVertOut;
@@ -440,6 +556,14 @@ fn vs_main(
     out.glow = glow;
     out.kind = seg.kind;
     out.neuron_id = seg.neuron_id;
+    out.segment_start = seg.path_len;
+    out.segment_end = seg.path_len + seg_len;
+    // Long-range classification (deterministic, mirrored in compaction): a segment
+    // whose cumulative path position has crossed LONG_RANGE_PATH is on a waypoint-
+    // routed projection. Only axons use the long-range packet regime; dendrites
+    // keep the local echo regardless, but the flag is set uniformly here and the
+    // axon-only gate lives in impulse_speed/impulse_width.
+    out.long_range = select(0u, 1u, seg.path_len >= LONG_RANGE_PATH);
     return out;
 }
 
@@ -452,11 +576,16 @@ fn fs_main(in: TubeVertOut) -> @location(0) vec4<f32> {
     let V = normalize(in.view_dir);
     let L = normalize(u.light_dir); // pre-normalised in CPU but normalize again for safety
 
-    let packet = impulse_packet(in.path_pos, in.spike_age, in.glow, in.kind);
+    let long_range = in.long_range == 1u;
+    let packet = impulse_packet(in.path_pos, in.spike_age, in.glow, in.kind, long_range);
     let legacy = in.glow * select(0.04, LEGACY_WHOLE_GLOW, in.kind == 1u);
     let activity = legacy + packet;
     let material = tube_material(in.base_color, N, in.world_pos, in.path_pos, in.neuron_id, in.kind);
-    let tint = mix(material, vec3<f32>(1.0), clamp(packet * 0.18, 0.0, 0.18));
+    let tint = select(
+        mix(material, vec3<f32>(1.0), clamp(packet * 0.18, 0.0, 0.18)),
+        brain_tube_tint(material, legacy, packet),
+        u.color_by == 6u,
+    );
     let brightness = u.resting_brightness + activity * u.active_boost;
 
     let lambert = max(dot(N, L), 0.0);
@@ -470,21 +599,27 @@ fn fs_main(in: TubeVertOut) -> @location(0) vec4<f32> {
 }
 
 // True-opacity active tube pass (active-opacity-render-pass). Same color as the
-// additive fs_main, but returns a spike-driven straight alpha and is rendered
-// depth-tested + alpha-blended so a firing tube genuinely occludes the additive
-// background behind it. `activity` (= legacy + packet) is the SAME firing signal
-// fs_main uses — "active = firing", not click-selection.
+// additive fs_main, but uses a continuous segment-level packet-proximity factor
+// for straight alpha and is rendered depth-tested + alpha-blended so a firing
+// tube genuinely occludes the additive background behind it. Brightness stays
+// fragment-local (`activity` = legacy + packet) so the impulse still travels
+// through the temporarily opaque segment.
 @fragment
 fn fs_main_active(in: TubeVertOut) -> @location(0) vec4<f32> {
     let N = normalize(in.normal);
     let V = normalize(in.view_dir);
     let L = normalize(u.light_dir);
 
-    let packet = impulse_packet(in.path_pos, in.spike_age, in.glow, in.kind);
+    let long_range = in.long_range == 1u;
+    let packet = impulse_packet(in.path_pos, in.spike_age, in.glow, in.kind, long_range);
     let legacy = in.glow * select(0.04, LEGACY_WHOLE_GLOW, in.kind == 1u);
     let activity = legacy + packet;
     let material = tube_material(in.base_color, N, in.world_pos, in.path_pos, in.neuron_id, in.kind);
-    let tint = mix(material, vec3<f32>(1.0), clamp(packet * 0.18, 0.0, 0.18));
+    let tint = select(
+        mix(material, vec3<f32>(1.0), clamp(packet * 0.18, 0.0, 0.18)),
+        brain_tube_tint(material, legacy, packet),
+        u.color_by == 6u,
+    );
     let brightness = u.resting_brightness + activity * u.active_boost;
 
     let lambert = max(dot(N, L), 0.0);
@@ -493,8 +628,20 @@ fn fs_main_active(in: TubeVertOut) -> @location(0) vec4<f32> {
     let lighting = u.ambient + u.diffuse_intensity * lambert + rim;
 
     let c = tint * brightness * lighting;
-    // Spike-recency drives opacity from the inactive floor up to the active ceiling.
-    let active_alpha = mix(u.inactive_opacity_floor, u.active_opacity, clamp(activity, 0.0, 1.0));
+    let segment_activity = impulse_segment_activity(
+        in.segment_start,
+        in.segment_end,
+        in.spike_age,
+        in.glow,
+        in.kind,
+        long_range,
+    );
+    let inactive_floor = clamp(u.inactive_opacity_floor, 0.0, 1.0);
+    let active_ceiling = active_opacity_ceiling(u.active_opacity, inactive_floor);
+    // Packet proximity drives opacity continuously from the inactive floor to
+    // the active ceiling. active_opacity=0 maps to a soft low-end ceiling so the
+    // active pass still damps additive blowout instead of disappearing.
+    let active_alpha = mix(inactive_floor, active_ceiling, segment_activity);
     // Below epsilon, write neither color nor depth (in-shader inactive skip).
     if active_alpha < 0.004 { discard; }
     return vec4<f32>(c, active_alpha);
@@ -611,6 +758,11 @@ fn vs_sphere(
 
     // Unit outward normal = radial direction on the unit sphere.
     let dir = decode_sphere_vertex(vid);
+    var pull_dir = vec3<f32>(0.0, 0.0, 1.0);
+    if length(sph.root_dir) > 1e-5 {
+        pull_dir = normalize(sph.root_dir);
+    }
+    let deformed_dir = deform_soma_dir(dir, pull_dir, sph.root_pull);
 
     // ── Source timing + sphere radius pulse ──────────────────────────────────
     let packed = sphere_last_spike[sph.neuron_id];
@@ -621,8 +773,8 @@ fn vs_sphere(
     let age = select(0.0, spike_age(su.tick, packed), glow > 0.0);
     let flash = select(0.0, soma_flash(age, su.glow_tau), glow > 0.0);
     let core = soma_core(age, glow);
-    let world = sph.center + dir * (sph.radius * su.width_scale * soma_radius_scale(glow, flash));
-    let N = dir;
+    let world = sph.center + deformed_dir * (sph.radius * su.width_scale * soma_radius_scale(glow, flash));
+    let N = normalize(deformed_dir);
     let V = normalize(su.camera_pos - world);
 
     var out: SphereVertOut;
@@ -644,14 +796,16 @@ fn fs_sphere(in: SphereVertOut) -> @location(0) vec4<f32> {
     let N = normalize(in.normal);
     let V = normalize(in.view_dir);
     let L = normalize(su.light_dir);
-    let material = soma_material(in.base_color, N, in.world_pos, in.neuron_id, in.glow, in.flash);
+    let raw_material = soma_material(in.base_color, N, in.world_pos, in.neuron_id, in.glow, in.flash);
+    let material = select(raw_material, brain_soma_material(raw_material, in.glow, in.flash), su.color_by == 6u);
     let brightness = su.resting_brightness + (in.glow * 0.55 + in.flash * 1.15) * su.active_boost;
 
     let lambert = max(dot(N, L), 0.0);
     let nv = max(dot(N, V), 0.0);
     let rim = pow(1.0 - nv, su.rim_power) * su.rim_intensity * (1.0 + in.flash * 0.45);
     let lighting = su.ambient + su.diffuse_intensity * lambert + rim;
-    let core = mix(material, vec3<f32>(1.0), 0.70) * in.core * 0.85;
+    let core_color = select(mix(material, vec3<f32>(1.0), 0.70), BRAIN_ACTIVE_BLUE, su.color_by == 6u);
+    let core = core_color * in.core * 0.85;
 
     let c = (material * brightness + core) * lighting;
     if c.r + c.g + c.b < 0.002 { discard; }
@@ -662,24 +816,29 @@ fn fs_sphere(in: SphereVertOut) -> @location(0) vec4<f32> {
 // additive fs_sphere, but returns a firing-driven straight alpha and is rendered
 // depth-tested + alpha-blended so a firing soma genuinely occludes the additive
 // background behind it. The firing signal is the soma's glow/flash/core energy
-// (the same "active = firing" source the additive path lights from).
+// (the same "active = firing" source the additive path lights from), and shares
+// the tube pass's soft active_opacity=0 low end.
 @fragment
 fn fs_sphere_active(in: SphereVertOut) -> @location(0) vec4<f32> {
     let N = normalize(in.normal);
     let V = normalize(in.view_dir);
     let L = normalize(su.light_dir);
-    let material = soma_material(in.base_color, N, in.world_pos, in.neuron_id, in.glow, in.flash);
+    let raw_material = soma_material(in.base_color, N, in.world_pos, in.neuron_id, in.glow, in.flash);
+    let material = select(raw_material, brain_soma_material(raw_material, in.glow, in.flash), su.color_by == 6u);
     let brightness = su.resting_brightness + (in.glow * 0.55 + in.flash * 1.15) * su.active_boost;
 
     let lambert = max(dot(N, L), 0.0);
     let nv = max(dot(N, V), 0.0);
     let rim = pow(1.0 - nv, su.rim_power) * su.rim_intensity * (1.0 + in.flash * 0.45);
     let lighting = su.ambient + su.diffuse_intensity * lambert + rim;
-    let core = mix(material, vec3<f32>(1.0), 0.70) * in.core * 0.85;
+    let core_color = select(mix(material, vec3<f32>(1.0), 0.70), BRAIN_ACTIVE_BLUE, su.color_by == 6u);
+    let core = core_color * in.core * 0.85;
 
     let c = (material * brightness + core) * lighting;
     let activity = clamp(in.glow + in.flash + in.core, 0.0, 1.0);
-    let active_alpha = mix(su.inactive_opacity_floor, su.active_opacity, activity);
+    let inactive_floor = clamp(su.inactive_opacity_floor, 0.0, 1.0);
+    let active_ceiling = active_opacity_ceiling(su.active_opacity, inactive_floor);
+    let active_alpha = mix(inactive_floor, active_ceiling, activity);
     if active_alpha < 0.004 { discard; }
     return vec4<f32>(c, active_alpha);
 }

@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-08
+last_updated:  2026-06-11
 ---
 
 # Web Frontend
@@ -26,7 +26,6 @@ avoid wasm-bindgen reentrancy panics.
 - `web/src/core/types.ts → AppConfig`, `DEFAULT_CONFIG`, `SpeedPreset`, `BackendKind`,
   `Tier`, `BrainState`, `TickStats`, plus `AppConfig` localStorage persistence
   (`loadConfig`, `saveConfig`)
-- `web/src/audio/sonification.ts → SonificationEngine`, `deriveRegionFractions`
 - `web/src/ui/hud.ts → CornerHud` — public HUD shell (layout and update cadence);
   metric internals are owned by [`profiling.md`](profiling.md)
 - `crates/brain-visualizer/src/lib.rs` — the wasm_bindgen entry surface:
@@ -91,9 +90,13 @@ respectively.
 The morphology config travels a **separate** channel from the Float32Array:
 `crates/brain-visualizer/src/lib.rs → WasmGpuBackend::set_morphology_config` takes
 a JSON string (the `MorphologyConfig` from `web/src/core/morph-config.ts`,
-persisted under its own `bv2_morph_v1` key) rather than a packed float array, and
+persisted under its own `bv2_morph_v2` key) rather than a packed float array, and
 the backend chooses the narrowest update path. The dev-panel apply is queued like
 the other backend calls (a `pendingMorphConfig` flag flushed in the rAF loop).
+Boot also queues `morphConfigToJson(loadMorphConfig())` before backend creation
+and refreshes that queued JSON immediately after `WasmGpuBackend.create()`, so
+persisted morphology settings are applied to the Rust backend on the first
+available frame even when the user never touches a morphology slider.
 Why a separate key + entry point rather than extending the frozen Float32Array:
 see [`../decisions/dev-tooling.md`](../decisions/dev-tooling.md).
 
@@ -147,22 +150,26 @@ TS wrapper.
 
 ## Types and DEFAULT_CONFIG
 
-`web/src/core/types.ts → DEFAULT_CONFIG` boots at `n=1_200, k=16` — the morphology
-beauty target where each neuron can be drawn as a procedural soma+dendrite+axon.
-Tier presets and the per-tier N bounds are in `web/src/ui/controls.ts →
-TIER_PRESETS`, `N_MIN`, `N_MAX`; tier→N/K logic belongs to
-[`scaling.md`](scaling.md).
+`web/src/core/types.ts → DEFAULT_CONFIG` boots at `n=6_000, k=16,
+excitability=0.10, ticksPerSec=30` — the high-scale beauty baseline where the
+network is calm enough for propagation to be visible. The product neuron-count cap is
+`PRODUCT_MAX_N = 20_000`; `loadConfig()` and `saveConfig()` clamp persisted or
+incoming `n` through `clampNeuronCount()`, so old saved high-N localStorage
+payloads cannot exceed the current product cap. Tier presets and the per-tier N
+bounds are in `web/src/ui/controls.ts → TIER_PRESETS`, `N_MIN`, `N_MAX`;
+tier→N/K logic belongs to [`scaling.md`](scaling.md).
 
 ## AppConfig persistence
 
 The user-chosen runtime knobs in `AppConfig` are persisted to localStorage so a
 reload restores the last-used network — they were previously lost on every reload.
 `web/src/core/types.ts → loadConfig`, `saveConfig`, `resetConfig` own this; the key is
-`bv2_config_v1`. The shape deliberately mirrors the dev-panel settings pattern
+`bv2_config_v2`. The shape deliberately mirrors the dev-panel settings pattern
 ([`dev-panel.md`](dev-panel.md)): a versioned key, a version gate that falls back
 to `DEFAULT_CONFIG` on mismatch/parse-error/missing key, a field-by-field
-`?? base` merge over defaults, and a `try/catch` so a blocked localStorage
-(private browsing, quota) degrades silently.
+`?? base` merge over defaults, a hard clamp of saved `n` to `PRODUCT_MAX_N`, and
+a `try/catch` so a blocked localStorage (private browsing, quota) degrades
+silently.
 
 **Persisted fields:** `n`, `k`, `tier`, `backend`, `speed`, `excitability`.
 **Not persisted:** `seed` (a fixed constant) and any runtime counters.
@@ -185,20 +192,6 @@ Wiring:
   the named-state buttons removed in the UX overhaul — is dormant, like
   `scalerDecide`.)
 
-## Sonification
-
-`web/src/audio/sonification.ts → SonificationEngine` holds a Web Audio voice bank: three
-sine oscillators (input/assoc/output regions at 110/220/440 Hz) plus a
-`ScriptProcessorNode` white-noise layer. The `AudioContext` is created on first
-`enable()` call (user-gesture gate). Gain is updated once per second from the
-profiler snapshot via `update(regionFractions, totalFraction)` — never in the
-hot rAF path. Disabled on mobile. Muted by default (user must click the sound
-toggle).
-
-`deriveRegionFractions` approximates per-region rates from total `spikesPerSec`
-using fixed anatomical fractions (30% / 40% / 30%); the backend does not expose
-per-region spike counts to JS.
-
 ## Natural start
 
 There is no intro code, no scripted seed spike, and no animation sequence in
@@ -212,8 +205,8 @@ owns that drive; the frontend's only role is to not suppress it. See
 ## Mobile profile
 
 `isMobile()` in `web/src/ui/controls.ts` gates the mobile profile in `main.ts`:
-0.75× DPR, GPU backend only, no cursor stimulation, no sound toggle, no dev
-panel. The canvas-resize handler accounts for the dev panel width when open.
+0.75× DPR, GPU backend only, no cursor stimulation, no dev panel. The
+canvas-resize handler accounts for the dev panel width when open.
 
 ## Update when
 
@@ -222,9 +215,8 @@ panel. The canvas-resize handler accounts for the dev panel width when open.
 - `Camera` gains new outputs used by `render_frame` (new vectors, new LOD
   inputs).
 - The time-based tick accumulator is replaced or extended.
-- Sonification gains per-region data from the backend (removes the approximation
-  in `deriveRegionFractions`).
 - `DEFAULT_CONFIG` default neuron count changes.
+- `PRODUCT_MAX_N` or the config clamp behavior changes.
 - The mobile profile changes (DPR scale, feature exclusions).
 
 ## See also

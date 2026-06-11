@@ -12,8 +12,7 @@
   all three tiers be exercised and verified before committing to selection
   logic.
 - **Current default note.** This tier decision is separate from the clean
-  first-load `DEFAULT_CONFIG`, which currently boots the morphology-first
-  accepted-default review baseline at `n=1200`, `k=16`, `tier="low"`.
+  first-load `DEFAULT_CONFIG`, which boots at `n=6000`, `k=16`, `tier="low"`.
 - **Applies to.** [`../architecture/scaling.md`](../architecture/scaling.md).
 - **Code anchors.** `web/src/ui/controls.ts → TIER_PRESETS`; `crates/brain-visualizer/src/sim/scaler.rs → TierRange::for_tier`.
 - **Revisit when.** Real-hardware browser WebGPU benchmark data is collected.
@@ -30,22 +29,28 @@
 - **Applies to.** [`../architecture/scaling.md`](../architecture/scaling.md).
 - **Code anchors.** `web/src/ui/controls.ts → TIER_PRESETS`, `N_MIN`, `N_MAX`; `crates/brain-visualizer/src/sim/scaler.rs → TierRange`.
 
-## 1M-default / 10M-gated-stretch honest-adaptation promise
+## 20k product cap, separate from GPU hardware capacity
 
-- **Decision.** The Max tier practical default is ~1 M neurons. 10 M is a
-  best-case discrete-GPU stretch, unlocked only when device limits
-  (`maxStorageBufferBindingSize` via `GpuCaps`) and a benchmark burst both
-  confirm it is sustainable. The UI and documentation must not imply 10 M is
-  generally available.
-- **Why.** The visualizer's value proposition is honest adaptation to the
-  actual machine — not inflated copy that most browsers cannot sustain.
-  Promising 10 M when typical mid-range GPUs cannot sustain it at 60 fps
-  would be misleading.
-- **Applies to.** [`../architecture/scaling.md`](../architecture/scaling.md).
-- **Code anchors.** `web/src/ui/controls.ts → N_MAX`; `crates/brain-visualizer/src/gpu_limits.rs → GpuCaps`.
-- **Tradeoffs.** The unlock condition (device limits + benchmark burst) requires
-  a runtime benchmark pass that is not yet implemented; for now `N_MAX[max]`
-  is capped conservatively.
+- **Decision.** The product maximum neuron count is `20_000`. Web UI bounds,
+  saved config load/save, JS scaler ranges, Rust `SimConfig::default()`, WASM
+  backend construction, and Rust scaler proposals all clamp to that cap.
+  `GpuCaps` continues to report hardware-derived adapter capacity and is not
+  lowered to 20k.
+- **Why.** The current product is a morphology-rich visual sculpture, not a
+  raw-scale demo. Above 20k the readability, initialization cost, and GPU buffer
+  pressure of detailed soma/dendrite/axon morphology dominate the experience.
+  Keeping hardware capacity separate preserves honest diagnostics while keeping
+  product controls bounded to what the current visual design supports.
+- **Applies to.** [`../architecture/scaling.md`](../architecture/scaling.md),
+  [`../architecture/web-frontend.md`](../architecture/web-frontend.md).
+- **Code anchors.** `web/src/core/types.ts → PRODUCT_MAX_N, clampNeuronCount`;
+  `web/src/ui/controls.ts → TIER_PRESETS, N_MIN, N_MAX`;
+  `crates/brain-visualizer/src/sim/backend.rs → PRODUCT_MAX_N, clamp_neuron_count`;
+  `crates/brain-visualizer/src/sim/scaler.rs → TierRange::for_tier`;
+  `crates/brain-visualizer/src/gpu_limits.rs → GpuCaps`.
+- **Tradeoffs.** Old saved `bv2_config_v1` payloads keep their schema version but
+  saved `n` is clamped. This avoids a broad settings reset while preventing
+  stale localStorage from bypassing the cap.
 
 ## Runtime auto-scaling removed; N is fixed at startup, user-driven only
 
@@ -72,6 +77,58 @@
 - **Revisit when.** A gentle, hysteretic, stall-aware auto-scaler is taken on —
   decide on avg not p95, and split buffer-resize from pipeline recompile so a
   resize is cheap. See [`../plans/future_roadmap.md`](../plans/future_roadmap.md).
+
+## N=6 000 as the beauty-first default
+
+- **Decision.** The clean first-load default is N=6 000, K=16. This is the
+  high-scale baseline for the current beauty-first phase, parked below the
+  high-N tiers and the dormant adaptive scaler.
+- **Why.** The active/recent GPU compaction pass makes N=6 000 affordable at
+  runtime: frame cost tracks visible firing activity rather than total segment
+  count. The one-time generation cost (a few seconds at N=6 000) is acceptable
+  for a startup path.
+- **Applies to.** [`../architecture/scaling.md`](../architecture/scaling.md).
+- **Code anchors.** `web/src/core/types.ts → DEFAULT_CONFIG`;
+  `crates/brain-visualizer/src/sim/backend.rs → SimConfig::default`.
+- **Revisit when.** A higher default scale is targeted or the auto-scaler is
+  re-armed.
+
+## Active/recent compaction over near/far LOD or auto-scaling
+
+- **Decision.** Morphology tube rendering draws only active/recent segments
+  selected by a GPU compaction pass (indirect draw), rather than all segments
+  every frame.
+- **Why.** This directly caps frame cost by activity level: all geometry stays
+  available in the segment buffer, but only segments whose activity owner fired
+  recently are drawn. Near/far LOD would require a separate distance-based
+  pipeline split without capping overdraw on active neurons; runtime auto-scaling
+  would require restarting the backend to reduce segment count. Compaction keeps
+  the full morphology intact and scales frame cost with what is visually lit.
+- **Applies to.** [`../architecture/scaling.md`](../architecture/scaling.md),
+  [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md).
+- **Code anchors.**
+  `crates/brain-visualizer/src/sim/gpu/mod.rs → render_full` (indirect tube draws);
+  `crates/brain-visualizer/src/sim/gpu/resources.rs` (active segment index buffer).
+
+## Throttle dendrite decoration with N rather than raise the GPU buffer cap
+
+- **Decision.** Dendrite decoration density is linearly ramped from full (below
+  N≈2 400) to zero (above N=8 000) rather than chunking the segment buffer to
+  raise the per-binding ceiling.
+- **Why.** Morphology segments are bound as a single GPU storage buffer; the
+  WebGPU `max_storage_buffer_binding_size` limit (128 MiB) caps the segment
+  buffer at ~2.76 M segments (~N=12 000). Throttling decoration keeps the total
+  segment count within the binding limit at the cost of reduced dendrite bushiness
+  at high N (where close-up detail is less legible anyway). Chunking or
+  multi-binding the buffer is the correct long-term fix but is deferred.
+- **Applies to.** [`../architecture/scaling.md`](../architecture/scaling.md).
+- **Code anchors.**
+  `crates/brain-visualizer/src/sim/morphology.rs → DECOR_FULL_N, DECOR_ZERO_N, effective_decor_group_max`.
+- **Tradeoffs.** Dendrite bushiness is reduced above N≈2 400. The storage-buffer
+  chunking fix (splitting the segment buffer across multiple bindings in
+  `crates/brain-visualizer/src/sim/gpu/resources.rs`) would remove this tradeoff
+  but is not yet implemented.
+- **Revisit when.** The segment buffer is chunked into multiple bindings.
 
 ## See also
 

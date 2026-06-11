@@ -22,9 +22,16 @@ import { CpuRenderer } from "./cpu/cpu-renderer";
 import { CornerHud } from "./ui/hud";
 import { Profiler } from "./render/profiler";
 import { Renderer } from "./render/renderer";
-import { SonificationEngine, deriveRegionFractions } from "./audio/sonification";
-import { ZERO_STATS, loadConfig, saveConfig, type AppConfig, type BackendKind } from "./core/types";
+import {
+  ZERO_STATS,
+  clampNeuronCount,
+  loadConfig,
+  saveConfig,
+  type AppConfig,
+  type BackendKind,
+} from "./core/types";
 import { getSettings, parseMetrics, subscribe, toFloat32Array } from "./core/settings";
+import { loadMorphConfig, morphConfigToJson } from "./core/morph-config";
 import { DevPanel } from "./ui/dev-panel"; // V2 Phase A / Phase B
 
 // v0.3.1: morphology-config WASM entry point. The Rust agent adds
@@ -54,7 +61,7 @@ async function boot(): Promise<void> {
   log_cross_origin_isolation(isolated);
 
   // 3. Mobile detection — apply full mobile profile (Phase 7 / BV spec):
-  //    Low tier, GPU only, 0.75×DPR render res, no near-LOD, no sound, no stim.
+  //    Low tier, GPU only, 0.75×DPR render res, no near-LOD, no stim.
   const mobile = isMobile();
   // 0.1.1: restore the user's last-used config from localStorage (n/k/tier/
   // backend/speed/excitability). Mobile override is applied AFTER load.
@@ -64,10 +71,10 @@ async function boot(): Promise<void> {
   seedExcitability(config.excitability);
   if (mobile) {
     config.tier = "low";
-    config.n    = 10_000;  // V2 Phase 0 beauty-first default (was 50k)
+    config.n    = 10_000;  // Mobile profile remains below the 20k product cap.
     config.k    = 16;
     config.backend = "gpu"; // GPU only on mobile (no rayon workers overhead)
-    console.log("[main] mobile detected → Low tier (N=10k K=16, GPU only, 0.75×DPR, no sound)");
+    console.log("[main] mobile detected → Low tier (N=10k K=16, GPU only, 0.75×DPR)");
     saveConfig(config); // persist the mobile-forced profile so it survives reload
   }
 
@@ -161,7 +168,7 @@ async function boot(): Promise<void> {
   // v0.3.1: morphology-config JSON to push, set by the dev-panel morph handlers
   // (live uniform edits AND the explicit Rebuild). Flushed via set_morphology_config
   // in the rafLoop &mut-discipline block. Latest-wins (a single JSON snapshot).
-  let pendingMorphConfig: string | null = null;
+  let pendingMorphConfig: string | null = morphConfigToJson(loadMorphConfig());
 
   window.addEventListener("resize", () => {
     // UX overhaul: when the settings panel is open, the canvas occupies only the
@@ -193,9 +200,6 @@ async function boot(): Promise<void> {
   // 7b. Public corner HUD: still always-on, independent of the hidden dev panel.
   const cornerHud = new CornerHud();
 
-  // 7c. Sonification engine (BV11 — Phase 7). Disabled on mobile.
-  const sonification = new SonificationEngine();
-
   // UX round 2: time-based ticks/sec target — declared early so the devPanel
   // closure below can reference it without a block-scope violation.
   // 0.1.1: restore the user's last-used sim speed from the persisted config so a
@@ -209,7 +213,13 @@ async function boot(): Promise<void> {
 
   // 7d. Dev panel (V2 Phase A / Phase B). Desktop-only: skip on mobile so the
   //     public UI stays clean on small screens. ?dev=1 / backtick / gear button.
-  const devPanel: DevPanel | null = mobile ? null : new DevPanel();
+  const devPanel: DevPanel | null = mobile ? null : new DevPanel({
+    n:            config.n,
+    k:            config.k,
+    seed:         config.seed >>> 0,
+    excitability: config.excitability,
+    tps:          targetTicksPerSec,
+  });
 
   // V2 Phase B: wire brain-reset apply handler to the dev panel.
   // The handler sets a flag consumed at the top of rafLoop; never calls the
@@ -250,7 +260,7 @@ async function boot(): Promise<void> {
           saveConfig(config);
         },
         onNetwork(p: { n: number; k: number; seed: number }): void {
-          config.n    = p.n;
+          config.n    = clampNeuronCount(p.n);
           config.k    = p.k;
           config.seed = p.seed >>> 0;
           saveConfig(config); // 0.1.1: persist user-chosen N/K so it survives reload
@@ -292,22 +302,6 @@ async function boot(): Promise<void> {
       });
     }
 
-    // UX round 2: seed initial panel values from live config.
-    if (typeof (devPanel as unknown as { setInitialValues: unknown }).setInitialValues === "function") {
-      (devPanel as unknown as {
-        setInitialValues(opts: {
-          n: number; k: number; seed: number;
-          excitability: number; tps: number;
-        }): void;
-      }).setInitialValues({
-        n:            config.n,
-        k:            config.k,
-        seed:         config.seed >>> 0,
-        excitability: config.excitability, // 0.1.1: from persisted config
-        tps:          targetTicksPerSec,
-      });
-    }
-
     // UX overhaul: shrink canvas when settings panel opens, restore when it closes.
     // Done via pendingResize so the resize is applied at the top of the next rAF
     // turn (same &mut discipline as all other backend mutations).
@@ -342,27 +336,7 @@ async function boot(): Promise<void> {
 
   // 9. Wire DOM click handlers — UX overhaul: speed/tier/brain-state removed from
   //    main view; their handlers now live in the settings panel (devPanel sim handlers
-  //    above).  Only sound and settings-toggle remain here.
-
-  // Sound toggle (BV11 — Phase 7). Button is in the top bar.
-  // Disabled on mobile (audio context is flaky on mobile per spec).
-  const soundBtn = document.getElementById("sound-toggle");
-  if (soundBtn && !mobile) {
-    soundBtn.addEventListener("click", () => {
-      if (sonification.enabled) {
-        sonification.disable();
-        soundBtn.textContent = "🔇";
-        soundBtn.title = "Enable sound";
-      } else {
-        sonification.enable();
-        soundBtn.textContent = "🔊";
-        soundBtn.title = "Disable sound";
-      }
-    });
-  } else if (soundBtn && mobile) {
-    // Hide sound toggle on mobile.
-    (soundBtn as HTMLElement).style.display = "none";
-  }
+  //    above). Settings-toggle wiring lives in the dev panel.
 
   // Pause toggle (bottom-center transport). Freezes sim ticks; rendering and
   // camera orbit continue. Available on mobile too (no &mut interaction — it
@@ -435,8 +409,11 @@ async function boot(): Promise<void> {
         GPU_I_EXT,
         GPU_SYN_SCALE,
       ) as WasmGpuBackend;
-      // V2 Phase 0: push initial settings once backend is ready.
+      // Boot-apply: push every persisted config surface once backend is ready.
+      // AppConfig already constructed this backend and seeded JS loop state;
+      // visual settings and morphology config cross by explicit backend calls.
       pendingSettingsPush = true;
+      pendingMorphConfig = morphConfigToJson(loadMorphConfig());
       console.log("[main] WasmGpuBackend created");
     } catch (e) {
       console.error("[main] GPU backend creation failed:", e);
@@ -537,6 +514,7 @@ async function boot(): Promise<void> {
       );
       // Re-push all settings so visual knobs apply to the fresh network.
       pendingSettingsPush = true;
+      pendingMorphConfig = morphConfigToJson(loadMorphConfig());
       console.log(`[main] network rebuild: n=${config.n} k=${config.k} seed=0x${config.seed.toString(16)}`);
     }
     // V2 Phase 0: push settings to the backend when changed (or on first frame
@@ -629,7 +607,7 @@ async function boot(): Promise<void> {
     profiler.recordFrame(timestamp, timestamp - lastTimestamp, stats);
     const dumped = profiler.maybeDump(timestamp);
 
-    // HUD + sonification — all run once per second.
+    // HUD and dev-panel monitor updates run once per second.
     // (0.1.1: runtime auto-scaling removed — N is fixed at startup / user-driven.)
     if (dumped) {
       const snap = profiler.getLastSnapshot();
@@ -640,20 +618,6 @@ async function boot(): Promise<void> {
           backend: config.backend,
           synapticEventsPerSec: snap.synapticEventsPerSec,
         });
-      }
-
-      // Sonification — update at 1/sec from profiler stats, off the hot path.
-      // Disabled on mobile (spec).
-      if (!mobile && sonification.enabled) {
-        if (snap && snap.ticksPerSec > 0) {
-          const fractions = deriveRegionFractions(
-            snap.spikesPerSec,
-            config.n,
-            snap.ticksPerSec,
-          );
-          const total = snap.spikesPerSec / (config.n * snap.ticksPerSec);
-          sonification.update(fractions, total);
-        }
       }
 
       // Dev panel — update Monitor tab metrics + SysInfo once per second (V2 Phase A / UX overhaul).

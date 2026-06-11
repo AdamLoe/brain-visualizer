@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-05
+last_updated:  2026-06-11
 ---
 
 # Scaling
@@ -23,7 +23,7 @@ are retained but **dormant** — a tested seed for a future gentle auto-scaler (
 - The dormant Rust scaler proposal logic — `crates/brain-visualizer/src/sim/scaler.rs → propose`, `TierRange`, `ScaleProposal`, `TARGET_FRAME_MS`.
 - The three difficulty tiers as N+K presets — `web/src/ui/controls.ts → TIER_PRESETS`; `crates/brain-visualizer/src/sim/scaler.rs → TierRange::for_tier`.
 - The adapter-limits → derived-caps pipeline — `crates/brain-visualizer/src/gpu_limits.rs → GpuCaps::derive`, `LimitsInput`, `FIELD_ELEMENT_BYTES`.
-- The 1M-default / 10M-gated-stretch cap policy (see below).
+- The `PRODUCT_MAX_N = 20_000` product cap.
 
 ## What it does NOT own
 
@@ -40,21 +40,42 @@ preset for the lifetime of that network. Switching tier triggers a backend
 restart at the new N/K (see [`web-frontend.md`](web-frontend.md) →
 `restartWithBackend`). Nothing changes N between restarts.
 
-The V2 default is `low` at N=1 200 (morphology-first scale; see
-`web/src/core/types.ts → DEFAULT_CONFIG`). The `TIER_PRESETS` table fixes K=16 across
-all tiers for the current beauty-first phase; the `TierRange` table in
-`crates/brain-visualizer/src/sim/scaler.rs` carries wider K ranges for when a scaler is
-re-armed.
+The current default is N=6 000, K=16 (`web/src/core/types.ts → DEFAULT_CONFIG`).
+The product maximum is `PRODUCT_MAX_N = 20_000`; all web tier presets, dev-panel
+N input/slider bounds, saved config loading/saving, Rust `SimConfig::default()`,
+the WASM construction path, and dormant scaler proposal ranges are clamped to
+that product cap. The `TIER_PRESETS` table fixes K=16 across all tiers for the
+current beauty-first phase; the Rust `TierRange` table still carries wider K
+ranges for when a scaler is re-armed, but no tier may propose `n > 20_000`.
 
-**High-N morphology init cost.** Since the branching-tree morphology generator
-(`crates/brain-visualizer/src/sim/morphology.rs → generate`), per-neuron build cost
-rose ~5× over the old fan and the segment allocation cap grew ~1.5×, so a high-N
-tier pays a noticeably longer one-time `initialize()` and approaches the GPU
-storage-buffer ceiling sooner. The "degrade gracefully at high N" guard
-(e.g. dropping `edge_subsegments` / skipping relaxation above a budget threshold)
-was deferred — see [`../decisions/manifold.md`](../decisions/manifold.md) and
-[`future_roadmap.md`](../plans/future_roadmap.md). This is why the default stays
-`low` at N=1 200.
+**Active/recent rendering makes high-N affordable.** Morphology tube render cost
+no longer scales with total generated segment count. A GPU compaction pass selects
+only active/recent segments and both tube passes draw that compacted set via
+indirect draw. At the N=6 000 low-firing default, a small fraction of the ~0.87 M
+generated segments are drawn per frame; draw count rises with firing activity.
+N, K, and branch detail can therefore grow without proportionally growing frame
+cost — the renderer tracks visible activity, not total geometry. Generation
+(one-time, at brain build) is not the first-order target and remains a few seconds
+at high N (axon Prim-attach dominates); runtime rendering is what was optimised.
+GPU rendering details live in [`gpu-rendering.md`](gpu-rendering.md).
+
+**Morphology segment budget and the storage-buffer ceiling.** The GPU segment
+buffer is sized to the actual generated segment count, not a pre-allocated cap,
+so actual GPU memory ≈ segments × 48 B (~42 MB at N=6 000, ~0.87 M segments).
+The host-side per-run segment cap is sized to worst-case per-neuron bounds and
+is comfortably unmet at N=6 000 (~25% utilisation, 0 dropped).
+
+**Known limit — single storage-buffer binding ceiling.** Morphology segments are
+bound as a single GPU storage buffer, which hits the 128 MiB
+`max_storage_buffer_binding_size` limit at ~2.76 M segments (~N=12 000). To stay
+safely under it, dendrite decoration density is neuron-count-aware: full below
+N≈2 400 (close-up scales where bushiness reads), linearly ramped to zero by
+N=8 000 (`crates/brain-visualizer/src/sim/morphology.rs → DECOR_FULL_N`,
+`DECOR_ZERO_N`, `effective_decor_group_max`). The N=6 000 default and the
+N=12 000 stress tier stay within the binding limit at the cost of throttled
+dendrite decoration above N≈2 400. The correct fix — chunking or multi-binding
+the segment buffer in `crates/brain-visualizer/src/sim/gpu/resources.rs` — is
+not yet done; this is a known scaling ceiling and deferred future work.
 
 Auto-selection of a tier based on measured device performance is deferred: the
 benchmarks needed to calibrate those heuristics require real browser/GPU numbers
@@ -65,7 +86,7 @@ representative).
 ## The dormant scaler decision function
 
 No code path changes N at runtime. The rAF loop's once-per-second `dumped` block
-drives only the HUD and sonification — it no longer calls `scalerDecide` or
+drives only the HUD and dev-panel monitor — it no longer calls `scalerDecide` or
 `gpuBackend.reinitialize`. `scalerDecide` (`web/src/ui/controls.ts`) survives as a
 pure, stateless function kept under test (`web/src/ui/controls.test.ts`): given
 p95 frame time, current N, tier, time since last resize, and a restart-in-progress
@@ -100,26 +121,36 @@ The derivation is pure (takes a plain `LimitsInput` struct) and is exercised by
 encodes the conservative WebGPU baseline; the llvmpipe-specific fixture is in the
 test suite at `crates/brain-visualizer/src/gpu_limits.rs`.
 
-## The 1M-default / 10M-gated-stretch cap policy
+## Product cap vs adapter capacity
 
-The Max tier practical default is ~1 M neurons (`N_MAX[max]` in
-`web/src/ui/controls.ts`). 10 M is a best-case stretch, unlocked only when:
+`PRODUCT_MAX_N = 20_000` is a product/readability cap, not a hardware-capacity
+claim. The cap is enforced in both languages:
 
-1. The device's `maxStorageBufferBindingSize` (reported via `GpuCaps`) is large
-   enough to hold the per-field arrays, **and**
-2. A benchmark burst confirms the frame budget is sustainable at that N.
+- Web: `web/src/core/types.ts → PRODUCT_MAX_N`, `clampNeuronCount`,
+  `loadConfig`, and `saveConfig`.
+- Web UI/scaler: `web/src/ui/dev-panel.ts` N control and
+  `web/src/ui/controls.ts → TIER_PRESETS`, `N_MIN`, `N_MAX`, `scalerDecide`.
+- Rust: `crates/brain-visualizer/src/sim/backend.rs → PRODUCT_MAX_N`,
+  `clamp_neuron_count`, `SimConfig::default()`, and WASM/backend construction.
+- Rust scaler stub: `crates/brain-visualizer/src/sim/scaler.rs →
+  TierRange::for_tier` and `propose`.
 
-The visualizer does not imply 10 M is generally available. Honest adaptation to
-the actual machine is the feature; inflated copy that most devices cannot sustain
-is not. See [`../decisions/scaling.md`](../decisions/scaling.md).
+`crates/brain-visualizer/src/gpu_limits.rs → GpuCaps::derive` still reports
+adapter capacity from WebGPU limits. Those hardware-derived values can be much
+larger than 20k and should stay larger; downstream product surfaces clamp to
+`PRODUCT_MAX_N` separately.
+
+Old saved browser config keeps its schema version (`bv2_config_v1`), but saved
+`n` values above `20_000` are clamped on load and on save. The visual/morph
+settings keys were not bumped for this cap.
 
 ## Update when
 
 - `TIER_PRESETS` or `N_MIN`/`N_MAX` ranges change.
+- `PRODUCT_MAX_N` or the web/Rust clamp points change.
 - A runtime auto-scaler is re-armed (some code path again changes N during the
   rAF loop) — see [`future_roadmap.md`](../plans/future_roadmap.md).
 - `GpuCaps` gains or loses a derived field.
-- The 10M unlock conditions change.
 
 ## See also
 

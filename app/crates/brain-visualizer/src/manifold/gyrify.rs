@@ -1,10 +1,12 @@
-//! Noise-based gyrification — turns the smooth icosphere into a folded cortex.
+//! Structured gyrification — turns the smooth icosphere into a folded cortex.
 //!
-//! Three octaves of OpenSimplex noise displace each vertex along its outward
-//! normal (BV13, phase-1 doc step 2):
+//! Three OpenSimplex noise fields plus deterministic anatomical groove masks
+//! displace each vertex along its outward normal:
 //! - coarse lumps (freq ~0.8): large slow bulges, amplitude ~12% of radius;
 //! - large scale (freq ~1.5): gyri (ridges), amplitude ~15% of radius;
 //! - small scale (freq ~4.0): sulci (fine folds), amplitude ~5% of radius.
+//! - major grooves: longitudinal fissure, central sulcus, lateral sulcus, and
+//!   parieto-occipital grooves, all derived from normalized coordinates.
 //!
 //! Pure & host-testable: `noise` is cross-platform. Deterministic for a given
 //! seed.
@@ -37,45 +39,101 @@ impl Default for GyrifyParams {
     }
 }
 
-/// Displace base-envelope vertices along their outward direction by the
-/// two-octave noise field. The local envelope radius is preserved and the fold
-/// amplitudes are applied as a fraction of that radius, so the same noise
-/// params work for both the old sphere and the shaped brain shell.
-pub fn gyrify(base_vertices: &[[f32; 3]], params: &GyrifyParams, seed: u32) -> Vec<[f32; 3]> {
-    // Three independent noise fields (distinct seed offsets) so octaves decorrelate.
-    let gyri = OpenSimplex::new(seed);
-    let sulci = OpenSimplex::new(seed.wrapping_add(0x9e37_79b9));
-    let lumps = OpenSimplex::new(seed.wrapping_add(0x85eb_ca6b));
+/// Deterministic fold field shared by surface generation and folded-shell
+/// neuron placement.
+pub struct FoldField {
+    params: GyrifyParams,
+    gyri: OpenSimplex,
+    sulci: OpenSimplex,
+    lumps: OpenSimplex,
+}
 
+impl FoldField {
+    pub fn new(params: GyrifyParams, seed: u32) -> Self {
+        Self {
+            params,
+            gyri: OpenSimplex::new(seed),
+            sulci: OpenSimplex::new(seed.wrapping_add(0x9e37_79b9)),
+            lumps: OpenSimplex::new(seed.wrapping_add(0x85eb_ca6b)),
+        }
+    }
+
+    /// Radius multiplier for a normalized direction. Values are clamped to a
+    /// conservative band so structured grooves improve readability without
+    /// escaping existing interaction/framing bounds.
+    pub fn radius_scale(&self, dir: [f32; 3]) -> f32 {
+        let n = normalize(dir);
+        let [x, y, z] = n;
+        let ax = x.abs();
+
+        let gp = [
+            (x as f64) * self.params.gyri_freq,
+            (y as f64) * self.params.gyri_freq,
+            (z as f64) * self.params.gyri_freq,
+        ];
+        let sp = [
+            (x as f64) * self.params.sulci_freq,
+            (y as f64) * self.params.sulci_freq,
+            (z as f64) * self.params.sulci_freq,
+        ];
+        let lp = [
+            (x as f64) * self.params.lump_freq,
+            (y as f64) * self.params.lump_freq,
+            (z as f64) * self.params.lump_freq,
+        ];
+
+        let cortical_mask = smoothstep(-0.72, 0.18, y);
+        let dorsal_mask = smoothstep(-0.12, 0.82, y);
+        let lateral_mask = smoothstep(0.18, 0.72, ax);
+        let fissure_mask = gaussian(ax, 0.0, 0.08) * dorsal_mask * gaussian(z, 0.04, 0.82);
+
+        let random_relief = self.lumps.get(lp) as f32 * self.params.lump_amp * 0.42
+            + self.gyri.get(gp) as f32 * self.params.gyri_amp * 0.42 * cortical_mask
+            + self.sulci.get(sp) as f32 * self.params.sulci_amp * 0.55 * cortical_mask;
+
+        let central_sulcus =
+            gaussian(z + y * 0.20, 0.02, 0.08) * lateral_mask * smoothstep(-0.22, 0.70, y);
+        let lateral_sulcus =
+            gaussian(y, -0.23, 0.07) * smoothstep(0.36, 0.90, ax) * gaussian(z, -0.03, 0.58);
+        let parieto_occipital = gaussian(z, 0.55, 0.09) * lateral_mask * smoothstep(0.02, 0.80, y);
+        let temporal_groove =
+            gaussian(y, -0.42, 0.10) * smoothstep(0.54, 0.96, ax) * gaussian(z, -0.02, 0.48);
+        let band_phase = z * 17.0 + y * 6.5 + ax * 4.0;
+        let shallow_bands = (0.5 - 0.5 * band_phase.sin()).powf(1.7) * lateral_mask * cortical_mask;
+
+        let major_grooves = 0.125 * fissure_mask
+            + 0.052 * central_sulcus
+            + 0.058 * lateral_sulcus
+            + 0.034 * parieto_occipital
+            + 0.032 * temporal_groove
+            + 0.022 * shallow_bands;
+
+        let scale = self.params.radius * (1.0 + random_relief - major_grooves);
+        scale.clamp(self.params.radius * 0.72, self.params.radius * 1.12)
+    }
+
+    #[inline]
+    pub fn folded_radius(&self, base_radius: f32, dir: [f32; 3]) -> f32 {
+        base_radius * self.radius_scale(dir)
+    }
+}
+
+/// Displace base-envelope vertices along their outward direction by the shared
+/// fold field. The local envelope radius is preserved and fold amplitudes are
+/// applied as a fraction of that radius, so the same field can place neurons
+/// just under the folded cortical surface.
+pub fn gyrify(base_vertices: &[[f32; 3]], params: &GyrifyParams, seed: u32) -> Vec<[f32; 3]> {
+    let field = FoldField::new(*params, seed);
+    gyrify_with_field(base_vertices, &field)
+}
+
+pub fn gyrify_with_field(base_vertices: &[[f32; 3]], field: &FoldField) -> Vec<[f32; 3]> {
     base_vertices
         .iter()
         .map(|&p| {
             let n = normalize(p);
             let base_radius = length(p).max(1e-5);
-            let gp = [
-                (n[0] as f64) * params.gyri_freq,
-                (n[1] as f64) * params.gyri_freq,
-                (n[2] as f64) * params.gyri_freq,
-            ];
-            let sp = [
-                (n[0] as f64) * params.sulci_freq,
-                (n[1] as f64) * params.sulci_freq,
-                (n[2] as f64) * params.sulci_freq,
-            ];
-            let lp = [
-                (n[0] as f64) * params.lump_freq,
-                (n[1] as f64) * params.lump_freq,
-                (n[2] as f64) * params.lump_freq,
-            ];
-            // Noise in [-1, 1] (OpenSimplex range is roughly [-1,1]).
-            let g = gyri.get(gp) as f32;
-            let s = sulci.get(sp) as f32;
-            let l = lumps.get(lp) as f32;
-            let radius = base_radius
-                * (params.radius
-                    + l * params.lump_amp * params.radius
-                    + g * params.gyri_amp * params.radius
-                    + s * params.sulci_amp * params.radius);
+            let radius = field.folded_radius(base_radius, n);
             [n[0] * radius, n[1] * radius, n[2] * radius]
         })
         .collect()
@@ -94,6 +152,22 @@ fn normalize(v: [f32; 3]) -> [f32; 3] {
 #[inline]
 fn length(v: [f32; 3]) -> f32 {
     (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+}
+
+#[inline]
+fn gaussian(x: f32, center: f32, sigma: f32) -> f32 {
+    let sigma = sigma.max(1e-4);
+    let t = (x - center) / sigma;
+    (-0.5 * t * t).exp()
+}
+
+#[inline]
+fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+    if edge0 == edge1 {
+        return if x < edge0 { 0.0 } else { 1.0 };
+    }
+    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 #[cfg(test)]
@@ -127,7 +201,26 @@ mod tests {
             "surface is too smooth: range {}",
             max - min
         );
-        // Within [1 - (0.12+0.15+0.05) - eps, 1 + (0.12+0.15+0.05) + eps].
+        // Bounded by the structured fold-field clamp.
         assert!(min > 0.66 && max < 1.34, "folds out of expected band");
+    }
+
+    #[test]
+    fn structured_grooves_indent_fissure_and_lateral_sulcus() {
+        let p = GyrifyParams::default();
+        let field = FoldField::new(p, 11);
+        let lateral_top = field.radius_scale(normalize([0.60, 0.78, 0.05]));
+        let fissure = field.radius_scale(normalize([0.02, 0.99, 0.05]));
+        let lateral_sulcus = field.radius_scale(normalize([0.82, -0.24, -0.02]));
+        let temporal_ridge = field.radius_scale(normalize([0.82, -0.05, -0.02]));
+
+        assert!(
+            fissure < lateral_top - 0.05,
+            "fissure not visibly indented: fissure={fissure} lateral_top={lateral_top}"
+        );
+        assert!(
+            lateral_sulcus < temporal_ridge - 0.03,
+            "lateral sulcus not visibly indented: sulcus={lateral_sulcus} ridge={temporal_ridge}"
+        );
     }
 }

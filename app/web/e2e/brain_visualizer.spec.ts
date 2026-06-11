@@ -78,6 +78,33 @@ async function waitForFrames(
   );
 }
 
+async function setDevPanelSlider(
+  page: Page,
+  label: string,
+  value: string,
+): Promise<string> {
+  return page.evaluate(
+    ({ label, value }) => {
+      const rows = Array.from(document.querySelectorAll<HTMLElement>("#dev-panel .dp-ctrl-row"));
+      const row = rows.find((candidate) => {
+        const text = candidate.querySelector(".dp-ctrl-label")?.textContent?.trim();
+        return text === label;
+      });
+      if (!row) throw new Error(`Dev-panel slider row not found: ${label}`);
+
+      const wrap = row.nextElementSibling as HTMLElement | null;
+      const slider = wrap?.querySelector<HTMLInputElement>('input[type="range"]');
+      if (!slider) throw new Error(`Dev-panel range input not found: ${label}`);
+
+      slider.value = value;
+      slider.dispatchEvent(new Event("input", { bubbles: true }));
+      slider.dispatchEvent(new Event("change", { bubbles: true }));
+      return slider.value;
+    },
+    { label, value },
+  );
+}
+
 /**
  * Check WebGPU adapter availability at runtime.
  * Returns { gpuPresent, hasAdapter, adapterDescription }.
@@ -268,10 +295,10 @@ test("resize: viewport resize while frames run does NOT trigger borrow panic", a
 });
 
 // ---------------------------------------------------------------------------
-// Test 4 — Controls: brain-state and speed buttons
+// Test 4 — Controls: public buttons and dev-panel simulation sliders
 // ---------------------------------------------------------------------------
 
-test("controls: brain-state and speed buttons toggle without errors", async ({
+test("controls: current public and simulation controls toggle without errors", async ({
   page,
 }) => {
   const errors: string[] = [];
@@ -286,42 +313,37 @@ test("controls: brain-state and speed buttons toggle without errors", async ({
   // Wait for the loop to start.
   await waitForFrames(page, 5);
 
-  // --- Brain state buttons (data-state values from index.html) ---
-  const brainStates = [
-    "deep_sleep",
-    "relaxed",
-    "focused",
-    "hyperstimulated",
-    "seizure",
-  ];
-  for (const state of brainStates) {
-    const btn = page.locator(`#brain-state-group button[data-state="${state}"]`);
-    await expect(btn).toBeVisible();
-    await btn.click();
-    // Wait a tick for the click handler to propagate.
+  // UX overhaul: the old top-level brain-state/speed groups are intentionally
+  // removed from the public page. Their live controls now live in the hidden
+  // dev panel as Excitability and Speed sliders.
+  await expect(page.locator("#brain-state-group")).toHaveCount(0);
+  await expect(page.locator("#speed-group")).toHaveCount(0);
+
+  const pauseBtn = page.locator("#pause-toggle");
+  await expect(pauseBtn).toBeVisible();
+  await pauseBtn.click();
+  await expect(pauseBtn).toHaveAttribute("aria-pressed", "true");
+  await pauseBtn.click();
+  await expect(pauseBtn).toHaveAttribute("aria-pressed", "false");
+
+  await page.locator("#settings-toggle").click();
+  await expect(page.locator("#dev-panel")).toHaveClass(/dp--open/);
+  await page.locator('#dev-panel .dp-tab[data-tab-id="network"]').click();
+
+  for (const excitability of ["0.10", "0.30", "0.63", "0.71", "1.00"]) {
+    expect(Number(await setDevPanelSlider(page, "Excitability", excitability))).toBeCloseTo(
+      Number(excitability),
+      2,
+    );
     await page.waitForTimeout(50);
   }
 
-  // After clicking all brain states, confirm "focused" becomes active.
-  await page.locator('#brain-state-group button[data-state="focused"]').click();
-  const focusedBtn = page.locator(
-    '#brain-state-group button[data-state="focused"]',
-  );
-  await expect(focusedBtn).toHaveClass(/active/);
-
-  // --- Speed buttons ---
-  const speeds = ["quarter", "half", "normal", "double"];
-  for (const speed of speeds) {
-    const btn = page.locator(`#speed-group button[data-speed="${speed}"]`);
-    await expect(btn).toBeVisible();
-    await btn.click();
+  for (const speed of ["1", "15", "30", "60"]) {
+    expect(Number(await setDevPanelSlider(page, "Speed (ticks/sec)", speed))).toBe(
+      Number(speed),
+    );
     await page.waitForTimeout(50);
   }
-
-  // After clicking all speeds, confirm "normal" is active.
-  await page.locator('#speed-group button[data-speed="normal"]').click();
-  const normalBtn = page.locator('#speed-group button[data-speed="normal"]');
-  await expect(normalBtn).toHaveClass(/active/);
 
   // Confirm no crashes from button interactions.
   const criticalErrors = errors.filter(
@@ -375,8 +397,15 @@ test("cpu-backend: toggle to CPU mode; confirm restart without crash", async ({
     return;
   }
 
-  // Click the CPU backend button.
   const cpuBtn = page.locator('#backend-toggle button[data-backend="cpu"]');
+  if ((await cpuBtn.count()) === 0) {
+    test.skip(
+      true,
+      "Public CPU backend toggle is intentionally hidden in the current V2 UI contract.",
+    );
+  }
+
+  // Click the CPU backend button when a runtime contract exposes it.
   await expect(cpuBtn).toBeVisible();
 
   // The CPU button should not be disabled (Phase 6 unlocked it).

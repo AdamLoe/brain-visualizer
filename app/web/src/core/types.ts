@@ -41,18 +41,24 @@ export interface AppConfig {
   ticksPerSec: number;
 }
 
-// v0.4.0 review baseline: the clean first-load default stays at 1200/16 so the
-// procedural morphology reads as individual neurons without any dev-panel
-// tuning. The public tier controls remain explicit opt-in presets; the default
-// app config is the accepted-default source of truth for first load.
+export const PRODUCT_MAX_N = 20_000;
+
+export function clampNeuronCount(n: number): number {
+  const value = Number.isFinite(n) ? Math.round(n) : DEFAULT_CONFIG.n;
+  return Math.max(1, Math.min(PRODUCT_MAX_N, value));
+}
+
+// v0.5.x high-scale baseline: 6000 neurons, low excitability for calm first load.
+// The public tier controls remain explicit opt-in presets; the default app
+// config is the accepted-default source of truth for first load.
 export const DEFAULT_CONFIG: AppConfig = {
-  n: 1_200,
+  n: 6_000,
   k: 16,
   seed: 0x5eed5eed,
   tier: "low",
   speed: "normal",
   backend: "gpu",
-  excitability: 0.71, // boot default = BRAIN_STATES.hyperstimulated (matches the live lerp seed)
+  excitability: 0.10, // boot default = BRAIN_STATES.deep_sleep (calm first load)
   ticksPerSec: 30, // default 30 ticks/sec (matches the rAF-loop default)
 };
 
@@ -62,7 +68,7 @@ export const DEFAULT_CONFIG: AppConfig = {
 // Persists ONLY user-chosen scaling/runtime knobs (n, k, tier, backend, speed,
 // excitability). `seed` is a fixed constant and is NOT persisted; no runtime
 // counters are persisted. On missing/parse-error/version-mismatch → DEFAULT_CONFIG.
-export const CONFIG_LS_KEY = "bv2_config_v1";
+export const CONFIG_LS_KEY = "bv2_config_v2";
 
 /** Subset of AppConfig persisted to localStorage (no seed, no runtime counters). */
 interface SavedConfig {
@@ -87,7 +93,7 @@ export function loadConfig(): AppConfig {
     const base = DEFAULT_CONFIG;
     return {
       ...base,
-      n:            parsed.n            ?? base.n,
+      n:            clampNeuronCount(parsed.n ?? base.n),
       k:            parsed.k            ?? base.k,
       tier:         parsed.tier         ?? base.tier,
       backend:      parsed.backend      ?? base.backend,
@@ -105,7 +111,7 @@ export function saveConfig(c: AppConfig): void {
   try {
     const saved: SavedConfig = {
       version: 1,
-      n: c.n,
+      n: clampNeuronCount(c.n),
       k: c.k,
       tier: c.tier,
       backend: c.backend,

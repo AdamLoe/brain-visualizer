@@ -4,8 +4,8 @@
 // Shared contract with Rust: the Float32Array layout produced by toFloat32Array
 // MUST match the VisualSettings struct in src/sim/gpu/mod.rs index-for-index.
 //
-// Persistence: versioned localStorage key "bv2_settings_v1".
-// Schema: { version:4, public:{…}, dev:{…} }
+// Persistence: versioned localStorage key "bv2_settings_v2".
+// Schema: { version:5, public:{…}, dev:{…} }
 // (version bumped 1→2: morphology controls changed defaults/semantics — width is
 //  now a 1.0 multiplier, index 15 repurposed to morphRestingOpacity,
 //  connectionLayer default 1, bloom default 0.5; old v1 data is ignored.)
@@ -20,6 +20,12 @@
 // (version bumped 4→5: connectionLightPast removed — index 9 tombstoned as
 //  reserved_zero; upstream lighting on shared arbors was misleading and is
 //  deferred until whole-path semantics are redesigned. Old v4 data is discarded.)
+// (2026-06-09: signalSource index 16 and adaptiveScalerEnabled index 23 are
+//  tombstoned as reserved_zero. Runtime fields remain for the frozen TS/Rust
+//  layout and setting metadata, but UI/persistence no longer read or write them.)
+// (2026-06-11: pointRadius, surfaceOpacity, and surface are no longer exposed
+//  or persisted. Runtime fields remain default-written for the frozen 26-slot
+//  TS/Rust layout; old saved values are ignored.)
 // On version mismatch → ignore saved data, use defaults (no migration for now).
 // Never persist runtime counters (there are none in this struct).
 
@@ -51,8 +57,8 @@ export interface VisualizerSettings {
   // ── index 15: Morphology — resting opacity ───────────────
   morphRestingOpacity:      number;   // 15 opacity of non-active structure (0..1)
   // ── index 16–23: mode enums ──────────────
-  signalSource:             number;   // 16 signal source mode
-  connectionLayer:          number;   // 17 connection layer mode
+  signalSource:             number;   // 16 RESERVED/INERT — signal source removed; index kept for the Rust↔TS contract
+  connectionLayer:          number;   // 17 connection layer mode: 0=Off, 1=Active/recent only (default), 2=Resting debug (placeholder — behaves like 1 until DRAW_LEGACY_ALL_SEGMENTS is wired at runtime)
   colorBy:                  number;   // 18 color-by mode
   neuronVisibility:         number;   // 19 neuron visibility mode
   surface:                  number;   // 20 surface display mode
@@ -65,9 +71,9 @@ export interface VisualizerSettings {
 }
 
 // ─── DEFAULT_SETTINGS ─────────────────────────────────────────────────────────
-// Values reproduce pre-V2 behavior exactly.  N/K defaults live in types.ts.
+// Accepted product defaults. N/K defaults live in types.ts.
 export const DEFAULT_SETTINGS: VisualizerSettings = {
-  glowTau:                  60.0,
+  glowTau:                  10.0,
   pointRadius:              0.004,
   neuronVisualRadius:       0.004,
   activeNeuronRadiusBoost:  2.0,
@@ -78,21 +84,22 @@ export const DEFAULT_SETTINGS: VisualizerSettings = {
   connectionLightNext:      1,     // Morphology: downstream lighting on by default
   bloomStrength:            0.40,  // Morphology: bloom on by default so glow blooms
   surfaceOpacity:           1.0,
-  iExt:                     0.055,
+  iExt:                     0.014,
   synapticScale:            0.03,
-  heterogeneity:            0.0,
-  morphRestingOpacity:      0.20,  // Morphology: resting structure opacity (0=only pulses)
+  heterogeneity:            0.50,
+  morphRestingOpacity:      0.0,   // Morphology: resting structure hidden by default (0=only pulses)
   signalSource:             0,
-  // Morphology: default 1 = on (resting structure + signal flow). 0 = off.
+  // Morphology connection layer: 0=Off (no morphology work), 1=Active/recent only (default),
+  // 2=Resting debug (placeholder — DRAW_LEGACY_ALL_SEGMENTS const controls this at compile time).
   connectionLayer:          1,
-  colorBy:                  0,
+  colorBy:                  6,
   neuronVisibility:         0,
   surface:                  0,
   weightNormalization:      1,  // sqrt_k default
   inputMode:                0,  // constant
   adaptiveScalerEnabled:    0,  // RESERVED/INERT — auto-scaling removed in 0.1.1; index 23 kept for the contract
-  longRangeReachFrac:       0.0,  // heavy-tailed reach off by default (bit-identical to pre-tail)
-  maxReachCells:            6,    // long-range max-reach radius in cells
+  longRangeReachFrac:       0.14, // heavy-tailed reach: 14% long-range synapses
+  maxReachCells:            14,   // long-range max-reach radius in cells
 };
 
 // ─── SavedVisualizerSettings — persisted schema ───────────────────────────────
@@ -103,16 +110,13 @@ export const DEFAULT_SETTINGS: VisualizerSettings = {
 interface SavedPublic {
   glowTau:               number;
   bloomStrength:         number;
-  surfaceOpacity:        number;
   connectionLayer:       number;   // off / active_only / active+fade
   colorBy:               number;
   neuronVisibility:      number;
-  surface:               number;
 }
 
 /** Dev-only tuning settings persisted in localStorage. */
 interface SavedDev {
-  pointRadius:              number;
   neuronVisualRadius:       number;
   activeNeuronRadiusBoost:  number;
   inactiveNeuronOpacity:    number;
@@ -124,10 +128,8 @@ interface SavedDev {
   synapticScale:            number;
   heterogeneity:            number;
   morphRestingOpacity:      number;
-  signalSource:             number;
   weightNormalization:      number;
   inputMode:                number;
-  adaptiveScalerEnabled:    number;
   longRangeReachFrac:       number;
   maxReachCells:            number;
 }
@@ -140,7 +142,7 @@ interface SavedVisualizerSettings {
 }
 
 // ─── localStorage key ────────────────────────────────────────────────────────
-export const SETTINGS_LS_KEY = "bv2_settings_v1";
+export const SETTINGS_LS_KEY = "bv2_settings_v2";
 const LS_KEY = SETTINGS_LS_KEY;
 
 // ─── persistence helpers ─────────────────────────────────────────────────────
@@ -151,14 +153,11 @@ function settingsToSaved(s: VisualizerSettings): SavedVisualizerSettings {
     public: {
       glowTau:           s.glowTau,
       bloomStrength:     s.bloomStrength,
-      surfaceOpacity:    s.surfaceOpacity,
       connectionLayer:   s.connectionLayer,
       colorBy:           s.colorBy,
       neuronVisibility:  s.neuronVisibility,
-      surface:           s.surface,
     },
     dev: {
-      pointRadius:              s.pointRadius,
       neuronVisualRadius:       s.neuronVisualRadius,
       activeNeuronRadiusBoost:  s.activeNeuronRadiusBoost,
       inactiveNeuronOpacity:    s.inactiveNeuronOpacity,
@@ -170,10 +169,8 @@ function settingsToSaved(s: VisualizerSettings): SavedVisualizerSettings {
       synapticScale:            s.synapticScale,
       heterogeneity:            s.heterogeneity,
       morphRestingOpacity:      s.morphRestingOpacity,
-      signalSource:             s.signalSource,
       weightNormalization:      s.weightNormalization,
       inputMode:                s.inputMode,
-      adaptiveScalerEnabled:    s.adaptiveScalerEnabled,
       longRangeReachFrac:       s.longRangeReachFrac,
       maxReachCells:            s.maxReachCells,
     },
@@ -190,13 +187,10 @@ function mergeOver(base: VisualizerSettings, saved: SavedVisualizerSettings): Vi
     // public
     glowTau:              p.glowTau              ?? base.glowTau,
     bloomStrength:        p.bloomStrength         ?? base.bloomStrength,
-    surfaceOpacity:       p.surfaceOpacity        ?? base.surfaceOpacity,
     connectionLayer:      p.connectionLayer       ?? base.connectionLayer,
     colorBy:              p.colorBy               ?? base.colorBy,
     neuronVisibility:     p.neuronVisibility      ?? base.neuronVisibility,
-    surface:              p.surface               ?? base.surface,
     // dev
-    pointRadius:              d.pointRadius              ?? base.pointRadius,
     neuronVisualRadius:       d.neuronVisualRadius       ?? base.neuronVisualRadius,
     activeNeuronRadiusBoost:  d.activeNeuronRadiusBoost  ?? base.activeNeuronRadiusBoost,
     inactiveNeuronOpacity:    d.inactiveNeuronOpacity    ?? base.inactiveNeuronOpacity,
@@ -208,10 +202,8 @@ function mergeOver(base: VisualizerSettings, saved: SavedVisualizerSettings): Vi
     synapticScale:            d.synapticScale            ?? base.synapticScale,
     heterogeneity:            d.heterogeneity            ?? base.heterogeneity,
     morphRestingOpacity:      d.morphRestingOpacity      ?? base.morphRestingOpacity,
-    signalSource:             d.signalSource             ?? base.signalSource,
     weightNormalization:      d.weightNormalization      ?? base.weightNormalization,
     inputMode:                d.inputMode                ?? base.inputMode,
-    adaptiveScalerEnabled:    d.adaptiveScalerEnabled    ?? base.adaptiveScalerEnabled,
     longRangeReachFrac:       d.longRangeReachFrac       ?? base.longRangeReachFrac,
     maxReachCells:            d.maxReachCells            ?? base.maxReachCells,
   };
@@ -293,7 +285,7 @@ function notify(): void {
 export function toFloat32Array(s: VisualizerSettings): Float32Array {
   const a = new Float32Array(SETTINGS_LENGTH);
   a[0]  = s.glowTau;
-  a[1]  = s.pointRadius;
+  a[1]  = DEFAULT_SETTINGS.pointRadius; // index 1: stale pointRadius UI retired; default-written
   a[2]  = s.neuronVisualRadius;
   a[3]  = s.activeNeuronRadiusBoost;
   a[4]  = s.inactiveNeuronOpacity;
@@ -303,19 +295,19 @@ export function toFloat32Array(s: VisualizerSettings): Float32Array {
   a[8]  = s.connectionLightNext;
   a[9]  = 0; // index 9: reserved_zero (connectionLightPast removed)
   a[10] = s.bloomStrength;
-  a[11] = s.surfaceOpacity;
+  a[11] = DEFAULT_SETTINGS.surfaceOpacity; // index 11: hidden surface path retired; default-written
   a[12] = s.iExt;
   a[13] = s.synapticScale;
   a[14] = s.heterogeneity;
   a[15] = s.morphRestingOpacity;    // Morphology: resting opacity (0..1)
-  a[16] = s.signalSource;
+  a[16] = 0; // index 16: reserved_zero (signalSource removed)
   a[17] = s.connectionLayer;
   a[18] = s.colorBy;
   a[19] = s.neuronVisibility;
-  a[20] = s.surface;
+  a[20] = DEFAULT_SETTINGS.surface; // index 20: hidden surface path retired; default-written
   a[21] = s.weightNormalization;
   a[22] = s.inputMode;
-  a[23] = s.adaptiveScalerEnabled;
+  a[23] = 0; // index 23: reserved_zero (adaptiveScalerEnabled removed)
   a[24] = s.longRangeReachFrac;   // heavy-tailed reach: long-range fraction (0..1)
   a[25] = s.maxReachCells;        // heavy-tailed reach: max-reach radius (cells)
   return a;

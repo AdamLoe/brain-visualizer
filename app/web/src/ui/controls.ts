@@ -10,7 +10,7 @@ import type {
   SpeedPreset,
   Tier,
 } from "../core/types";
-import { saveConfig } from "../core/types";
+import { PRODUCT_MAX_N, saveConfig } from "../core/types";
 
 // ── Brain state → excitability (BV15) ────────────────────────────────────────
 // Locked values per spec. Keys match the HTML data-state attributes.
@@ -165,32 +165,29 @@ export function setTier(
 }
 
 // ── V2 Phase F: Tier → (n, k) preset map ────────────────────────────────────
-// Beauty-first: K stays fixed at 16 across all tiers; only N scales.
-// "low" is the default boot tier (n=10k) — matches DEFAULT_CONFIG in types.ts.
-// "balanced" and "max" are opt-in: clicking the tier button triggers a full
-// GPU backend reinitialise with the new N.
-// NOTE: real-device auto-tier benchmarking is deferred (no hardware target here).
+// Legacy control facade only; the dev panel no longer exposes high-N tier UI.
+// Presets remain below the product cap so old callers cannot request >20k.
 export interface TierPreset { n: number; k: number; }
 export const TIER_PRESETS: Record<Tier, TierPreset> = {
   basic:    { n:   2_000, k: 16 },
-  low:      { n:  10_000, k: 16 }, // default beauty target
-  balanced: { n:  50_000, k: 16 },
-  max:      { n: 200_000, k: 16 },
+  low:      { n:  10_000, k: 16 },
+  balanced: { n:  15_000, k: 16 },
+  max:      { n: PRODUCT_MAX_N, k: 16 },
 };
 
 // ── Adaptive scaler (BV1 / Phase 5 activation) ───────────────────────────────
 // Per-tier N bounds (must stay within tier — never auto-change tier).
 export const N_MIN: Record<Tier, number> = {
   basic:    50,
-  low:      5_000,
-  balanced: 30_000,
-  max:      200_000,
+  low:      1_000,
+  balanced: 5_000,
+  max:      10_000,
 };
 export const N_MAX: Record<Tier, number> = {
   basic:    1_000,
-  low:      80_000,
-  balanced: 300_000,
-  max:      1_200_000,
+  low:      10_000,
+  balanced: 15_000,
+  max:      PRODUCT_MAX_N,
 };
 
 const FRAME_BUDGET_MS   = 14;    // 60 fps with ~2 ms headroom
@@ -240,12 +237,18 @@ export function scalerDecide(
   if (timeSinceResizeMs < SCALER_COOLDOWN_MS) return { kind: "none" };
 
   if (p95Ms > FRAME_BUDGET_MS && currentN > N_MIN[tier]) {
-    const newN = Math.max(N_MIN[tier], Math.floor(currentN * SCALER_SHRINK_RATE));
+    const newN = Math.min(
+      N_MAX[tier],
+      Math.max(N_MIN[tier], Math.floor(currentN * SCALER_SHRINK_RATE)),
+    );
     return { kind: "shrink_n", newN };
   }
 
   if (p95Ms < FRAME_BUDGET_MS * HEADROOM_FACTOR && currentN < N_MAX[tier]) {
-    const newN = Math.min(N_MAX[tier], Math.floor(currentN * SCALER_GROW_RATE));
+    const newN = Math.min(
+      N_MAX[tier],
+      Math.max(N_MIN[tier], Math.floor(currentN * SCALER_GROW_RATE)),
+    );
     return { kind: "grow_n", newN };
   }
 

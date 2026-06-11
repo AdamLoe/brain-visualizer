@@ -61,11 +61,11 @@ enum MetricsReadState {
 
 /// Full set of visual + sim settings. Replaces the per-frame scalar args
 /// (glow_tau, point_radius) and the separate set_i_ext / set_synaptic_scale
-/// calls.  Default reproduces pre-V2 behavior identically.
+/// calls.
 #[derive(Clone, Debug)]
 pub struct VisualSettings {
     // ── continuous knobs ──────────────────────────────────────────────────
-    /// index 0  — glow decay in ticks (default 60.0)
+    /// index 0  — glow decay in ticks (default 10.0)
     pub glow_tau: f32,
     /// index 1  — billboard radius in world units (default 0.004)
     pub point_radius: f32,
@@ -96,7 +96,7 @@ pub struct VisualSettings {
     pub i_ext: f32,
     /// index 13 — recurrent coupling scale (sim tuning; default 0.03)
     pub synaptic_scale: f32,
-    /// index 14 — per-neuron parameter spread 0→1 (default 0.0 = homogeneous)
+    /// index 14 — per-neuron parameter spread 0→1 (default 0.50)
     pub heterogeneity: f32,
     // ── index 15 (repurposed) ──────────────────────────────────────────────
     /// index 15 — Morphology controls: resting opacity of non-active structure
@@ -106,9 +106,9 @@ pub struct VisualSettings {
     // ── mode enums (stored as integer cast to f32) ─────────────────────────
     /// index 16 — signal_source mode (default 0)
     pub signal_source: u32,
-    /// index 17 — connection_layer mode (default 0)
+    /// index 17 — connection_layer mode: 0=Off, 1=Active/recent only (default), 2=Resting debug
     pub connection_layer: u32,
-    /// index 18 — color_by mode (default 0)
+    /// index 18 — color_by mode (default 6 = Brain)
     pub color_by: u32,
     /// index 19 — neuron_visibility mode (default 0)
     pub neuron_visibility: u32,
@@ -132,7 +132,7 @@ pub struct VisualSettings {
 impl Default for VisualSettings {
     fn default() -> Self {
         Self {
-            glow_tau: 60.0,
+            glow_tau: 10.0,
             point_radius: 0.004,
             neuron_visual_radius: 0.004,
             active_neuron_radius_boost: 2.0,
@@ -146,24 +146,24 @@ impl Default for VisualSettings {
             // Morphology controls: bloom on by default so the glow blooms.
             bloom_strength: 0.40,
             surface_opacity: 1.0,
-            i_ext: 0.055,
+            i_ext: 0.014,
             synaptic_scale: 0.03,
-            heterogeneity: 0.0,
+            heterogeneity: 0.50,
             // Morphology controls: resting opacity of non-active structure.
-            morph_resting_opacity: 0.20,
+            morph_resting_opacity: 0.0,
             signal_source: 0,
-            // Morphology controls: default 1 = on (resting structure + signal
-            // flow). 0 = off (morphology pass skipped).
+            // Morphology controls: 0=Off (skip all morphology work), 1=Active/recent only
+            // (default — compacted GPU draw of recently-lit segments + somas), 2=Resting debug.
             connection_layer: 1,
-            color_by: 0,
+            color_by: 6,
             neuron_visibility: 0,
             surface: 0,
             weight_normalization: 1,
             input_mode: 0,
             adaptive_scaler_enabled: 0,
-            // Heavy-tailed reach: off by default (bit-identical to today).
-            long_range_reach_frac: 0.0,
-            max_reach_cells: 6.0,
+            // Heavy-tailed reach: 14% long-range synapses by default.
+            long_range_reach_frac: 0.14,
+            max_reach_cells: 14.0,
         }
     }
 }
@@ -580,11 +580,9 @@ impl GpuBackend {
             max_reach: reach.max_reach,
             _pad: [0; 1],
         };
-        self.ctx.queue.write_buffer(
-            &sim.connect_uniform,
-            0,
-            bytemuck::bytes_of(&cu),
-        );
+        self.ctx
+            .queue
+            .write_buffer(&sim.connect_uniform, 0, bytemuck::bytes_of(&cu));
     }
 
     /// Re-normalised world-space light direction from the morph-config lighting
@@ -679,10 +677,13 @@ impl GpuBackend {
 
     // ── V2 Phase D: active-edge connection layer ──────────────────────────────
 
-    /// Set the connection-layer mode (0=off, 1=active_only, 2=active+recent_fade).
-    /// 0 (the default) skips the emit + ribbon passes entirely — zero cost, zero
-    /// behavior change. Granular setter so the harness/UI can flip it without a
-    /// full VisualSettings snapshot.
+    /// Set the connection-layer mode.
+    ///   0 = Off — skip ALL morphology work: compaction compute, tube passes, soma sphere passes.
+    ///   1 = Active/recent only (default) — compacted GPU draw of recently-lit tubes + somas.
+    ///   2 = Resting debug — intended to show full resting morphology via the legacy
+    ///       all-segment path; currently behaves like mode 1 unless `DRAW_LEGACY_ALL_SEGMENTS`
+    ///       in pipelines.rs is flipped to true at compile time.
+    /// Granular setter so the harness/UI can flip it without a full VisualSettings snapshot.
     pub fn set_connection_layer(&mut self, mode: u32) {
         self.visual.connection_layer = mode;
     }
@@ -881,6 +882,41 @@ impl GpuBackend {
 
     pub fn tick_count(&self) -> u32 {
         self.tick
+    }
+
+    /// Active/recent compaction profiler readback (Stream B/C verification).
+    /// Copies the GPU-written selected-segment count into the staging buffer and
+    /// maps it. Blocking — for tests/profiler diagnostics only, NOT the per-frame
+    /// path (the per-frame draw uses GPU indirect args, no CPU readback). Returns
+    /// `(selected, total)` where `selected` is the number of segments the last
+    /// `render_full` selected and `total` is the generated segment count. Returns
+    /// None if morphology buffers are absent.
+    pub fn read_active_segment_count(&self) -> Option<(u32, u32)> {
+        let mb = self.resources.morph_buffers.as_ref()?;
+        let mut enc =
+            self.ctx
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("read-active-segment-count"),
+                });
+        enc.copy_buffer_to_buffer(&mb.active_selected, 0, &mb.selected_staging, 0, 4);
+        self.ctx.queue.submit([enc.finish()]);
+        let slice = mb.selected_staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let _ = self.ctx.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+        rx.recv().ok()?.ok()?;
+        let selected = {
+            let data = slice.get_mapped_range();
+            u32::from_le_bytes([data[0], data[1], data[2], data[3]])
+        };
+        mb.selected_staging.unmap();
+        Some((selected, mb.segment_count))
     }
 
     /// Device handle (for one-off debug readbacks / render setup).
@@ -1096,15 +1132,13 @@ impl GpuBackend {
             target_view
         };
 
-        // ─── True-opacity active layer skip-at-zero guard ─────────────────────
-        // The two NEW depth-tested, alpha-blended active passes (active-tube +
-        // active-soma) are encoded only when the morphology layer is on AND the
-        // active-opacity ceiling is non-zero AND both active pipelines exist. At
-        // active_opacity == 0 nothing is encoded — not even the depth clear — so
-        // the renderer is bit-for-bit the current additive look (mirrors the
-        // existing draw_surface / connection_layer pass skips).
+        // ─── True-opacity active layer guard ──────────────────────────────────
+        // The depth-tested, alpha-blended active passes stay encoded whenever the
+        // morphology layer is on and both active pipelines exist. active_opacity=0
+        // is the soft low-emphasis end of the shader model, not a CPU pass skip;
+        // skipping here removes the occluding active layer and lets the additive
+        // morphology passes read blown out.
         let active_opaque_on = self.visual.connection_layer != 0
-            && self.morph_config.lighting.active_opacity > 0.0
             && self.pipelines.render_morphology_active.is_some()
             && self.pipelines.render_soma_spheres_active.is_some();
 
@@ -1261,7 +1295,7 @@ impl GpuBackend {
                 mvp: *mvp,
                 surface_opacity: self.visual.surface_opacity,
                 surface_mode: self.visual.surface,
-                _pad0: 0,
+                color_by: self.visual.color_by,
                 _pad1: 0,
             };
             self.ctx
@@ -1359,6 +1393,57 @@ impl GpuBackend {
         // (resting structure at morph_resting_opacity) and, when connection_layer
         // is on (>=1), the outward signal pulse racing along each firing neuron's
         // tree. Additive, no depth (bloom-friendly). Skipped when layer==0 (off).
+        // ─── Active/recent compaction compute (Stream B/C) ────────────────────
+        // Before the tube passes draw, run a GPU compaction stage that selects
+        // only segments the shader would light (currently/recently lit + an
+        // "about to be lit" headroom) into active_segment_indices, and writes the
+        // selected count into the tube draw-indirect args. The tube passes then
+        // draw ONLY those instances via draw_indirect — frame cost scales with
+        // active/recent count, not total segment count. No CPU readback decides
+        // the per-frame selection (discipline rule).
+        let compaction_ran = if self.visual.connection_layer != 0
+            && !crate::sim::gpu::pipelines::DRAW_LEGACY_ALL_SEGMENTS
+        {
+            if let (Some(p_reset), Some(p_compact), Some(p_write), Some(cbg), Some(mb)) = (
+                self.pipelines.compact_morph_reset.as_ref(),
+                self.pipelines.compact_morph.as_ref(),
+                self.pipelines.compact_morph_write_args.as_ref(),
+                bg.compact_morph.as_ref(),
+                self.resources.morph_buffers.as_ref(),
+            ) {
+                let cu = resources::CompactUniforms {
+                    tick: self.tick,
+                    segment_count: mb.segment_count,
+                    glow_tau: self.visual.glow_tau,
+                    connection_layer: self.visual.connection_layer,
+                    light_next: self.visual.connection_light_next,
+                    light_past: 0, // upstream lighting removed (mirrors tube uniform)
+                    tube_verts: self.morph_tube_verts,
+                    _pad: 0,
+                };
+                self.ctx
+                    .queue
+                    .write_buffer(&mb.compact_uniform, 0, bytemuck::bytes_of(&cu));
+                let groups = mb.segment_count.div_ceil(64).max(1);
+                let mut cpass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("compact-morph-pass"),
+                    timestamp_writes: None,
+                });
+                cpass.set_bind_group(0, cbg, &[]);
+                cpass.set_pipeline(p_reset);
+                cpass.dispatch_workgroups(1, 1, 1);
+                cpass.set_pipeline(p_compact);
+                cpass.dispatch_workgroups(groups, 1, 1);
+                cpass.set_pipeline(p_write);
+                cpass.dispatch_workgroups(1, 1, 1);
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
         if self.visual.connection_layer != 0 {
             if let (Some(pipe_morph), Some(mbg), Some(mb)) = (
                 self.pipelines.render_morphology.as_ref(),
@@ -1427,7 +1512,14 @@ impl GpuBackend {
                     // as quads → 2 tris × 3 verts per side). v0.3.1: runtime value
                     // kept in sync with the WGSL TUBE_SIDES override constant the
                     // morph pipeline was built with.
-                    pass.draw(0..self.morph_tube_verts, 0..segs);
+                    // Active/recent path (default): draw only the compacted
+                    // instances via the GPU-written indirect args (instance count
+                    // = selected segments). Legacy path: draw all segments.
+                    if compaction_ran {
+                        pass.draw_indirect(&mb.active_draw_args, 0);
+                    } else {
+                        pass.draw(0..self.morph_tube_verts, 0..segs);
+                    }
                 }
             }
         }
@@ -1436,9 +1528,9 @@ impl GpuBackend {
         // Depth-tested, alpha-blended draw of the SAME tubes, on top of the
         // additive resting tube pass. Owns the frame's depth clear (Clear(1.0))
         // since the additive passes never touch depth and the surface/near-LOD
-        // depth users are off by default. `fs_main_active` returns a spike-driven
-        // straight alpha so freshly-fired tubes write near-opaque color AND a
-        // near-camera depth value, genuinely occluding the additive background.
+        // depth users are off by default. `fs_main_active` returns continuous
+        // spike-proximity straight alpha so active_opacity smoothly changes tube
+        // occlusion while the bright packet remains fragment-local.
         // Reuses the additive tube bind group + draw count (same override consts).
         if active_opaque_on {
             if let (Some(pipe_active), Some(mbg), Some(mb)) = (
@@ -1473,7 +1565,13 @@ impl GpuBackend {
                 if segs > 0 {
                     pass.set_pipeline(pipe_active);
                     pass.set_bind_group(0, mbg, &[]);
-                    pass.draw(0..self.morph_tube_verts, 0..segs);
+                    // Same compacted instance list as the additive pass — the
+                    // active-opacity pass MUST NOT reintroduce full-segment draws.
+                    if compaction_ran {
+                        pass.draw_indirect(&mb.active_draw_args, 0);
+                    } else {
+                        pass.draw(0..self.morph_tube_verts, 0..segs);
+                    }
                 }
             }
         }
@@ -2685,5 +2783,19 @@ mod tests {
         // build a real backend in a unit test, but the constant is the contract.
         // Verified end-to-end by examples/sim_check.rs (native GPU).
         let _ = (LEAK_DECAY, THRESHOLD); // touch to keep the module exercised
+    }
+
+    #[test]
+    fn visual_settings_default_matches_product_defaults() {
+        let settings = VisualSettings::default();
+        assert_eq!(settings.glow_tau, 10.0);
+        assert_eq!(settings.heterogeneity, 0.50);
+    }
+
+    #[test]
+    fn visual_settings_from_short_slice_uses_product_defaults() {
+        let settings = VisualSettings::from_slice(&[]);
+        assert_eq!(settings.glow_tau, 10.0);
+        assert_eq!(settings.heterogeneity, 0.50);
     }
 }

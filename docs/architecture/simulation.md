@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-04
+last_updated:  2026-06-11
 ---
 
 # Simulation model
@@ -72,18 +72,25 @@ These cross the boundary live (no network rebuild) and are read fresh each tick:
 
 | Knob | Where | Effect |
 |---|---|---|
-| `excitability` | `tick(ticks, excitability)` arg | global gain `[0,1] → [0.5, 2.0]`; the silent↔critical↔seizure slider |
-| `i_ext` | `VisualSettings` idx 12 | ambient drive magnitude into input region |
+| `excitability` | `tick(ticks, excitability)` arg | global gain `[0,1] → [0.5, 2.0]`; the silent↔critical↔seizure slider; product default `0.10` |
+| `i_ext` | `VisualSettings` idx 12 | ambient drive magnitude into input region; product default `0.014` |
 | `synaptic_scale` | `VisualSettings` idx 13 | recurrent coupling strength (how many coincident inputs cross threshold) |
-| `heterogeneity` | `VisualSettings` idx 14 | per-neuron parameter spread `[0,1]`; `0` ⇒ homogeneous |
+| `heterogeneity` | `VisualSettings` idx 14 | per-neuron parameter spread `[0,1]`; clean product default `0.50`; `0` ⇒ homogeneous |
 | `weight_normalization` | `VisualSettings` idx 21 | `0=none 1=sqrt_k 2=k` |
 | `input_mode` | `VisualSettings` idx 22 | drive shape (see below) |
 
-**Invariant — neutral defaults.** `heterogeneity=0`, `weight_normalization` at
-the K=16 default, and `input_mode=0` (constant) each reproduce pre-V2 dynamics
+The product defaults (`excitability=0.10`, `i_ext=0.014`, `n=6000`) produce a
+quiet network where cascades are visible as individual propagating signals
+rather than a saturated blur — beauty/readability first. See
+[`../decisions/dynamics.md`](../decisions/dynamics.md) for the rationale.
+
+**Invariant — neutral baseline.** `heterogeneity=0`, `weight_normalization` at
+the K=16 baseline, and `input_mode=0` (constant) each reproduce pre-V2 dynamics
 **bit-for-bit**. At het=0 every `*_i` term collapses to the global constant; at
-K=16 both `sqrt_k` and `k` give factor `1.0` (`weight_norm_factor` is relative to
-`K_REF`); `input_mode=0` is the plain `current += i_ext`.
+K=16 both `sqrt_k` and `k` give factor `1.0` (`weight_norm_factor` is relative
+to `K_REF`); `input_mode=0` is the plain `current += i_ext`. This is a
+regression/bisect baseline, not the clean product default: the current clean
+default is `heterogeneity=0.50`.
 
 ### Per-neuron heterogeneity
 
@@ -136,7 +143,8 @@ render boundary (raw GPU buffer handles, zero readback).
 - A `VisualSettings` index is added/reordered (must match `web/src/core/settings.ts`).
 - An input mode is added or `weight_norm_factor` modes change.
 - The `SimBackend` trait or `TickStats`/`SimConfig` shape changes.
-- The neutral-default invariant (het=0 / K=16 / constant == pre-V2) is touched.
+- The neutral-baseline invariant (het=0 / K=16 / constant == pre-V2) is touched.
+- The product default for a dynamics setting changes.
 
 ## See also
 

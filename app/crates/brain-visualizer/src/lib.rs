@@ -47,6 +47,7 @@ pub fn region_split(manifold: &Manifold) -> (usize, usize, usize) {
 #[cfg(target_arch = "wasm32")]
 mod wasm_entry {
     use super::*;
+    use crate::sim::backend::clamp_neuron_count;
     use wasm_bindgen::prelude::*;
 
     /// Install the panic hook so Rust panics surface in the browser console.
@@ -61,6 +62,7 @@ mod wasm_entry {
     /// when": neuron positions exist even though nothing draws them).
     #[wasm_bindgen]
     pub fn init_manifold(n: usize, seed: u32) -> usize {
+        let n = clamp_neuron_count(n);
         let config = SimConfig {
             n,
             seed: seed as u64,
@@ -111,6 +113,7 @@ mod wasm_entry {
             i_ext: f32,
             synaptic_scale: f32,
         ) -> WasmCpuBackend {
+            let n = clamp_neuron_count(n);
             let config = SimConfig {
                 n,
                 k,
@@ -235,6 +238,7 @@ mod wasm_entry {
                     .map(|c| (c.width, c.height))
                     .unwrap_or((800, 600));
 
+                let n = clamp_neuron_count(n);
                 let config = SimConfig {
                     n,
                     k,
@@ -429,6 +433,7 @@ mod wasm_entry {
             i_ext: f32,
             synaptic_scale: f32,
         ) {
+            let n = clamp_neuron_count(n);
             let config = SimConfig {
                 n,
                 k,

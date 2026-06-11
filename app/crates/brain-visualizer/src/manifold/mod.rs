@@ -3,9 +3,10 @@
 //! Pipeline:
 //! 1. icosphere subdivision (`icosphere.rs`),
 //! 2. apply a deterministic brain-shaped envelope to the sphere directions,
-//! 3. two-octave simplex gyrification along outward directions (`gyrify.rs`),
-//! 4. sample N neuron positions inside the same envelope with cortical-shell
-//!    bias,
+//! 3. apply structured procedural gyrification along outward directions
+//!    (`gyrify.rs`),
+//! 4. sample N neuron positions inside the same folded envelope with
+//!    cortical-shell bias,
 //! 5. assign Input/Association/Output regions by deterministic hash shuffle
 //!    (`regions.rs`),
 //! 6. build the integer spatial grid for connectivity & stimulation lookup.
@@ -31,7 +32,7 @@ pub const ANTERIOR_POSTERIOR_AXIS: [f32; 3] = [0.0, 0.0, 1.0];
 pub const DEFAULT_GRID_DIM: u32 = 16;
 
 /// Base ellipsoid semiaxes for the coarse brain envelope.
-const BRAIN_AXES: [f32; 3] = [0.92, 0.78, 1.30];
+const BRAIN_AXES: [f32; 3] = [0.94, 0.74, 1.18];
 
 mod placement_salt {
     pub const DIR_COS: u32 = 0x0003_0001;
@@ -86,16 +87,17 @@ impl Manifold {
     /// Generate the full manifold. Deterministic for a given `ManifoldParams`.
     pub fn generate(params: &ManifoldParams) -> Self {
         let ico = icosphere::icosphere(params.subdivisions);
+        let fold_field = gyrify::FoldField::new(params.gyrify, params.seed);
         let base_vertices: Vec<[f32; 3]> = ico
             .vertices
             .iter()
             .copied()
             .map(brain_surface_point)
             .collect();
-        let vertices = gyrify::gyrify(&base_vertices, &params.gyrify, params.seed);
+        let vertices = gyrify::gyrify_with_field(&base_vertices, &fold_field);
         let faces = ico.faces;
 
-        let neuron_positions = place_neurons(params.n, params.seed);
+        let neuron_positions = place_neurons(params.n, params.seed, &fold_field);
         let neuron_regions = regions::assign_regions(&neuron_positions, ANTERIOR_POSTERIOR_AXIS);
         let spatial_grid = SpatialGrid::build(&neuron_positions, params.grid_dim);
 
@@ -117,23 +119,34 @@ impl Manifold {
 fn brain_outer_radius(dir: [f32; 3]) -> f32 {
     let d = normalize(dir);
     let [x, y, z] = d;
+    let ax = x.abs();
     let ellipsoid = ellipsoid_radius(d, BRAIN_AXES);
 
-    let frontal = 0.08 * gaussian(z, -0.55, 0.32);
-    let parietal = 0.05 * gaussian(z, 0.10, 0.40);
-    let occipital = 0.10 * gaussian(z, 0.80, 0.22);
-    let temporal =
-        0.09 * gaussian(x.abs(), 0.82, 0.24) * gaussian(y, -0.20, 0.42) * gaussian(z, 0.00, 0.60);
-    let dorsal_fullness = 0.04 * smoothstep(-0.10, 0.75, y);
-    let ventral_flatten = 0.14 * smoothstep(0.10, 0.95, -y);
-    let fissure =
-        0.32 * gaussian(x.abs(), 0.00, 0.15) * smoothstep(-0.05, 0.85, y) * gaussian(z, 0.10, 0.78);
-    let lower_rear_taper = 0.06 * gaussian(z, 0.95, 0.20) * smoothstep(0.05, 0.95, -y);
+    let dorsal_mask = smoothstep(-0.15, 0.82, y);
+    let ventral_mask = smoothstep(0.03, 0.95, -y);
+    let frontal_fullness = 0.075 * gaussian(z, -0.62, 0.32);
+    let parietal_dome = 0.085 * gaussian(z, 0.12, 0.48) * dorsal_mask;
+    let occipital_rounding = 0.075 * gaussian(z, 0.77, 0.26);
+    let hemisphere_shoulder =
+        0.070 * gaussian(ax, 0.56, 0.34) * gaussian(z, 0.04, 0.78) * smoothstep(-0.38, 0.72, y);
+    let temporal_lobe =
+        0.165 * gaussian(ax, 0.84, 0.22) * gaussian(y, -0.24, 0.34) * gaussian(z, -0.04, 0.56);
+    let ventral_flatten = 0.150 * ventral_mask;
+    let lower_rear_taper = 0.075 * gaussian(z, 0.90, 0.22) * ventral_mask;
+    let midline_fissure = 0.390 * gaussian(ax, 0.00, 0.125) * dorsal_mask * gaussian(z, 0.06, 0.78);
+    let medial_waist =
+        0.045 * gaussian(ax, 0.00, 0.20) * gaussian(z, 0.00, 0.95) * smoothstep(-0.04, 0.70, y);
 
-    let scale = (1.0 + frontal + parietal + occipital + temporal + dorsal_fullness
+    let scale = (1.0
+        + frontal_fullness
+        + parietal_dome
+        + occipital_rounding
+        + hemisphere_shoulder
+        + temporal_lobe
         - ventral_flatten
-        - fissure
-        - lower_rear_taper)
+        - lower_rear_taper
+        - midline_fissure
+        - medial_waist)
         .clamp(0.55, 1.35);
 
     ellipsoid * scale
@@ -144,10 +157,14 @@ fn brain_surface_point(dir: [f32; 3]) -> [f32; 3] {
     scale(normalize(dir), brain_outer_radius(dir))
 }
 
-/// Shell-biased neuron placement inside the same envelope that defines the
+fn folded_outer_radius(dir: [f32; 3], fold_field: &gyrify::FoldField) -> f32 {
+    fold_field.folded_radius(brain_outer_radius(dir), dir)
+}
+
+/// Shell-biased neuron placement inside the folded envelope that defines the
 /// manifold surface. Most neurons sit in the outer cortical band, with a small
 /// deterministic interior fill so the cloud still has some depth.
-fn place_neurons(n: usize, seed: u32) -> Vec<[f32; 3]> {
+fn place_neurons(n: usize, seed: u32, fold_field: &gyrify::FoldField) -> Vec<[f32; 3]> {
     use std::f32::consts::TAU;
 
     let mut out = Vec::with_capacity(n);
@@ -156,7 +173,7 @@ fn place_neurons(n: usize, seed: u32) -> Vec<[f32; 3]> {
         let phi = hash_to_unit(mix_key(seed, i, 0, placement_salt::DIR_PHI)) * TAU;
         let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
         let dir = [sin_theta * phi.cos(), sin_theta * phi.sin(), cos_theta];
-        let outer_radius = brain_outer_radius(dir);
+        let outer_radius = folded_outer_radius(dir, fold_field);
 
         let shell_u = hash_to_unit(mix_key(seed, i, 0, placement_salt::SHELL_DEPTH));
         let interior_mix = hash_to_unit(mix_key(seed, i, 0, placement_salt::INTERIOR_MIX));
@@ -218,6 +235,12 @@ fn scale(v: [f32; 3], s: f32) -> [f32; 3] {
     [v[0] * s, v[1] * s, v[2] * s]
 }
 
+#[cfg(test)]
+#[inline]
+fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
 #[inline]
 fn length(v: [f32; 3]) -> f32 {
     (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
@@ -225,12 +248,12 @@ fn length(v: [f32; 3]) -> f32 {
 
 #[cfg(test)]
 #[inline]
-fn shell_depth_ratio(pos: [f32; 3]) -> f32 {
+fn shell_depth_ratio(pos: [f32; 3], fold_field: &gyrify::FoldField) -> f32 {
     let r = length(pos);
     if r <= 1e-6 {
         0.0
     } else {
-        r / brain_outer_radius(scale(pos, 1.0 / r))
+        r / folded_outer_radius(scale(pos, 1.0 / r), fold_field)
     }
 }
 
@@ -278,6 +301,9 @@ mod tests {
         let ap = brain_outer_radius([0.0, 0.0, 1.0]);
         let dorsal = brain_outer_radius([0.0, 1.0, 0.0]);
         let lateral = brain_outer_radius([1.0, 0.0, 0.0]);
+        let ventral = brain_outer_radius([0.0, -1.0, 0.0]);
+        let temporal = brain_outer_radius(normalize([0.90, -0.24, -0.05]));
+        let lower_lateral = brain_outer_radius(normalize([0.55, -0.24, -0.05]));
 
         assert!(
             ap > dorsal,
@@ -291,17 +317,26 @@ mod tests {
             lateral_top > midline_top + 0.12,
             "dorsal fissure should indent the top midline"
         );
+        assert!(
+            lateral_top > ventral + 0.08,
+            "ventral side should read flatter/shallower than the lateral dorsal crown: lateral_top={lateral_top} ventral={ventral}"
+        );
+        assert!(
+            temporal > lower_lateral + 0.04,
+            "temporal lobe should add lower lateral fullness: temporal={temporal} lower_lateral={lower_lateral}"
+        );
     }
 
     #[test]
-    fn neurons_stay_inside_brain_envelope() {
+    fn neurons_stay_inside_folded_brain_envelope() {
         let p = ManifoldParams::new(3000, 3);
         let m = Manifold::generate(&p);
+        let fold_field = gyrify::FoldField::new(p.gyrify, p.seed);
         for pos in &m.neuron_positions {
-            let shell_ratio = shell_depth_ratio(*pos);
+            let shell_ratio = shell_depth_ratio(*pos, &fold_field);
             assert!(
                 shell_ratio <= 1.0 + 1e-4,
-                "neuron escaped brain envelope depth={shell_ratio}"
+                "neuron escaped folded brain envelope depth={shell_ratio}"
             );
         }
     }
@@ -310,10 +345,11 @@ mod tests {
     fn placement_is_cortical_shell_biased() {
         let p = ManifoldParams::new(12_000, 17);
         let m = Manifold::generate(&p);
+        let fold_field = gyrify::FoldField::new(p.gyrify, p.seed);
         let mut outer_shell = 0usize;
         let mut interior = 0usize;
         for &pos in &m.neuron_positions {
-            let depth = shell_depth_ratio(pos);
+            let depth = shell_depth_ratio(pos, &fold_field);
             if depth >= 0.72 {
                 outer_shell += 1;
             }
@@ -331,6 +367,57 @@ mod tests {
             interior as f32 / n < 0.12,
             "interior fill is too dense: {interior}/{n}"
         );
+    }
+
+    #[test]
+    fn folded_surface_stays_inside_interaction_radius() {
+        for seed in [1, 7, 31] {
+            let p = ManifoldParams::new(8000, seed);
+            let m = Manifold::generate(&p);
+            let max_surface = m.vertices.iter().copied().map(length).fold(0.0, f32::max);
+            let max_neuron = m
+                .neuron_positions
+                .iter()
+                .copied()
+                .map(length)
+                .fold(0.0, f32::max);
+            assert!(
+                max_surface <= 1.40,
+                "surface escaped interaction radius seed={seed}: {max_surface}"
+            );
+            assert!(
+                max_neuron <= 1.40,
+                "neuron escaped interaction radius seed={seed}: {max_neuron}"
+            );
+        }
+    }
+
+    #[test]
+    fn stimulation_radius_samples_surface_population() {
+        const STIM_RADIUS: f32 = 0.15;
+        let p = ManifoldParams::new(12_000, 41);
+        let m = Manifold::generate(&p);
+        let fold_field = gyrify::FoldField::new(p.gyrify, p.seed);
+
+        for dir in [
+            normalize([0.55, 0.78, 0.05]),
+            normalize([-0.55, 0.78, 0.05]),
+            normalize([0.82, -0.20, -0.05]),
+            normalize([-0.82, -0.20, -0.05]),
+            normalize([0.00, 0.10, 1.00]),
+            normalize([0.00, 0.10, -1.00]),
+        ] {
+            let center = scale(dir, folded_outer_radius(dir, &fold_field));
+            let count = m
+                .neuron_positions
+                .iter()
+                .filter(|&&pos| length(sub(pos, center)) <= STIM_RADIUS)
+                .count();
+            assert!(
+                count >= 8,
+                "surface stimulation sample too sparse dir={dir:?}: {count}"
+            );
+        }
     }
 
     #[test]
@@ -391,5 +478,56 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn directional_radius_metrics_are_within_bounds() {
+        let p = ManifoldParams::new(10_000, 1);
+        let m = Manifold::generate(&p);
+        let fold_field = gyrify::FoldField::new(p.gyrify, p.seed);
+        let samples = [
+            ("anterior", [0.0, 0.0, -1.0]),
+            ("posterior", [0.0, 0.0, 1.0]),
+            ("lateral_r", [1.0, 0.0, 0.0]),
+            ("dorsal_mid", [0.0, 1.0, 0.0]),
+            ("ventral_mid", [0.0, -1.0, 0.0]),
+            ("temporal_r", [0.90, -0.24, -0.05]),
+            ("fissure_mid", [0.04, 0.99, 0.02]),
+            ("lateral_top", [0.55, 0.82, 0.0]),
+        ];
+
+        eprintln!("direction smooth_radius folded_radius fold_scale");
+        for (name, dir) in samples {
+            let dir = normalize(dir);
+            let smooth = brain_outer_radius(dir);
+            let folded = folded_outer_radius(dir, &fold_field);
+            eprintln!(
+                "{name:>11} {smooth:>13.4} {folded:>13.4} {:>10.4}",
+                folded / smooth
+            );
+        }
+
+        let max_surface = m.vertices.iter().copied().map(length).fold(0.0, f32::max);
+        let max_neuron = m
+            .neuron_positions
+            .iter()
+            .copied()
+            .map(length)
+            .fold(0.0, f32::max);
+        let occupied = (0..m.spatial_grid.cell_count())
+            .filter(|&cell| !m.spatial_grid.neurons_in_cell(cell).is_empty())
+            .count();
+        let max_occupancy = (0..m.spatial_grid.cell_count())
+            .map(|cell| m.spatial_grid.neurons_in_cell(cell).len())
+            .max()
+            .unwrap_or(0);
+        eprintln!(
+            "bounds max_surface={max_surface:.4} max_neuron={max_neuron:.4} occupied_cells={occupied} max_cell_occupancy={max_occupancy}"
+        );
+
+        assert!(max_surface <= 1.40, "surface max radius {max_surface}");
+        assert!(max_neuron <= 1.40, "neuron max radius {max_neuron}");
+        assert!(occupied > 250, "occupied cells {occupied}");
+        assert!(max_occupancy < 220, "max cell occupancy {max_occupancy}");
     }
 }

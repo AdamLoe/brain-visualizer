@@ -27,7 +27,7 @@ struct Uniforms {
     camera_pos: vec3<f32>,
     voltage_glow_strength: f32,  // V2 Phase B: debug glow on subthreshold |v| (0=off)
     // ─── V2 Phase E (offset 128): orthogonal color/visibility/radius ─────────
-    color_by: u32,                    // 0=region 1=E/I 2=spike-age 3=voltage 4=activity 5=identity
+    color_by: u32,                    // 0=region 1=E/I 2=spike-age 3=voltage 4=activity 5=identity 6=brain
     neuron_visibility: u32,           // 0=all 1=active-emphasis 2=active-only
     neuron_visual_radius: f32,        // base radius (world units)
     active_neuron_radius_boost: f32,  // radius mult at full glow
@@ -59,6 +59,8 @@ const SOMA_FLASH_RATIO: f32 = 0.18;
 const SOMA_CORE_TICKS: f32 = 2.2;
 const SOMA_RADIUS_GLOW: f32 = 0.08;
 const SOMA_RADIUS_FLASH: f32 = 0.16;
+const BRAIN_REST_PINK: vec3<f32> = vec3<f32>(1.0, 0.18, 0.54);
+const BRAIN_ACTIVE_BLUE: vec3<f32> = vec3<f32>(0.08, 0.56, 1.0);
 
 // UX fix (near-LOD / shadow line): close-up billboard size ramp. Below
 // NEAR_RADIUS_DIST world units from the camera a neuron's billboard radius grows
@@ -152,6 +154,8 @@ fn color_for(mode: u32, id: u32, packed: u32, vv: f32, glow: f32) -> vec3<f32> {
     } else if mode == 5u {
         // identity: stable per-neuron hue from the locked BV22 hash.
         return identity_color(id);
+    } else if mode == 6u {
+        return BRAIN_ACTIVE_BLUE;
     }
     // mode 0 (default) region: Input cool-blue, Assoc green, Output warm-orange.
     if region == 0u { return vec3(0.28, 0.55, 1.0); }
@@ -269,11 +273,14 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
     let falloff = exp(-d * d * 6.0);
     // Gray for resting neurons (fades to zero near camera to avoid fog inside).
     // Colored flash when firing, with a short bright core on the youngest spikes.
-    let gray  = vec3(0.18) * in.dist_fade * falloff;
+    let rest_color = select(vec3<f32>(0.18), BRAIN_REST_PINK * 0.18, u.color_by == 6u);
+    let gray  = rest_color * in.dist_fade * falloff;
     let spike = in.color * (in.glow * 0.42 + in.flash * 1.08) * falloff;
-    let core = mix(in.color, vec3(1.0), 0.65) * in.core * falloff * 0.85;
+    let core_color = select(mix(in.color, vec3(1.0), 0.65), BRAIN_ACTIVE_BLUE, u.color_by == 6u);
+    let core = core_color * in.core * falloff * 0.85;
     // V2 Phase B: voltage glow (debug) — adds brightness from membrane |v|.
-    let vglow = in.color * in.vglow * falloff;
+    let vglow_color = select(in.color, BRAIN_REST_PINK, u.color_by == 6u);
+    let vglow = vglow_color * in.vglow * falloff;
     // V2 Phase E: scale the resting/gray contribution by inactive opacity so the
     // active flash always reads at full strength, but resting fog can be dimmed.
     let contrib = (gray * in.opacity) + spike + core + (vglow * in.opacity);

@@ -52,7 +52,7 @@
     },
     {
       "id": "web-frontend",
-      "summary": "the TS app shell: main.ts orchestrator + rAF loop + wasm call boundary, camera (orbit/zoom MVP), controls (brain-state presets, speed, stimulation), renderer.ts (device/canvas/render target), types.ts (AppConfig/DEFAULT_CONFIG), sonification, public HUD shell, natural silent-start",
+      "summary": "the TS app shell: main.ts orchestrator + rAF loop + wasm call boundary, camera (orbit/zoom MVP), controls (brain-state presets, speed, stimulation), renderer.ts (device/canvas/render target), types.ts (AppConfig/DEFAULT_CONFIG), public HUD shell, natural silent-start",
       "owner": "architecture/web-frontend.md",
       "references": ["architecture/simulation.md", "architecture/scaling.md", "architecture/dev-panel.md", "architecture/profiling.md"]
     },
@@ -76,7 +76,7 @@
     },
     {
       "id": "scaling",
-      "summary": "adaptive scaler (within-tier N/K/resolution feedback, hysteresis, adaptiveScalerEnabled gate), difficulty tiers, gpu_limits.rs adapter-limit→caps, the 1M-default/10M-gated cap policy",
+      "summary": "fixed-N scaling, dormant scaler proposal, difficulty tiers, gpu_limits.rs adapter-limit→caps, and the 20k product cap",
       "owner": "architecture/scaling.md",
       "references": ["architecture/web-frontend.md", "architecture/gpu-backend.md", "architecture/connectivity.md"]
     },
@@ -130,13 +130,13 @@
     },
     {
       "id": "dec-scaling",
-      "summary": "three tiers built+benchmarked, K as a per-tier scaler axis, 1M-default/10M-gated honest adaptation",
+      "summary": "three tiers, K as a per-tier scaler axis, and the 20k product cap separate from GPU hardware capacity",
       "owner": "decisions/scaling.md",
       "references": []
     },
     {
       "id": "dec-interaction",
-      "summary": "pretty-toy interaction model, natural start (no scripted intro), sonification opt-in, speed presets, brain-state presets",
+      "summary": "pretty-toy interaction model, natural start (no scripted intro), speed presets, brain-state presets",
       "owner": "decisions/interaction.md",
       "references": []
     },

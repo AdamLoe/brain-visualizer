@@ -262,6 +262,39 @@ async fn run() {
         };
         std::fs::write(ARTIFACT_JSON, artifact.to_json()).expect("write morph_view json");
         std::fs::write(ARTIFACT_JSON_VERS, artifact.to_json()).expect("write morph_view json");
+
+        // ── Stream A baseline: print segment stats to stdout for the reference table.
+        let s = &morph_buffers.stats;
+        let t = &s.timings;
+        let dominant = {
+            let phases = [
+                ("incoming", t.incoming_ms),
+                ("dendrite", t.dendrite_ms),
+                ("axon",     t.axon_ms),
+                ("setup",    t.setup_ms),
+                ("finalize", t.finalize_ms),
+            ];
+            phases.iter().max_by(|a, b| a.1.partial_cmp(&b.1).unwrap()).map(|p| p.0).unwrap_or("?")
+        };
+        println!(
+            "[morph_view] BASELINE N={n} K={k}  segments={seg}  dropped={drop}  \
+             cap={cap}  cap_util={util:.1}%  p99={p99}  max={max}  \
+             draw_instances={seg}  (both tube passes draw {seg} instances each)",
+            n = s.neuron_count,
+            k = s.fanout_k,
+            seg = s.segment_count,
+            drop = s.dropped_count,
+            cap = s.segment_cap,
+            util = s.cap_utilization * 100.0,
+            p99 = s.segments_per_neuron_p99,
+            max = s.segments_per_neuron_max,
+        );
+        println!(
+            "[morph_view] TIMINGS setup={:.1}ms  incoming={:.1}ms  dendrite={:.1}ms  \
+             axon={:.1}ms  finalize={:.1}ms  TOTAL={:.1}ms  dominant={}",
+            t.setup_ms, t.incoming_ms, t.dendrite_ms, t.axon_ms, t.finalize_ms, t.total_ms,
+            dominant,
+        );
     }
 
     // --- 7. v0.3.1 Stream 3: stronger active-only brightness variant. ---
@@ -358,6 +391,114 @@ async fn run() {
     println!("[morph_view] wrote /tmp/morph_0..3.rgba (1024×1024 RGBA8)");
     println!("[morph_view] wrote {ARTIFACT_JSON}");
     println!("[morph_view] wrote {ARTIFACT_JSON_VERS}");
+
+    // ── Stream A: reach-comparison at N=1200 and scale-up to N=6000 ───────────
+    //
+    // The default run above used long_range_reach_frac=0.14 / max_reach_cells=14
+    // (production defaults). Here we:
+    //   (a) switch to LOCAL_ONLY (frac=0.0) to quantify the reach effect on
+    //       segment count / axon timing, then
+    //   (b) re-initialize at N=6000/K=16 with the production reach to prove the
+    //       cap and utilisation stay within budget.
+
+    // (a) Low-reach comparison at N=1200 -----------------------------------------
+    {
+        let mut low_reach_visual = backend.visual().clone();
+        low_reach_visual.long_range_reach_frac = 0.0;
+        low_reach_visual.max_reach_cells = 1.0;
+        // set_visual_settings detects the reach change and calls regenerate_morphology().
+        backend.set_visual_settings(low_reach_visual);
+        let morph_buffers = backend
+            .resources()
+            .morph_buffers
+            .as_ref()
+            .expect("morph buffers after low-reach regen");
+        let s = &morph_buffers.stats;
+        let t = &s.timings;
+        let dominant = {
+            let phases = [
+                ("incoming", t.incoming_ms),
+                ("dendrite", t.dendrite_ms),
+                ("axon",     t.axon_ms),
+                ("setup",    t.setup_ms),
+                ("finalize", t.finalize_ms),
+            ];
+            phases.iter().max_by(|a, b| a.1.partial_cmp(&b.1).unwrap()).map(|p| p.0).unwrap_or("?")
+        };
+        println!(
+            "[morph_view] STREAM_A LOW_REACH N={n} K={k} frac=0.0 max_reach=1  \
+             segments={seg}  dropped={drop}  cap={cap}  cap_util={util:.1}%  \
+             p99={p99}  max={max}",
+            n = s.neuron_count,
+            k = s.fanout_k,
+            seg = s.segment_count,
+            drop = s.dropped_count,
+            cap = s.segment_cap,
+            util = s.cap_utilization * 100.0,
+            p99 = s.segments_per_neuron_p99,
+            max = s.segments_per_neuron_max,
+        );
+        println!(
+            "[morph_view] STREAM_A LOW_REACH TIMINGS setup={:.1}ms  incoming={:.1}ms  \
+             dendrite={:.1}ms  axon={:.1}ms  finalize={:.1}ms  TOTAL={:.1}ms  dominant={}",
+            t.setup_ms, t.incoming_ms, t.dendrite_ms, t.axon_ms, t.finalize_ms, t.total_ms,
+            dominant,
+        );
+    }
+
+    // (b) N=6000/K=16 with production reach (frac=0.14, max_reach=14) ------------
+    {
+        // Re-initialize with the production reach knobs before reinit.
+        let mut prod_visual = backend.visual().clone();
+        prod_visual.long_range_reach_frac = 0.14;
+        prod_visual.max_reach_cells = 14.0;
+        backend.set_visual_settings(prod_visual); // regen morphology at N=1200 with prod reach (baseline)
+
+        let config_6k = brain_visualizer::sim::backend::SimConfig {
+            n: 6_000,
+            k: 16,
+            ..brain_visualizer::sim::backend::SimConfig::default()
+        };
+        // Re-initialize with N=6000: replaces all GPU buffers (no new ctx needed).
+        backend.initialize(&config_6k);
+
+        let morph_buffers = backend
+            .resources()
+            .morph_buffers
+            .as_ref()
+            .expect("morph buffers N=6000");
+        let s = &morph_buffers.stats;
+        let t = &s.timings;
+        let dominant = {
+            let phases = [
+                ("incoming", t.incoming_ms),
+                ("dendrite", t.dendrite_ms),
+                ("axon",     t.axon_ms),
+                ("setup",    t.setup_ms),
+                ("finalize", t.finalize_ms),
+            ];
+            phases.iter().max_by(|a, b| a.1.partial_cmp(&b.1).unwrap()).map(|p| p.0).unwrap_or("?")
+        };
+        println!(
+            "[morph_view] STREAM_A N6000 frac=0.14 max_reach=14  \
+             segments={seg}  dropped={drop}  cap={cap}  cap_util={util:.1}%  \
+             p99={p99}  max={max}",
+            seg = s.segment_count,
+            drop = s.dropped_count,
+            cap = s.segment_cap,
+            util = s.cap_utilization * 100.0,
+            p99 = s.segments_per_neuron_p99,
+            max = s.segments_per_neuron_max,
+        );
+        println!(
+            "[morph_view] STREAM_A N6000 TIMINGS setup={:.1}ms  incoming={:.1}ms  \
+             dendrite={:.1}ms  axon={:.1}ms  finalize={:.1}ms  TOTAL={:.1}ms  dominant={}",
+            t.setup_ms, t.incoming_ms, t.dendrite_ms, t.axon_ms, t.finalize_ms, t.total_ms,
+            dominant,
+        );
+        println!("[morph_view] STREAM_A N6000 neuron_count={} fanout_k={}", s.neuron_count, s.fanout_k);
+    }
+
     println!("=== morph_view DONE ===");
 }
 

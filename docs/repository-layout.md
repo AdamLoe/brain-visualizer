@@ -58,8 +58,6 @@ app/                         Workspace root — Cargo.toml here is the workspace
         controls.ts          Brain-state presets, scaler, backend toggle.
         dev-panel.ts         Hidden dev panel (gear icon).
         hud.ts               Public corner HUD (CornerHud).
-      audio/
-        sonification.ts      Web Audio engine (muted by default).
       cpu/
         cpu-worker.ts        Parked CPU-backend coordinator worker.
         cpu-renderer.ts      Parked WebGL2 renderer.

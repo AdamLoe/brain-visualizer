@@ -69,7 +69,9 @@
   weight-scale are the global constant perturbed by a deterministic symmetric draw
   from `hash32(seed, id, salt)`, scaled by a global `heterogeneity ∈ [0,1]`.
   **`heterogeneity = 0` reproduces the global-constant baseline bit-for-bit** —
-  the `* het` term must vanish exactly, not approximately.
+  the `* het` term must vanish exactly, not approximately. The clean product
+  default is `heterogeneity = 0.50`; users/tests can still set `0` for the
+  homogeneous regression baseline.
 - **Why.** Real neurons are not identical, and a spread of thresholds/leaks
   broadens the avalanche distribution and removes lockstep synchrony. Deriving it
   from the locked connectivity hash keeps it free (no stored per-neuron table) and
@@ -110,6 +112,47 @@
   opt-in. `scripted` is reserved for future timed stimulus sequences.
 - **Applies to.** [`../architecture/simulation.md`](../architecture/simulation.md).
 - **Code anchors.** `crates/brain-visualizer/src/sim/gpu/shaders/integrate.wgsl` (`switch u.input_mode`).
+
+## Low-excitability, low-`i_ext` as the product default (beauty/readability first)
+
+- **Decision.** The accepted product defaults are `excitability=0.10`,
+  `i_ext=0.014`, `n=6000`, `k=16`. Resting morphology connections are hidden
+  by default (`morphRestingOpacity=0.0`, `lighting.restingBrightness=0.0`).
+  Only active and recently-fired segments render.
+- **Why.** At high excitability and high `i_ext` the network saturates quickly
+  — activity covers everything and individual propagating cascades are invisible.
+  A quiet network where signals propagate as sparse, visible wavefronts is both
+  more beautiful and more informative for casual viewers. Hiding resting
+  connections removes the dense static mesh that obscures firing structure at
+  high N. The `connectionLayer=1` (Active/recent) mode together with low drive
+  gives a clean signal-on-black aesthetic.
+- **Applies to.** [`../architecture/simulation.md`](../architecture/simulation.md),
+  [`../architecture/dev-panel.md`](../architecture/dev-panel.md).
+- **Code anchors.** `web/src/core/types.ts → DEFAULT_CONFIG`;
+  `web/src/core/settings.ts → DEFAULT_SETTINGS` (iExt idx 12,
+  morphRestingOpacity idx 15); `web/src/core/morph-config.ts → DEFAULT_MORPH_CONFIG`
+  (lighting.restingBrightness);
+  `crates/brain-visualizer/src/sim/gpu/mod.rs → VisualSettings::default`.
+
+## Heavy-tailed synapse reach on by default
+
+- **Decision.** The product defaults enable heavy-tailed long-range connectivity:
+  `longRangeReachFrac=0.14` (14 % of synapses routed long-range) and
+  `maxReachCells=14`. These are indices 24 and 25 of `VisualSettings` and are
+  mirrored in the Rust `VisualSettings::default`.
+- **Why.** Pure local connectivity produces visually monotonous short-range
+  clusters. A heavy-tailed reach fraction adds long-range structure — distinct
+  hub-to-hub links — that is visible at the product's default N=6000, making
+  the network look more brain-like without any anatomy hard-coding. Setting the
+  default to non-zero means new users see this structure immediately.
+- **Applies to.** [`../architecture/simulation.md`](../architecture/simulation.md),
+  [`../architecture/connectivity.md`](../architecture/connectivity.md).
+- **Code anchors.** `web/src/core/settings.ts → DEFAULT_SETTINGS`
+  (longRangeReachFrac idx 24, maxReachCells idx 25);
+  `crates/brain-visualizer/src/sim/gpu/mod.rs → VisualSettings::default`.
+- **Revisit when.** N grows substantially beyond 6000 and long-range connections
+  dominate render cost, or when a geometry-based connectivity model makes
+  reach-fraction a derived rather than tunable parameter.
 
 ## See also
 

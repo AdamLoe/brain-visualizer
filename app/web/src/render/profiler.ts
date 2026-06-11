@@ -34,7 +34,7 @@ export class Profiler {
   private lastDumpMs = 0;
   private started = false;
 
-  // Last emitted snapshot — readable by HUD / sonification engine.
+  // Last emitted snapshot — readable by the HUD and dev-panel monitor.
   private lastSnapshot: ProfileSnapshot | null = null;
 
   constructor(
@@ -89,7 +89,7 @@ export class Profiler {
       n:                    this.n,
       k:                    this.k,
     };
-    // Store for HUD / sonification (camelCase shape); also emit the
+    // Store for HUD / dev-panel consumers (camelCase shape); also emit the
     // legacy snake_case JSON shape the existing console dump uses.
     this.lastSnapshot = snap;
     const snapshot = {
@@ -121,7 +121,7 @@ export class Profiler {
 
   /**
    * Return the last emitted snapshot (null before the first dump).
-   * Used by the corner HUD and sonification engine — both update at 1/sec,
+   * Used by the corner HUD and dev-panel monitor — both update at 1/sec,
    * reading already-aggregated counters (no GPU readback, no per-frame cost).
    */
   getLastSnapshot(): ProfileSnapshot | null {

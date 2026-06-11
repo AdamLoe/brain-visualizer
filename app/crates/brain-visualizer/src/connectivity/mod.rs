@@ -319,7 +319,9 @@ mod tests {
         let mut differ = 0;
         for i in 0..pos.len() as u32 {
             for j in 0..8u32 {
-                if target(i, j, &g, 8, 1, 0, ReachParams::LOCAL_ONLY) != target(i, j, &g, 8, 2, 0, ReachParams::LOCAL_ONLY) {
+                if target(i, j, &g, 8, 1, 0, ReachParams::LOCAL_ONLY)
+                    != target(i, j, &g, 8, 2, 0, ReachParams::LOCAL_ONLY)
+                {
                     differ += 1;
                 }
             }

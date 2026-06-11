@@ -13,6 +13,7 @@ import {
   N_MIN,
   N_MAX,
 } from "./controls";
+import { PRODUCT_MAX_N } from "../core/types";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ticksThisFrame — BV14 speed preset → ticks mapping
@@ -122,34 +123,34 @@ describe("scalerDecide", () => {
   const LONG_AGO = COOLDOWN + 1;
 
   it("returns none during restart", () => {
-    const action = scalerDecide(20, 50_000, "balanced", LONG_AGO, true);
+    const action = scalerDecide(20, 10_000, "balanced", LONG_AGO, true);
     expect(action.kind).toBe("none");
   });
 
   it("returns none within cooldown window", () => {
-    const action = scalerDecide(20, 50_000, "balanced", COOLDOWN - 1, false);
+    const action = scalerDecide(20, 10_000, "balanced", COOLDOWN - 1, false);
     expect(action.kind).toBe("none");
   });
 
   it("shrinks N when p95 is over budget", () => {
-    const action = scalerDecide(BUDGET + 1, 50_000, "balanced", LONG_AGO, false);
+    const action = scalerDecide(BUDGET + 1, 10_000, "balanced", LONG_AGO, false);
     expect(action.kind).toBe("shrink_n");
     if (action.kind === "shrink_n") {
-      expect(action.newN).toBe(Math.floor(50_000 * 0.9));
+      expect(action.newN).toBe(Math.floor(10_000 * 0.9));
     }
   });
 
   it("grows N when p95 is well under budget (< 70%)", () => {
-    const action = scalerDecide(BUDGET * 0.5, 50_000, "balanced", LONG_AGO, false);
+    const action = scalerDecide(BUDGET * 0.5, 10_000, "balanced", LONG_AGO, false);
     expect(action.kind).toBe("grow_n");
     if (action.kind === "grow_n") {
-      expect(action.newN).toBe(Math.floor(50_000 * 1.1));
+      expect(action.newN).toBe(Math.floor(10_000 * 1.1));
     }
   });
 
   it("returns none when p95 is in the 70–100% budget zone (no action)", () => {
     const p95InBand = BUDGET * 0.75;
-    const action = scalerDecide(p95InBand, 50_000, "balanced", LONG_AGO, false);
+    const action = scalerDecide(p95InBand, 10_000, "balanced", LONG_AGO, false);
     expect(action.kind).toBe("none");
   });
 
@@ -183,8 +184,7 @@ describe("scalerDecide", () => {
   });
 
   it("never changes tier — low tier bounds respected", () => {
-    // Below N_MIN.balanced = 30k → would not fire for balanced,
-    // but for low tier 20k is within range.
+    // Low-tier bounds stay independent from the balanced/max ranges.
     const action = scalerDecide(BUDGET + 5, 20_000, "low", LONG_AGO, false);
     if (action.kind === "shrink_n") {
       expect(action.newN).toBeGreaterThanOrEqual(N_MIN.low);
@@ -193,9 +193,16 @@ describe("scalerDecide", () => {
   });
 
   it("never changes tier — max tier bounds respected when growing", () => {
-    const action = scalerDecide(0, 500_000, "max", LONG_AGO, false);
+    const action = scalerDecide(0, PRODUCT_MAX_N - 1, "max", LONG_AGO, false);
     if (action.kind === "grow_n") {
       expect(action.newN).toBeLessThanOrEqual(N_MAX.max);
+    }
+  });
+
+  it("never proposes above the product cap", () => {
+    for (const tier of ["basic", "low", "balanced", "max"] as const) {
+      expect(N_MAX[tier]).toBeLessThanOrEqual(PRODUCT_MAX_N);
+      expect(N_MIN[tier]).toBeLessThanOrEqual(N_MAX[tier]);
     }
   });
 
