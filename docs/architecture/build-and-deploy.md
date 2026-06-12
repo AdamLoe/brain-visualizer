@@ -185,6 +185,12 @@ already held by a stale `npm run dev`, and a manual e2e run would then point at
 the wrong server. Stop the process on 5173 before starting (see
 [`../agent-context/dev-loop.md`](../agent-context/dev-loop.md) → "Run the app").
 
+**`npm run test:e2e:smoke`** — focused real-hardware/browser smoke. It writes a
+JSON artifact and screenshot with adapter availability, startup timings, canvas
+nonblank/variance evidence, and frame-health samples. Set `BV_REQUIRE_WEBGPU=1`
+to fail instead of recording an environment skip when the browser has no WebGPU
+adapter.
+
 **`npm run test:e2e:responsiveness`** — focused Playwright smoke for rebuild
 responsiveness. It boots the browser, requests a high-N worker-prepared network
 payload through the test hook in `web/src/main.ts`, and asserts the published

@@ -33,6 +33,13 @@ Run `cargo` from `app/` (workspace root) and `npm` from `app/web/`.
 - **`npm run build`** — production-equivalent `wasm-pack build` + TypeScript check +
   Vite bundle. This is the shipping static-bundle gate, not just a dev-server check.
 - **`npm run test:e2e`** — Playwright e2e (`web/e2e/`). Needs a browser.
+- **`npm run test:e2e:smoke`** — focused real-hardware/browser smoke. Writes a
+  JSON artifact and screenshot with adapter availability, startup timings,
+  nonblank canvas evidence, and frame-health samples; `BV_REQUIRE_WEBGPU=1`
+  turns no-adapter from an environment skip into a failure.
+- **`npm run test:e2e:responsiveness`** — focused browser responsiveness smoke
+  for high-N worker-prepared rebuilds. It proves rAF/frame-counter progress
+  during worker CPU preparation, not real-hardware WebGPU throughput.
 
 When the change touches first-load defaults, reset behavior, presets, or build wiring,
 also run a production preview check (`npm run preview`) and verify the built page loads
