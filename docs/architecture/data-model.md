@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-04
+last_updated:  2026-06-12
 ---
 
 # Data Model
@@ -25,8 +25,8 @@ All fields live in `wgpu::Buffer` handles managed by
   `crates/brain-visualizer/tests/wgsl_tick_wrap.rs`.
 - The fixed-point current scale `FIXED_POINT_SCALE = 4096`
   (`crates/brain-visualizer/src/connectivity/mod.rs → FIXED_POINT_SCALE`).
-- The chunked-buffer split strategy for fields that exceed the 128 MiB
-  WebGPU binding limit — `crates/brain-visualizer/src/buffers.rs → ChunkLayout`.
+- The shared chunked-buffer split math used by large GPU storage fields —
+  `crates/brain-visualizer/src/buffers.rs → ChunkLayout`.
 
 ## What it does NOT own
 
@@ -81,7 +81,7 @@ The CPU backend uses the same representation with `AtomicI32` adds, so
 the Rust and WGSL paths produce identical fixed-point values for the same
 inputs.
 
-## Chunked SoA layout
+## Chunked storage layout
 
 Each SoA field is a `ChunkedBuffer` (`crates/brain-visualizer/src/buffers.rs → ChunkedBuffer`).
 When a field's total byte size exceeds `MAX_CHUNK_BYTES` (64 MiB), the
@@ -90,6 +90,10 @@ buffer is split into multiple `wgpu::Buffer` handles. Shaders index via
 
 The layout math is GPU-free and fully host-testable. The `ChunkLayout`
 unit tests in `crates/brain-visualizer/src/buffers.rs` gate this invariant.
+Morphology segment storage reuses the same math for 48 B `MorphSegment`
+records, but each render/compaction pass binds one segment chunk at a time
+rather than shader-indexing across chunks; see
+`crates/brain-visualizer/src/sim/gpu/resources.rs → morph_segment_chunk_layout`.
 
 Positions are three independent 4-byte fields (`pos_x`, `pos_y`, `pos_z`),
 never `array<vec3<f32>>`. Using a vec3 would impose a 16-byte stride and

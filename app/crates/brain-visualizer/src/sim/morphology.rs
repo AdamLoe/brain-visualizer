@@ -229,12 +229,11 @@ impl MorphologyParams {
             dendrite_mid_radius_fraction: 0.78,
             dendrite_tip_radius_fraction: 0.42,
             dendrite_group_spacing: 0.55,
-            // Local bushy branching (Stream D). Bounded so the dendrite arbor stays
-            // under DENDRITE_MAX even for high in-degree targets AND the whole
-            // segment buffer stays under the 128 MiB GPU storage-binding limit at
-            // N=12000: decoration is sprouted on only the first
-            // `dendrite_decor_group_max` groups per neuron, each adding at most
-            // (branchlet_count + twig_count) short edges.
+            // Local bushy branching. Bounded so the dendrite arbor stays under
+            // DENDRITE_MAX even for high in-degree targets: decoration is
+            // sprouted on only the first `dendrite_decor_group_max` groups per
+            // neuron, each adding at most (branchlet_count + twig_count) short
+            // edges.
             dendrite_branchlet_count: 1,
             dendrite_branchlet_length_fraction: 0.6,
             dendrite_branchlet_radius_fraction: 0.30,
@@ -931,37 +930,14 @@ pub const DENDRITE_BRANCHLET_MAX: usize = 1;
 pub const DENDRITE_TWIG_MAX: usize = 2;
 /// Hard upper bound on how many incoming groups (per neuron) get the decorative
 /// bushy grammar. Bounds the extra-segment growth independent of in-degree; the
-/// segment cap is sized against this. Kept small so the morphology segment buffer
-/// stays under the 128 MiB GPU storage-binding limit at N=12000.
+/// segment cap is sized against this.
 pub const DENDRITE_DECOR_GROUP_MAX: usize = 16;
 
-/// Below this neuron count the bushy local decoration runs at full
-/// `dendrite_decor_group_max` (close-up scales, where bushiness reads and the
-/// segment buffer has plenty of headroom).
-const DECOR_FULL_N: usize = 2_400;
-/// At/above this neuron count decoration is fully suppressed. The morphology
-/// segment buffer is already at the 128 MiB GPU storage-binding ceiling at the
-/// N=12000 stress scale (≈2.76 M segments pre-decoration), so there is no room to
-/// add geometry there; decoration tapers linearly between `DECOR_FULL_N` and here.
-const DECOR_ZERO_N: usize = 8_000;
-
-/// Neuron-count-aware decoration allowance. Returns the per-neuron decorated-group
-/// budget, ramping the configured `dendrite_decor_group_max` down to 0 as N grows
-/// from [`DECOR_FULL_N`] to [`DECOR_ZERO_N`]. Deterministic (N is part of the
-/// config), so same config+seed → bit-identical morphology. Keeps the total
-/// segment buffer under the GPU binding limit at high N without ever dropping real
-/// presynaptic geometry.
-fn effective_decor_group_max(n: usize, configured: usize) -> usize {
-    let configured = configured.min(DENDRITE_DECOR_GROUP_MAX);
-    if n <= DECOR_FULL_N {
-        configured
-    } else if n >= DECOR_ZERO_N {
-        0
-    } else {
-        let span = (DECOR_ZERO_N - DECOR_FULL_N) as f32;
-        let t = (DECOR_ZERO_N - n) as f32 / span; // 1.0 at FULL_N → 0.0 at ZERO_N
-        (configured as f32 * t).floor() as usize
-    }
+/// Per-neuron decorated-group budget. Deterministic and bounded by
+/// `DENDRITE_DECOR_GROUP_MAX`; high-N storage binding limits are handled by
+/// chunked GPU segment buffers rather than by suppressing this grammar.
+fn effective_decor_group_max(_n: usize, configured: usize) -> usize {
+    configured.min(DENDRITE_DECOR_GROUP_MAX)
 }
 /// Per-decorative-branch sample clamp. Branchlets/twigs are short soma-proximal
 /// processes (a few base radii), so they flow through [`adaptive_subsegments`] but
@@ -2345,10 +2321,8 @@ pub fn generate(
     let mut dendrite_ms = 0.0f32;
     let mut axon_ms = 0.0f32;
 
-    // Neuron-count-aware bushy-decoration allowance: full at close-up scales, off
-    // at the N=12000 stress scale where the segment buffer is already at the GPU
-    // binding ceiling. Deterministic (N is config), so morphology stays
-    // bit-reproducible for a given config+seed.
+    // Bounded bushy-decoration allowance. High-N storage binding limits are
+    // handled by GPU segment chunking, so the budget no longer changes with N.
     let decor_group_budget = effective_decor_group_max(n, params.dendrite_decor_group_max);
 
     for i in 0..n {
@@ -3823,28 +3797,16 @@ mod tests {
         );
     }
 
-    /// The neuron-count-aware decoration ramp is monotonic and deterministic:
-    /// full below `DECOR_FULL_N`, zero at/above `DECOR_ZERO_N`, and never increases
-    /// as N grows. This is what keeps the segment buffer under the GPU binding
-    /// limit at the N=12000 stress scale while preserving close-up bushiness.
+    /// Decoration is a configured per-neuron product budget, not a hidden
+    /// storage-binding workaround. The value is deterministic and clamped by the
+    /// protected hard cap, but does not fall to zero just because N grows.
     #[test]
-    fn decoration_budget_ramps_down_with_neuron_count() {
+    fn decoration_budget_is_not_neuron_count_throttled() {
         let configured = DENDRITE_DECOR_GROUP_MAX;
         assert_eq!(effective_decor_group_max(1200, configured), configured);
-        assert_eq!(
-            effective_decor_group_max(DECOR_FULL_N, configured),
-            configured
-        );
-        assert_eq!(effective_decor_group_max(DECOR_ZERO_N, configured), 0);
-        assert_eq!(effective_decor_group_max(12_000, configured), 0);
-        // Monotone non-increasing across the ramp.
-        let mut prev = configured + 1;
-        for n in (DECOR_FULL_N..=DECOR_ZERO_N).step_by(200) {
-            let cur = effective_decor_group_max(n, configured);
-            assert!(cur <= prev, "decoration budget must not increase with N");
-            assert!(cur <= configured);
-            prev = cur;
-        }
+        assert_eq!(effective_decor_group_max(8_000, configured), configured);
+        assert_eq!(effective_decor_group_max(12_000, configured), configured);
+        assert_eq!(effective_decor_group_max(20_000, configured), configured);
         // A configured value is never exceeded by the clamp.
         assert!(effective_decor_group_max(1, 999) <= DENDRITE_DECOR_GROUP_MAX);
     }

@@ -1,6 +1,7 @@
 // render_morphology.wgsl — V2 Beauty-First procedural neuron morphology + soma spheres.
 //
-// Instanced, fully GPU-generated tube geometry. One INSTANCE per MorphSegment;
+// Instanced, fully GPU-generated tube geometry. One INSTANCE per MorphSegment
+// in the currently bound segment chunk;
 // TUBE_SIDES * 2 * 3 verts per instance form a tapered cylinder (tube) from
 // endpoint `a` (radius radius_a · width_scale) to endpoint `b` (radius
 // radius_b · width_scale). Two rings of TUBE_SIDES vertices each, triangulated
@@ -91,8 +92,9 @@ struct MorphUniforms {
 @group(0) @binding(1) var<storage, read> last_spike: array<u32>;
 @group(0) @binding(2) var<uniform> u: MorphUniforms;
 // Active/recent compaction: instance_index → original segment index map. Filled
-// by compact_morph_segments.wgsl; the tube passes draw `active_segment_count`
-// instances and fetch segments[active_segment_indices[inst]]. Binding 6 is used
+// by compact_morph_segments.wgsl; the tube passes draw the chunk-local
+// `active_segment_count` instances and fetch segments[active_segment_indices[inst]].
+// Binding 6 is used
 // (not 3/4/5) so it does not collide with the soma pass bindings in this shared
 // module. When DRAW_LEGACY_ALL_SEGMENTS is on, `inst` indexes `segments`
 // directly (the old all-segment path, kept for debugging).

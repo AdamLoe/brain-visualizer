@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-11
+last_updated:  2026-06-12
 ---
 
 # Scaling
@@ -59,23 +59,16 @@ cost — the renderer tracks visible activity, not total geometry. Generation
 at high N (axon Prim-attach dominates); runtime rendering is what was optimised.
 GPU rendering details live in [`gpu-rendering.md`](gpu-rendering.md).
 
-**Morphology segment budget and the storage-buffer ceiling.** The GPU segment
-buffer is sized to the actual generated segment count, not a pre-allocated cap,
-so actual GPU memory ≈ segments × 48 B (~42 MB at N=6 000, ~0.87 M segments).
-The host-side per-run segment cap is sized to worst-case per-neuron bounds and
-is comfortably unmet at N=6 000 (~25% utilisation, 0 dropped).
-
-**Known limit — single storage-buffer binding ceiling.** Morphology segments are
-bound as a single GPU storage buffer, which hits the 128 MiB
-`max_storage_buffer_binding_size` limit at ~2.76 M segments (~N=12 000). To stay
-safely under it, dendrite decoration density is neuron-count-aware: full below
-N≈2 400 (close-up scales where bushiness reads), linearly ramped to zero by
-N=8 000 (`crates/brain-visualizer/src/sim/morphology.rs → DECOR_FULL_N`,
-`DECOR_ZERO_N`, `effective_decor_group_max`). The N=6 000 default and the
-N=12 000 stress tier stay within the binding limit at the cost of throttled
-dendrite decoration above N≈2 400. The correct fix — chunking or multi-binding
-the segment buffer in `crates/brain-visualizer/src/sim/gpu/resources.rs` — is
-not yet done; this is a known scaling ceiling and deferred future work.
+**Morphology segment budget and storage bindings.** The GPU segment allocation is
+sized to the actual generated segment count, not a pre-allocated cap, and the
+48 B `MorphSegment` list is split into chunked storage bindings by
+`crates/brain-visualizer/src/sim/gpu/resources.rs → morph_segment_chunk_layout`.
+Each segment chunk stays under the 64 MiB default chunk budget and under the
+adapter's `max_storage_buffer_binding_size`; each chunk owns its compaction
+buffers and indirect draw args. The host-side per-run segment cap is still sized
+to worst-case per-neuron bounds and is comfortably unmet at N=6 000. Dendrite
+decoration is bounded by the configured per-neuron hard cap, not by a hidden
+neuron-count throttle to avoid the old single-binding ceiling.
 
 Auto-selection of a tier based on measured device performance is deferred: the
 benchmarks needed to calibrate those heuristics require real browser/GPU numbers

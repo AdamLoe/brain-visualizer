@@ -909,23 +909,29 @@ impl GpuBackend {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("read-active-segment-count"),
             });
-        enc.copy_buffer_to_buffer(&mb.active_selected, 0, &mb.selected_staging, 0, 4);
+        for chunk in &mb.segment_chunks {
+            enc.copy_buffer_to_buffer(&chunk.active_selected, 0, &chunk.selected_staging, 0, 4);
+        }
         self.ctx.queue.submit([enc.finish()]);
-        let slice = mb.selected_staging.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
-        let _ = self.ctx.device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: None,
-        });
-        rx.recv().ok()?.ok()?;
-        let selected = {
-            let data = slice.get_mapped_range();
-            u32::from_le_bytes([data[0], data[1], data[2], data[3]])
-        };
-        mb.selected_staging.unmap();
+        let mut selected = 0u32;
+        for chunk in &mb.segment_chunks {
+            let slice = chunk.selected_staging.slice(..);
+            let (tx, rx) = std::sync::mpsc::channel();
+            slice.map_async(wgpu::MapMode::Read, move |r| {
+                let _ = tx.send(r);
+            });
+            let _ = self.ctx.device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            });
+            rx.recv().ok()?.ok()?;
+            let chunk_selected = {
+                let data = slice.get_mapped_range();
+                u32::from_le_bytes([data[0], data[1], data[2], data[3]])
+            };
+            chunk.selected_staging.unmap();
+            selected = selected.saturating_add(chunk_selected);
+        }
         Some((selected, mb.segment_count))
     }
 
@@ -1443,38 +1449,43 @@ impl GpuBackend {
         let compaction_ran = if self.visual.connection_layer != 0
             && !crate::sim::gpu::pipelines::DRAW_LEGACY_ALL_SEGMENTS
         {
-            if let (Some(p_reset), Some(p_compact), Some(p_write), Some(cbg), Some(mb)) = (
+            if let (Some(p_reset), Some(p_compact), Some(p_write), Some(mb)) = (
                 self.pipelines.compact_morph_reset.as_ref(),
                 self.pipelines.compact_morph.as_ref(),
                 self.pipelines.compact_morph_write_args.as_ref(),
-                bg.compact_morph.as_ref(),
                 self.resources.morph_buffers.as_ref(),
             ) {
-                let cu = resources::CompactUniforms {
-                    tick: self.tick,
-                    segment_count: mb.segment_count,
-                    glow_tau: self.visual.glow_tau,
-                    connection_layer: self.visual.connection_layer,
-                    light_next: self.visual.connection_light_next,
-                    light_past: 0, // upstream lighting removed (mirrors tube uniform)
-                    tube_verts: self.morph_tube_verts,
-                    _pad: 0,
-                };
-                self.ctx
-                    .queue
-                    .write_buffer(&mb.compact_uniform, 0, bytemuck::bytes_of(&cu));
-                let groups = mb.segment_count.div_ceil(64).max(1);
+                for chunk in &mb.segment_chunks {
+                    let cu = resources::CompactUniforms {
+                        tick: self.tick,
+                        segment_count: chunk.segment_count,
+                        glow_tau: self.visual.glow_tau,
+                        connection_layer: self.visual.connection_layer,
+                        light_next: self.visual.connection_light_next,
+                        light_past: 0, // upstream lighting removed (mirrors tube uniform)
+                        tube_verts: self.morph_tube_verts,
+                        _pad: 0,
+                    };
+                    self.ctx
+                        .queue
+                        .write_buffer(&chunk.compact_uniform, 0, bytemuck::bytes_of(&cu));
+                }
                 let mut cpass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("compact-morph-pass"),
                     timestamp_writes: None,
                 });
-                cpass.set_bind_group(0, cbg, &[]);
-                cpass.set_pipeline(p_reset);
-                cpass.dispatch_workgroups(1, 1, 1);
-                cpass.set_pipeline(p_compact);
-                cpass.dispatch_workgroups(groups, 1, 1);
-                cpass.set_pipeline(p_write);
-                cpass.dispatch_workgroups(1, 1, 1);
+                for (chunk, chunk_bg) in
+                    mb.segment_chunks.iter().zip(bg.morph_segment_chunks.iter())
+                {
+                    let groups = chunk.segment_count.div_ceil(64).max(1);
+                    cpass.set_bind_group(0, &chunk_bg.compact_morph, &[]);
+                    cpass.set_pipeline(p_reset);
+                    cpass.dispatch_workgroups(1, 1, 1);
+                    cpass.set_pipeline(p_compact);
+                    cpass.dispatch_workgroups(groups, 1, 1);
+                    cpass.set_pipeline(p_write);
+                    cpass.dispatch_workgroups(1, 1, 1);
+                }
                 true
             } else {
                 false
@@ -1484,9 +1495,8 @@ impl GpuBackend {
         };
 
         if self.visual.connection_layer != 0 {
-            if let (Some(pipe_morph), Some(mbg), Some(mb)) = (
+            if let (Some(pipe_morph), Some(mb)) = (
                 self.pipelines.render_morphology.as_ref(),
-                bg.render_morphology.as_ref(),
                 self.resources.morph_buffers.as_ref(),
             ) {
                 let lighting = self.morph_config.lighting;
@@ -1527,7 +1537,6 @@ impl GpuBackend {
                 self.ctx
                     .queue
                     .write_buffer(&mb.morph_uniform, 0, bytemuck::bytes_of(&mu));
-                let segs = mb.segment_count;
                 let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("morphology-pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1544,9 +1553,8 @@ impl GpuBackend {
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
-                if segs > 0 {
+                if mb.segment_count > 0 {
                     pass.set_pipeline(pipe_morph);
-                    pass.set_bind_group(0, mbg, &[]);
                     // tube_sides * 2 * 3 verts per segment (two rings, triangulated
                     // as quads → 2 tris × 3 verts per side). v0.3.1: runtime value
                     // kept in sync with the WGSL TUBE_SIDES override constant the
@@ -1554,10 +1562,18 @@ impl GpuBackend {
                     // Active/recent path (default): draw only the compacted
                     // instances via the GPU-written indirect args (instance count
                     // = selected segments). Legacy path: draw all segments.
-                    if compaction_ran {
-                        pass.draw_indirect(&mb.active_draw_args, 0);
-                    } else {
-                        pass.draw(0..self.morph_tube_verts, 0..segs);
+                    for (chunk, chunk_bg) in
+                        mb.segment_chunks.iter().zip(bg.morph_segment_chunks.iter())
+                    {
+                        if chunk.segment_count == 0 {
+                            continue;
+                        }
+                        pass.set_bind_group(0, &chunk_bg.render_morphology, &[]);
+                        if compaction_ran {
+                            pass.draw_indirect(&chunk.active_draw_args, 0);
+                        } else {
+                            pass.draw(0..self.morph_tube_verts, 0..chunk.segment_count);
+                        }
                     }
                 }
             }
@@ -1572,12 +1588,10 @@ impl GpuBackend {
         // occlusion while the bright packet remains fragment-local.
         // Reuses the additive tube bind group + draw count (same override consts).
         if active_opaque_on {
-            if let (Some(pipe_active), Some(mbg), Some(mb)) = (
+            if let (Some(pipe_active), Some(mb)) = (
                 self.pipelines.render_morphology_active.as_ref(),
-                bg.render_morphology.as_ref(),
                 self.resources.morph_buffers.as_ref(),
             ) {
-                let segs = mb.segment_count;
                 let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("morphology-active-pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1601,15 +1615,22 @@ impl GpuBackend {
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
-                if segs > 0 {
+                if mb.segment_count > 0 {
                     pass.set_pipeline(pipe_active);
-                    pass.set_bind_group(0, mbg, &[]);
                     // Same compacted instance list as the additive pass — the
                     // active-opacity pass MUST NOT reintroduce full-segment draws.
-                    if compaction_ran {
-                        pass.draw_indirect(&mb.active_draw_args, 0);
-                    } else {
-                        pass.draw(0..self.morph_tube_verts, 0..segs);
+                    for (chunk, chunk_bg) in
+                        mb.segment_chunks.iter().zip(bg.morph_segment_chunks.iter())
+                    {
+                        if chunk.segment_count == 0 {
+                            continue;
+                        }
+                        pass.set_bind_group(0, &chunk_bg.render_morphology, &[]);
+                        if compaction_ran {
+                            pass.draw_indirect(&chunk.active_draw_args, 0);
+                        } else {
+                            pass.draw(0..self.morph_tube_verts, 0..chunk.segment_count);
+                        }
                     }
                 }
             }

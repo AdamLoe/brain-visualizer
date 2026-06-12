@@ -251,27 +251,27 @@
   long_range_waypoints`; `crates/brain-visualizer/src/connectivity/mod.rs →
   target, target_with_cell` (return target id only, no flag).
 
-## Bushy local dendrite decoration, self-owned and ramped with N
+## Bushy local dendrite decoration, self-owned and per-neuron capped
 
 - **Decision.** Each incoming group's tip grows a bushy local arbor — secondary
   branchlets and per-twig salt-curled terminal twigs with a trunk→twig radius
   taper. These decorations are **self-owned** (`target_id == neuron_id`) and never
   invent target ids, so the real presynaptic leaves
   (`kind == 0`, `target_id = source_id`, `path_len = 0`) keep sole ownership of
-  presynaptic activity. Decoration density is neuron-count-aware: full below
-  `DECOR_FULL_N ≈ 2400`, ramped to 0 by `DECOR_ZERO_N = 8000`.
+  presynaptic activity. Decoration density is bounded by the configured
+  per-neuron group cap and does not ramp down with N.
 - **Why.** One bow per edge reads as a generic radial star-burst; per-branch curl
   and twigs make dendrites read as organic local arbors. Self-ownership keeps the
-  decoration from corrupting the honest presynaptic lighting contract. The ramp
-  exists because morphology segments are bound as a single GPU storage buffer near
-  the 128 MiB binding limit, so the high-N scale has no room for extra geometry —
-  the deep binding-ceiling reasoning is owned by [`scaling.md`](scaling.md).
-  Deterministic salts everywhere keep same seed/config → bit-identical morphology.
+  decoration from corrupting the honest presynaptic lighting contract. GPU
+  segment chunking handles high-N storage pressure, so the generator does not
+  silently change morphology shape to satisfy a binding limit. Deterministic
+  salts everywhere keep same seed/config → bit-identical morphology.
 - **Applies to.** [`../architecture/manifold.md`](../architecture/manifold.md),
-  [`scaling.md`](scaling.md).
+  [`../architecture/scaling.md`](../architecture/scaling.md).
 - **Code anchors.** `crates/brain-visualizer/src/sim/morphology.rs →
-  emit_incoming_dendrites, effective_decor_group_max, DECOR_FULL_N, DECOR_ZERO_N,
-  salt` (`DENDRITE_BRANCHLET`/`DENDRITE_TWIG`/`DENDRITE_TWIG_CURL`).
+  emit_incoming_dendrites, effective_decor_group_max, DENDRITE_DECOR_GROUP_MAX,
+  salt` (`DENDRITE_BRANCHLET`/`DENDRITE_TWIG`/`DENDRITE_TWIG_CURL`);
+  `crates/brain-visualizer/src/sim/gpu/resources.rs → morph_segment_chunk_layout`.
 - **Tradeoffs.** Three decoration controls are dev-panel-exposed
   (`dendriteBranchletCount`, `dendriteTwigCount`, `dendriteDecorGroupMax`,
   runtime-clamped); the remaining decoration params stay locked.

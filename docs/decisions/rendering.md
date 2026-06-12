@@ -183,27 +183,29 @@
 ## Draw only active/recent morphology segments, not all of them
 
 - **Decision.** A GPU compute pass (`compact_morph_segments.wgsl`) selects each
-  frame the segments that are about-to-be-lit / lit / recently-lit, and both
-  morphology tube passes draw only that compacted subset via `draw_indirect`.
-  The full all-segment draw is preserved behind `DRAW_LEGACY_ALL_SEGMENTS`
-  (default off). Soma sphere passes are per-neuron and unaffected.
+  frame the segments that are about-to-be-lit / lit / recently-lit. Selection
+  runs per segment chunk, and both morphology tube passes draw each chunk's
+  compacted subset via `draw_indirect`. The full all-segment draw is preserved
+  behind `DRAW_LEGACY_ALL_SEGMENTS` (default off). Soma sphere passes are
+  per-neuron and unaffected.
 - **Why.** Frame cost must scale with *visible activity* (~0.6% of segments at
   rest), not with total generated segment count, so N / K / branch detail can
   grow without the tube passes becoming the bottleneck.
 - **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md), [`../architecture/gpu-backend.md`](../architecture/gpu-backend.md), [`../architecture/scaling.md`](../architecture/scaling.md)
-- **Code anchors.** `crates/brain-visualizer/src/sim/gpu/shaders/compact_morph_segments.wgsl → reset / compact / write_args`; `crates/brain-visualizer/src/sim/gpu/mod.rs → render_full`; `crates/brain-visualizer/src/sim/gpu/pipelines.rs → DRAW_LEGACY_ALL_SEGMENTS / build_morph_pipelines`; `crates/brain-visualizer/src/sim/gpu/resources.rs → MorphBuffers`.
+- **Code anchors.** `crates/brain-visualizer/src/sim/gpu/shaders/compact_morph_segments.wgsl → reset / compact / write_args`; `crates/brain-visualizer/src/sim/gpu/mod.rs → render_full`; `crates/brain-visualizer/src/sim/gpu/pipelines.rs → DRAW_LEGACY_ALL_SEGMENTS / build_morph_pipelines`; `crates/brain-visualizer/src/sim/gpu/resources.rs → MorphSegmentChunk / MorphBuffers`.
 
 ## Per-frame segment selection is GPU-indirect, never CPU readback
 
 - **Decision.** The compacted segment count flows from compaction into the tube
-  passes entirely through GPU indirect draw args (`active_draw_args`); the CPU
-  never reads back the selection to size the draw. A blocking selected-count
-  readback exists only for profiler/test diagnostics.
+  passes entirely through chunk-local GPU indirect draw args
+  (`active_draw_args`); the CPU never reads back the selection to size the draw.
+  A blocking selected-count readback sums chunk counters only for profiler/test
+  diagnostics.
 - **Why.** Per-frame selection must not stall the render loop on a GPU→CPU map,
   which would break the no-readback-in-the-loop policy the whole backend is built
   around.
 - **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md), [`../architecture/gpu-backend.md`](../architecture/gpu-backend.md)
-- **Code anchors.** `crates/brain-visualizer/src/sim/gpu/mod.rs → render_full` (`draw_indirect(&mb.active_draw_args, 0)`), `GpuBackend::read_active_segment_count` (diagnostics-only).
+- **Code anchors.** `crates/brain-visualizer/src/sim/gpu/mod.rs → render_full` (`draw_indirect(&chunk.active_draw_args, 0)`), `GpuBackend::read_active_segment_count` (diagnostics-only).
 
 ## Select the packet band, not the whole fired arbor
 

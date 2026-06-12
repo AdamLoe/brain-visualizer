@@ -1,10 +1,11 @@
 // compact_morph_segments.wgsl — active/recent morphology segment compaction.
 //
 // Replaces the all-segment morphology tube draw with a GPU compaction stage:
-// a compute pass scans every MorphSegment, derives the segment's ACTIVITY OWNER
+// a compute pass scans every MorphSegment in the currently bound segment chunk,
+// derives the segment's ACTIVITY OWNER
 // using the EXACT SAME rule as render_morphology.wgsl::vs_main, reads
 // last_spike[owner], and — mirroring the shader's impulse decode — appends
-// the segment's index to `active_segment_indices` ONLY when the segment is
+// the chunk-local segment index to `active_segment_indices` ONLY when the segment is
 // currently lit, recently lit, or ABOUT to be lit (a headroom window so a
 // long-range packet is submitted slightly before it arrives). A second
 // single-thread entry point copies the atomic counter into a DrawIndirectArgs
@@ -156,8 +157,8 @@ fn compact(@builtin(global_invocation_id) gid: vec3<u32>) {
         return; // front passed; tail behind it is sub-perceptual here
     }
 
-    // Selected. Append index (hard cap = segment_count, so no overflow clamp
-    // needed for v1 — the buffer is sized to total segments).
+    // Selected. Append the chunk-local index (hard cap = segment_count, so no
+    // overflow clamp needed — the buffer is sized to this chunk's segments).
     let slot = atomicAdd(&active_count, 1u);
     active_indices[slot] = idx;
 }

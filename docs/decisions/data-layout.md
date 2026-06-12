@@ -60,6 +60,20 @@
 - **Revisit when.** Profiling shows AtomicI32 contention dominates CPU tick
   time, at which point spatial partitioning becomes worth measuring.
 
+## Chunk large GPU storage bindings by byte budget
+
+- **Decision.** Large GPU storage arrays use `ChunkLayout` with a 64 MiB default
+  chunk budget and any tighter adapter storage-binding limit. Morphology segment
+  storage reuses that byte-budget math for 48 B `MorphSegment` records, while
+  render/compaction bind one segment chunk at a time.
+- **Why.** WebGPU storage bindings can be smaller than the logical data set.
+  Chunking preserves the flat logical data model without forcing CPU readback,
+  layout changes, or hidden generator throttles to stay below one binding.
+- **Applies to.** [`../architecture/data-model.md`](../architecture/data-model.md),
+  [`../architecture/gpu-backend.md`](../architecture/gpu-backend.md).
+- **Code anchors.** `crates/brain-visualizer/src/buffers.rs → ChunkLayout`;
+  `crates/brain-visualizer/src/sim/gpu/resources.rs → morph_segment_chunk_layout`.
+
 ## See also
 
 - [`../architecture/data-model.md`](../architecture/data-model.md)

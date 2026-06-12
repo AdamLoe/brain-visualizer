@@ -110,7 +110,7 @@ upload of per-instance data. Order:
    color+depth so later passes load on top.
 3. **far-LOD glow pass** — clears color (unless the surface pass already did),
    additive, no depth.
-4. **active/recent compaction compute + morphology tube pass** — when `connection_layer != 0`. The compaction compute (`compact_morph_segments.wgsl`: `reset` 1wg → `compact` ⌈segs/64⌉wg → `write_args` 1wg) runs first and writes `active_draw_args`; the tube pass then `draw_indirect`s over the compacted active/recent segment subset (additive, no depth) via `render_morphology.wgsl → vs_main`. The instance count is GPU-decided — no CPU readback sizes this draw. See [`gpu-rendering.md`](gpu-rendering.md) for the selection predicate.
+4. **active/recent compaction compute + morphology tube pass** — when `connection_layer != 0`. For each morphology segment chunk, the compaction compute (`compact_morph_segments.wgsl`: `reset` 1wg → `compact` ⌈chunk_segs/64⌉wg → `write_args` 1wg) writes that chunk's `active_draw_args`; the tube pass then binds each chunk and `draw_indirect`s over its compacted active/recent subset (additive, no depth) via `render_morphology.wgsl → vs_main`. Instance counts are GPU-decided per chunk — no CPU readback sizes these draws. See [`gpu-rendering.md`](gpu-rendering.md) for the selection predicate.
 5. **morphology soma sphere pass** — when `connection_layer != 0`; additive, no depth. One UV-sphere per neuron via `render_morphology.wgsl → vs_sphere`. Uses `render_soma_spheres` pipeline (`crates/brain-visualizer/src/sim/gpu/pipelines.rs → GpuPipelines`), reusing the same `last_spike` and `morph_uniform` buffers from the tube pass.
 6. **active-opacity tube + soma passes** — when `connection_layer != 0` and the active-opacity guard is on; depth-tested **alpha** blend (not additive), layered over the additive morphology passes so firing geometry genuinely occludes. The active-tube pass owns the depth `Clear(1.0)`; the active-soma pass `Load`s it. See [`gpu-rendering.md`](gpu-rendering.md) for the opacity model and skip-at-zero guard.
 7. **(retired) ribbon pass** — behind `DRAW_LEGACY_RIBBONS`.
@@ -145,14 +145,17 @@ All large buffers are **persistent across frames**. Allocation happens only on a
 - **tier resize / network rebuild** — `GpuBackend::initialize` (called by
   `resize`) runs the `GpuResources::resize_neurons` + `init_render_resources` +
   `init_near_lod_resources` + `init_edge_resources` + `init_morph_resources`
-  allocators, then `refresh_bind_groups`. `init_morph_resources` allocates the
-  branch segment buffer, the soma sphere instance buffer (`sphere_instances`
-  via `crates/brain-visualizer/src/sim/morphology.rs → emit_soma_spheres`), and
-  the active/recent compaction buffers (`active_segment_indices`,
-  `active_segment_count`, `active_draw_args`, `compact_uniform`, plus the
-  profiler-readback `active_selected` / `selected_staging`), and builds the tube,
-  sphere, and compaction bind groups (`MorphUniforms` at 192 B,
-  `crates/brain-visualizer/src/sim/gpu/resources.rs → MorphBuffers / MorphUniforms`).
+  allocators, then `refresh_bind_groups`. `init_morph_resources` splits the
+  generated branch segments into `MorphSegmentChunk` resources using
+  `morph_segment_chunk_layout` (64 MiB default budget, further capped by the
+  adapter's storage-binding limit), allocates chunk-local compaction buffers
+  (`active_segment_indices`, `active_segment_count`, `active_draw_args`,
+  `compact_uniform`, plus profiler `active_selected` / `selected_staging`), and
+  allocates the flat soma sphere instance buffer (`sphere_instances` via
+  `crates/brain-visualizer/src/sim/morphology.rs → emit_soma_spheres`). The tube
+  and compaction bind groups are one pair per segment chunk; the sphere bind
+  group stays flat and shares the 192 B `MorphUniforms` buffer
+  (`crates/brain-visualizer/src/sim/gpu/resources.rs → MorphBuffers / MorphUniforms`).
 - **render-target resize** — `resize_render_targets`, guarded: it recreates the
   depth + bloom textures **only when width/height actually changed** (the
   `changed` check in `crates/brain-visualizer/src/sim/gpu/resources.rs → GpuResources::resize_render_targets`).

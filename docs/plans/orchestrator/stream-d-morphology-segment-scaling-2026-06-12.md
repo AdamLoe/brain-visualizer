@@ -1,8 +1,8 @@
 ---
-status:        draft
+status:        shipped
 owner:         unassigned
 last_updated:  2026-06-12
-okay_to_delete: false
+okay_to_delete: true
 long_lived:    false
 owning_docs:
   - architecture/data-model.md
@@ -109,7 +109,19 @@ the rebuild-responsiveness plan. Keep one implementer on this plan at a time;
 
 ## Migration Notes
 
-At ship time, migrate current-state facts into `architecture/gpu-backend.md`,
-`architecture/gpu-rendering.md`, `architecture/scaling.md`, and
-`architecture/manifold.md`; migrate tradeoffs into `decisions/scaling.md` and
-`decisions/manifold.md`.
+Migrated current-state facts into:
+
+- `architecture/data-model.md`: shared chunk math now covers morphology segment storage as well as SoA fields.
+- `architecture/gpu-backend.md`: `render_full` compacts/draws morphology per segment chunk; `init_morph_resources` allocates persistent chunk-local resources.
+- `architecture/gpu-rendering.md`: active/recent compaction and both tube passes use chunk-local indices and chunk-local indirect args.
+- `architecture/manifold.md`: `MorphSegment` stays a flat 48 B generator output; GPU upload chunking does not change the layout or generator contract.
+- `architecture/scaling.md`: high-N storage pressure is handled by chunked segment bindings, not by neuron-count decoration throttling.
+
+Migrated decisions/tradeoffs into:
+
+- `decisions/data-layout.md`: large storage bindings use byte-budgeted `ChunkLayout`; morphology binds one segment chunk at a time.
+- `decisions/rendering.md`: active/recent compaction and no-readback indirect draws are per chunk.
+- `decisions/scaling.md`: chunk segment storage rather than throttling decoration to fit one binding.
+- `decisions/manifold.md`: bushy decoration remains self-owned and per-neuron capped, not N-throttled.
+
+Verification migrated/recorded: host chunk tests cover >128 MiB / 48 B layouts, empty input, last partial chunks, adapter-limit budgeting, and product-scale multi-chunk selection; `render_check` validates pipeline creation and compacted morphology rendering on llvmpipe.

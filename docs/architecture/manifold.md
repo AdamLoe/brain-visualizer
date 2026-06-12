@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-11
+last_updated:  2026-06-12
 ---
 
 # Cortical Manifold
@@ -197,7 +197,7 @@ only for visible socket groups and axon leaves by summed absolute weight.
 Unique-target coverage is the acceptance target, and the shared arbor is
 budgeted with named segment classes plus slack rather than an opaque fixed cap.
 
-`MorphSegment` is the **branch-only** contract: 48 bytes, std430, 16-aligned. It carries two endpoints (`a`, `b`), `radius_a`, `radius_b`, `neuron_id`, `path_len`, `kind` (0=dendrite, 1=axon), and `target_id`. Field order is a hard Rust ↔ WGSL contract — see `crates/brain-visualizer/src/sim/morphology.rs → MorphSegment` and the matching WGSL struct in `render_morphology.wgsl`. The size assert is `crates/brain-visualizer/src/sim/morphology.rs → segment_layout_is_48_bytes`.
+`MorphSegment` is the **branch-only** contract: 48 bytes, std430, 16-aligned. It carries two endpoints (`a`, `b`), `radius_a`, `radius_b`, `neuron_id`, `path_len`, `kind` (0=dendrite, 1=axon), and `target_id`. Field order is a hard Rust ↔ WGSL contract — see `crates/brain-visualizer/src/sim/morphology.rs → MorphSegment` and the matching WGSL struct in `render_morphology.wgsl`. The size assert is `crates/brain-visualizer/src/sim/morphology.rs → segment_layout_is_48_bytes`. GPU upload chunks the flat list into multiple segment storage bindings when needed; chunking does not change this record layout or the generator's flat output.
 
 `MorphSphereInstance` is the **soma-only** contract: 48 bytes, 16-aligned. One instance per neuron, emitted at `initialize()` time by `crates/brain-visualizer/src/sim/morphology.rs → emit_soma_spheres` from the neuron position arrays plus the matching host-side `ProcessRoot` descriptor. Fields: `center: [f32; 3]`, `radius: f32` (= `params::R0`), `neuron_id: u32`, `kind: u32` (= 2 for soma), `_pad0`, `_pad1`, `root_dir: [f32; 3]`, and `root_pull: f32`. `root_dir/root_pull` carry the dominant axon root direction and bounded deformation strength consumed by `render_morphology.wgsl → vs_sphere`; neurons with no unique outgoing target get zero pull. The size assert is `crates/brain-visualizer/src/sim/morphology.rs → sphere_instance_layout_is_48_bytes`.
 
@@ -268,14 +268,12 @@ invent target ids, so they light with the neuron and can never corrupt
 presynaptic semantics (guarded by
 `bushy_dendrite_decorations_preserve_presynaptic_owner_rule`).
 
-**Decoration ramp with N.** Dendrite decoration density is neuron-count-aware
-(`crates/brain-visualizer/src/sim/morphology.rs → effective_decor_group_max`):
-full below `DECOR_FULL_N ≈ 2400`, ramped linearly to 0 by `DECOR_ZERO_N = 8000`,
-because the morphology segments are bound as a single GPU storage buffer near the
-128 MiB binding limit (~2.76 M segment ceiling at the high-N stress scale). The
-ramp is part of the config (N is an input), so same config+seed stays
-bit-identical, and it never drops real presynaptic geometry. The binding-ceiling
-detail is owned by [`scaling.md`](scaling.md). Three of the new dendrite controls
+**Decoration cap.** Dendrite decoration density is bounded by
+`crates/brain-visualizer/src/sim/morphology.rs → effective_decor_group_max`,
+which clamps the configured group count to `DENDRITE_DECOR_GROUP_MAX` but does
+not ramp down with N. High-N storage pressure is handled by GPU segment chunking
+owned by [`scaling.md`](scaling.md) / [`gpu-rendering.md`](gpu-rendering.md), not
+by silently changing the generated morphology. Three of the new dendrite controls
 are user-exposed as generator controls (regenerate `applyKind`):
 `dendriteBranchletCount`, `dendriteTwigCount`, `dendriteDecorGroupMax`
 (runtime-clamped to compile-time maxes); the rest stay locked. The dev-panel
@@ -400,8 +398,7 @@ branching.
   change.
 - The adaptive-subdivision rule (`adaptive_subsegments`), the long-range
   classification/waypoint routing (`long_range_waypoints`, `LONG_RANGE_MAX_WAYPOINTS`),
-  the bushy local decoration grammar, or the decoration ramp
-  (`effective_decor_group_max`, `DECOR_FULL_N`/`DECOR_ZERO_N`) change.
+  the bushy local decoration grammar, or `effective_decor_group_max` change.
 - The activity-owner invariant (presynaptic leaf `kind/neuron_id/target_id/path_len`
   vs self-owned decoration) changes.
 - The exposed-vs-protected split changes (a field is added to/removed from the

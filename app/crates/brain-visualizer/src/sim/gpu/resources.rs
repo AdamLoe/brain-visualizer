@@ -7,7 +7,7 @@
 //! The rAF loop must never recreate buffers/bind groups/targets. Only the rare
 //! structural-change methods here allocate.
 
-use crate::buffers::ChunkedBuffer;
+use crate::buffers::{ChunkLayout, ChunkedBuffer, MAX_CHUNK_BYTES};
 use crate::connectivity::spatial::SpatialGrid;
 use crate::manifold::RegionKind;
 use crate::sim::backend::{initial_last_spike, SimConfig};
@@ -240,30 +240,54 @@ pub struct CompactUniforms {
     pub _pad: u32,
 }
 
-/// Morphology: GPU buffers. Allocated ONCE per network (re)build in
-/// `init_morph_resources`; never per-frame. The segment buffer holds the flat
-/// `MorphSegment` list; `segment_count` is the instance count for the draw.
-pub struct MorphBuffers {
-    /// All MorphSegments (read-only storage in the morphology VS).
+/// Derive the per-binding segment layout for morphology chunks.
+pub fn morph_segment_chunk_layout(
+    total_segments: usize,
+    max_storage_buffer_binding_size: usize,
+) -> ChunkLayout {
+    let element_bytes = std::mem::size_of::<MorphSegment>();
+    let chunk_budget = MAX_CHUNK_BYTES.min(max_storage_buffer_binding_size);
+    ChunkLayout::with_budget(total_segments, element_bytes, chunk_budget)
+}
+
+/// Morphology: one segment chunk and its chunk-local compaction/draw resources.
+/// Allocated once per network rebuild; the frame loop only writes uniforms and
+/// dispatches/draws against these existing bindings.
+pub struct MorphSegmentChunk {
+    /// Chunk-local MorphSegments (read-only storage in the morphology VS).
     pub segment_buffer: wgpu::Buffer,
-    /// Number of segments actually generated (= instance count).
+    /// Number of segments in this chunk.
     pub segment_count: u32,
-    /// Per-frame morphology render uniform (shared by tube pass AND soma-sphere pass).
-    pub morph_uniform: wgpu::Buffer,
-    // ─── Active/recent compaction (Stream B/C) ────────────────────────────────
-    /// Compacted instance→segment index list (u32). HARD CAP = segment_count.
+    /// Bytes bound for this chunk's segment storage buffer.
+    pub segment_bytes: u64,
+    /// Compacted instance→chunk-local segment index list (u32). Hard cap =
+    /// segment_count, so the compact pass cannot overflow.
     pub active_segment_indices: wgpu::Buffer,
-    /// Atomic selected-segment counter (u32), zeroed each frame by the reset pass.
+    /// Atomic selected-segment counter (u32), zeroed each frame by reset.
     pub active_segment_count: wgpu::Buffer,
-    /// DrawIndirectArgs (non-indexed): vertex_count, instance_count, first_vertex,
-    /// first_instance = 4 × u32 = 16 B. Written by the compaction reset/write_args.
+    /// DrawIndirectArgs (non-indexed): vertex_count, instance_count,
+    /// first_vertex, first_instance = 4 × u32.
     pub active_draw_args: wgpu::Buffer,
     /// Compaction compute uniform (uploaded each frame the layer is on).
     pub compact_uniform: wgpu::Buffer,
-    /// Profiler: last selected count (COPY_SRC for readback / profiler HUD).
+    /// Profiler: last selected count for this chunk.
     pub active_selected: wgpu::Buffer,
-    /// Staging buffer for non-blocking selected-count readback (MAP_READ|COPY_DST).
+    /// Staging buffer for diagnostic selected-count readback.
     pub selected_staging: wgpu::Buffer,
+}
+
+/// Morphology: GPU buffers. Allocated ONCE per network (re)build in
+/// `init_morph_resources`; never per-frame. Segment storage is chunked so every
+/// storage binding stays below adapter limits while soma spheres remain flat.
+pub struct MorphBuffers {
+    /// Chunked MorphSegment storage and chunk-local active/recent draw state.
+    pub segment_chunks: Vec<MorphSegmentChunk>,
+    /// Layout used to split the generated flat segment list.
+    pub segment_layout: ChunkLayout,
+    /// Number of segments actually generated across all chunks.
+    pub segment_count: u32,
+    /// Per-frame morphology render uniform (shared by tube and soma-sphere pass).
+    pub morph_uniform: wgpu::Buffer,
     /// Soma sphere instances — one per neuron (Wave 2 / Stream 2).
     pub sphere_buffer: wgpu::Buffer,
     /// Number of soma sphere instances (= neuron count).
@@ -568,8 +592,8 @@ pub struct GpuLayouts {
     /// ribbon render group 0: edge_buffer (read storage) + ribbon uniform.
     pub render_ribbon_bgl: wgpu::BindGroupLayout,
     // ─── Morphology ───────────────────────────────────────────────────────────
-    /// morphology render group 0: segment_buffer (read) + last_spike (read) +
-    /// morph uniform + active_segment_indices (read, binding 6).
+    /// morphology render group 0: one segment chunk (read) + last_spike (read) +
+    /// morph uniform + chunk-local active_segment_indices (read, binding 6).
     pub render_morphology_bgl: wgpu::BindGroupLayout,
     /// morphology active/recent compaction compute group 0: segments(r) +
     /// last_spike(r) + compact uniform + active_indices(rw) + active_count(rw) +
@@ -920,8 +944,8 @@ impl GpuLayouts {
         });
 
         // ─── Morphology: render layout ────────────────────────────────────────
-        // group 0: segment_buffer (read storage, VS) + last_spike (read storage,
-        // VS) + morph uniform (VS).
+        // group 0: one segment chunk (read storage, VS) + last_spike (read
+        // storage, VS) + morph uniform (VS).
         let render_morphology_bgl =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("render-morphology-bgl"),
@@ -1073,16 +1097,17 @@ pub struct GpuBindGroups {
     /// ribbon render group 0 (edge_buffer + ribbon uniform).
     pub render_ribbon: Option<wgpu::BindGroup>,
     // ─── Morphology ───────────────────────────────────────────────────────────
-    /// morphology render group 0 (segment_buffer + last_spike + morph uniform +
-    /// active_segment_indices). None until both morph buffers + neuron buffers
-    /// are allocated.
-    pub render_morphology: Option<wgpu::BindGroup>,
-    /// morphology active/recent compaction compute group 0. None until morph
-    /// buffers + neuron buffers are allocated.
-    pub compact_morph: Option<wgpu::BindGroup>,
+    /// Per-segment-chunk morphology tube render and compaction bind groups.
+    /// Empty until both morph buffers + neuron buffers are allocated.
+    pub morph_segment_chunks: Vec<MorphSegmentBindGroups>,
     /// soma sphere render group 0 (sphere_instances + last_spike + morph uniform).
     /// None until both sphere buffers + neuron buffers are allocated.
     pub render_soma_spheres: Option<wgpu::BindGroup>,
+}
+
+pub struct MorphSegmentBindGroups {
+    pub render_morphology: wgpu::BindGroup,
+    pub compact_morph: wgpu::BindGroup,
 }
 
 /// Owns all GPU buffers/targets and tracks when bind groups must be rebuilt.
@@ -1746,7 +1771,8 @@ impl GpuResources {
             &source_types,
             reach,
         );
-        let segment_count = morph.segments.len() as u32;
+        let segment_count =
+            u32::try_from(morph.segments.len()).expect("morphology segment count exceeds u32");
         let dropped = morph.dropped;
         let stats = morph.stats;
         let process_roots = morph.process_roots;
@@ -1768,28 +1794,100 @@ impl GpuResources {
             stats.incoming_dropped_count,
         );
 
-        // Always allocate a non-empty buffer (wgpu rejects zero-sized). When the
-        // network is empty we still emit one zeroed segment so the draw is a
-        // harmless degenerate.
-        let data: Vec<MorphSegment> = if segments.is_empty() {
-            vec![MorphSegment {
-                a: [0.0; 3],
-                radius_a: 0.0,
-                b: [0.0; 3],
-                radius_b: 0.0,
-                neuron_id: 0,
-                path_len: 0.0,
-                kind: 0,
-                target_id: 0,
-            }]
-        } else {
-            segments
-        };
-        let segment_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("morph_segment_buffer"),
-            contents: bytemuck::cast_slice(&data),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+        let segment_layout = morph_segment_chunk_layout(
+            segments.len(),
+            device.limits().max_storage_buffer_binding_size as usize,
+        );
+        let mut segment_chunks = Vec::with_capacity(segment_layout.chunk_count());
+        for chunk_idx in 0..segment_layout.chunk_count() {
+            let start = chunk_idx * segment_layout.chunk_size;
+            let end = (start + segment_layout.chunk_size).min(segments.len());
+            let chunk_segments = &segments[start..end];
+            let local_count =
+                u32::try_from(chunk_segments.len()).expect("morphology chunk exceeds u32");
+            let segment_bytes = segment_layout.chunk_bytes(chunk_idx) as u64;
+            let segment_label = format!("morph_segment_buffer_{chunk_idx}");
+            let segment_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(&segment_label),
+                contents: bytemuck::cast_slice(chunk_segments),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+
+            // Active/recent compaction buffers are chunk-local. The index list is
+            // sized to the chunk's segment count, so the worst case ("every
+            // segment active") still cannot overflow.
+            let cap = local_count.max(1);
+            let indices_label = format!("morph_active_segment_indices_{chunk_idx}");
+            let active_segment_indices = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(&indices_label),
+                size: (cap as u64) * 4,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            });
+            let count_label = format!("morph_active_segment_count_{chunk_idx}");
+            let active_segment_count = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(&count_label),
+                size: 4,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            });
+            let args_label = format!("morph_active_draw_args_{chunk_idx}");
+            let active_draw_args = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(&args_label),
+                size: 16,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::INDIRECT
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let uniform_label = format!("morph_compact_uniform_{chunk_idx}");
+            let compact_uniform = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(&uniform_label),
+                size: std::mem::size_of::<CompactUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let selected_label = format!("morph_active_selected_{chunk_idx}");
+            let active_selected = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(&selected_label),
+                size: 4,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            });
+            let staging_label = format!("morph_selected_staging_{chunk_idx}");
+            let selected_staging = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(&staging_label),
+                size: 4,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+
+            segment_chunks.push(MorphSegmentChunk {
+                segment_buffer,
+                segment_count: local_count,
+                segment_bytes,
+                active_segment_indices,
+                active_segment_count,
+                active_draw_args,
+                compact_uniform,
+                active_selected,
+                selected_staging,
+            });
+        }
+        eprintln!(
+            "[morphology] segment chunks: {} chunks, chunk_size={} segments, max_chunk_bytes={} B",
+            segment_chunks.len(),
+            segment_layout.chunk_size,
+            segment_chunks
+                .iter()
+                .map(|chunk| chunk.segment_bytes)
+                .max()
+                .unwrap_or(0),
+        );
 
         // Wave 2: soma sphere instances (one per neuron). Radius = params.base_radius
         // (the soma-end R0 that anchors all dendrite/axon branches).
@@ -1833,64 +1931,11 @@ impl GpuResources {
             mapped_at_creation: false,
         });
 
-        // ─── Active/recent compaction buffers (HARD CAP = segment_count) ───────
-        // The index list is sized to total segments so v1 cannot overflow (the
-        // worst case is "every segment active"); a smaller product budget can
-        // come later. wgpu rejects zero-sized buffers, so floor the cap at 1.
-        let cap = segment_count.max(1);
-        let active_segment_indices = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("morph_active_segment_indices"),
-            size: (cap as u64) * 4,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
-        let active_segment_count = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("morph_active_segment_count"),
-            size: 4,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let active_draw_args = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("morph_active_draw_args"),
-            size: 16, // 4 × u32 DrawIndirectArgs (non-indexed)
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::INDIRECT
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let compact_uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("morph_compact_uniform"),
-            size: std::mem::size_of::<CompactUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let active_selected = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("morph_active_selected"),
-            size: 4,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let selected_staging = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("morph_selected_staging"),
-            size: 4,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
         self.morph_buffers = Some(MorphBuffers {
-            segment_buffer,
+            segment_chunks,
+            segment_layout,
             segment_count,
             morph_uniform,
-            active_segment_indices,
-            active_segment_count,
-            active_draw_args,
-            compact_uniform,
-            active_selected,
-            selected_staging,
             sphere_buffer,
             sphere_count,
             params: *params,
@@ -2231,38 +2276,45 @@ impl GpuResources {
             (None, None, None)
         };
 
-        // ─── Morphology: tube render bind group ──────────────────────────────
-        let render_morphology = if let Some(mb) = &self.morph_buffers {
-            Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("render-morphology-bg"),
-                layout: &layouts.render_morphology_bgl,
-                entries: &[
-                    entry(0, &mb.segment_buffer),
-                    entry(1, last_spike),
-                    entry(2, &mb.morph_uniform),
-                    entry(6, &mb.active_segment_indices),
-                ],
-            }))
+        // ─── Morphology: per-chunk tube render + compaction bind groups ──────
+        let morph_segment_chunks = if let Some(mb) = &self.morph_buffers {
+            mb.segment_chunks
+                .iter()
+                .enumerate()
+                .map(|(chunk_idx, chunk)| {
+                    let render_label = format!("render-morphology-bg-{chunk_idx}");
+                    let compact_label = format!("compact-morph-bg-{chunk_idx}");
+                    let render_morphology = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some(&render_label),
+                        layout: &layouts.render_morphology_bgl,
+                        entries: &[
+                            entry(0, &chunk.segment_buffer),
+                            entry(1, last_spike),
+                            entry(2, &mb.morph_uniform),
+                            entry(6, &chunk.active_segment_indices),
+                        ],
+                    });
+                    let compact_morph = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some(&compact_label),
+                        layout: &layouts.compact_morph_bgl,
+                        entries: &[
+                            entry(0, &chunk.segment_buffer),
+                            entry(1, last_spike),
+                            entry(2, &chunk.compact_uniform),
+                            entry(3, &chunk.active_segment_indices),
+                            entry(4, &chunk.active_segment_count),
+                            entry(5, &chunk.active_draw_args),
+                            entry(6, &chunk.active_selected),
+                        ],
+                    });
+                    MorphSegmentBindGroups {
+                        render_morphology,
+                        compact_morph,
+                    }
+                })
+                .collect()
         } else {
-            None
-        };
-        // ─── Morphology: active/recent compaction compute bind group ─────────
-        let compact_morph = if let Some(mb) = &self.morph_buffers {
-            Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("compact-morph-bg"),
-                layout: &layouts.compact_morph_bgl,
-                entries: &[
-                    entry(0, &mb.segment_buffer),
-                    entry(1, last_spike),
-                    entry(2, &mb.compact_uniform),
-                    entry(3, &mb.active_segment_indices),
-                    entry(4, &mb.active_segment_count),
-                    entry(5, &mb.active_draw_args),
-                    entry(6, &mb.active_selected),
-                ],
-            }))
-        } else {
-            None
+            Vec::new()
         };
         // ─── Morphology: soma sphere render bind group (Wave 2) ──────────────
         // Uses binding slots 3/4/5 (matching render_soma_spheres_bgl).
@@ -2305,8 +2357,7 @@ impl GpuResources {
             emit_edges_uniform,
             render_ribbon,
             // Morphology
-            render_morphology,
-            compact_morph,
+            morph_segment_chunks,
             render_soma_spheres,
         });
         self.bind_groups_dirty = false;
@@ -2594,6 +2645,70 @@ mod tests {
         assert_eq!(std::mem::size_of::<MorphSegment>() % 16, 0);
         assert_eq!(std::mem::size_of::<MorphUniforms>(), 192);
         assert_eq!(std::mem::size_of::<MorphUniforms>() % 16, 0);
+    }
+
+    #[test]
+    fn morph_segment_chunk_layout_splits_above_128_mib_payload() {
+        let elem = std::mem::size_of::<MorphSegment>();
+        let total = (128 * 1024 * 1024 / elem) + 1_000;
+        let layout = morph_segment_chunk_layout(total, 128 * 1024 * 1024);
+
+        assert_eq!(elem, 48);
+        assert!(layout.chunk_count() > 1);
+        for chunk in 0..layout.chunk_count() {
+            assert!(layout.chunk_bytes(chunk) <= MAX_CHUNK_BYTES);
+            assert!(layout.chunk_bytes(chunk) <= 128 * 1024 * 1024);
+        }
+    }
+
+    #[test]
+    fn morph_segment_chunk_layout_handles_empty_input() {
+        let layout = morph_segment_chunk_layout(0, 128 * 1024 * 1024);
+
+        assert_eq!(layout.chunk_count(), 0);
+        assert_eq!(layout.chunk_bytes(0), 0);
+    }
+
+    #[test]
+    fn morph_segment_chunk_layout_last_chunk_is_partial() {
+        let elem = std::mem::size_of::<MorphSegment>();
+        let budget = elem * 3;
+        let layout = morph_segment_chunk_layout(10, budget);
+
+        assert_eq!(layout.chunk_size, 3);
+        assert_eq!(layout.chunk_count(), 4);
+        assert_eq!(layout.chunk_bytes(0), elem * 3);
+        assert_eq!(layout.chunk_bytes(3), elem);
+    }
+
+    #[test]
+    fn morph_segment_chunk_layout_respects_adapter_limit_below_default_budget() {
+        let elem = std::mem::size_of::<MorphSegment>();
+        let adapter_limit = 8 * 1024 * 1024;
+        let total = adapter_limit / elem * 3 + 7;
+        let layout = morph_segment_chunk_layout(total, adapter_limit);
+
+        assert!(layout.chunk_count() > 1);
+        for chunk in 0..layout.chunk_count() {
+            assert!(layout.chunk_bytes(chunk) <= adapter_limit);
+        }
+    }
+
+    #[test]
+    fn product_scale_morph_segment_cap_uses_multiple_chunks() {
+        let product_max_n = 20_000usize;
+        let default_k = 16usize;
+        let total = crate::sim::morphology::MorphologyParams::locked_default()
+            .segment_cap(default_k)
+            * product_max_n;
+        let adapter_limit = 128 * 1024 * 1024;
+        let layout = morph_segment_chunk_layout(total, adapter_limit);
+
+        assert!(layout.chunk_count() > 1);
+        for chunk in 0..layout.chunk_count() {
+            assert!(layout.chunk_bytes(chunk) <= MAX_CHUNK_BYTES);
+            assert!(layout.chunk_bytes(chunk) <= adapter_limit);
+        }
     }
 
     #[test]

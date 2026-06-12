@@ -108,27 +108,28 @@
   [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md).
 - **Code anchors.**
   `crates/brain-visualizer/src/sim/gpu/mod.rs → render_full` (indirect tube draws);
-  `crates/brain-visualizer/src/sim/gpu/resources.rs` (active segment index buffer).
+  `crates/brain-visualizer/src/sim/gpu/resources.rs → MorphSegmentChunk`.
 
-## Throttle dendrite decoration with N rather than raise the GPU buffer cap
+## Chunk morphology segment storage instead of throttling decoration
 
-- **Decision.** Dendrite decoration density is linearly ramped from full (below
-  N≈2 400) to zero (above N=8 000) rather than chunking the segment buffer to
-  raise the per-binding ceiling.
-- **Why.** Morphology segments are bound as a single GPU storage buffer; the
-  WebGPU `max_storage_buffer_binding_size` limit (128 MiB) caps the segment
-  buffer at ~2.76 M segments (~N=12 000). Throttling decoration keeps the total
-  segment count within the binding limit at the cost of reduced dendrite bushiness
-  at high N (where close-up detail is less legible anyway). Chunking or
-  multi-binding the buffer is the correct long-term fix but is deferred.
-- **Applies to.** [`../architecture/scaling.md`](../architecture/scaling.md).
+- **Decision.** Morphology segments are split into chunked storage resources,
+  with per-chunk active/recent compaction buffers and indirect draw args, rather
+  than suppressing dendrite decoration at high N to fit one storage binding.
+- **Why.** `MorphSegment` is 48 B and product-scale morphology can exceed the
+  WebGPU `max_storage_buffer_binding_size` if bound as one buffer. Chunking keeps
+  every segment binding below the 64 MiB project budget and the adapter limit
+  while preserving the full generator output and the GPU-driven indirect render
+  path.
+- **Applies to.** [`../architecture/scaling.md`](../architecture/scaling.md),
+  [`../architecture/gpu-backend.md`](../architecture/gpu-backend.md),
+  [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md).
 - **Code anchors.**
-  `crates/brain-visualizer/src/sim/morphology.rs → DECOR_FULL_N, DECOR_ZERO_N, effective_decor_group_max`.
-- **Tradeoffs.** Dendrite bushiness is reduced above N≈2 400. The storage-buffer
-  chunking fix (splitting the segment buffer across multiple bindings in
-  `crates/brain-visualizer/src/sim/gpu/resources.rs`) would remove this tradeoff
-  but is not yet implemented.
-- **Revisit when.** The segment buffer is chunked into multiple bindings.
+  `crates/brain-visualizer/src/sim/gpu/resources.rs → morph_segment_chunk_layout, MorphSegmentChunk, MorphBuffers`;
+  `crates/brain-visualizer/src/sim/gpu/mod.rs → render_full`;
+  `crates/brain-visualizer/src/sim/morphology.rs → effective_decor_group_max`.
+- **Tradeoffs.** The frame graph loops more bind groups and indirect draws when
+  segment counts cross a chunk boundary, but all resources are still persistent
+  and the per-frame work remains GPU-only.
 
 ## See also
 
