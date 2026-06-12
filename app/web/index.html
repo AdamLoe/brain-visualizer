@@ -71,6 +71,14 @@
         font-size: 15px;
         line-height: 1.5;
       }
+      #startup-detail {
+        min-height: 18px;
+        margin: 4px 0 0;
+        color: rgba(246, 242, 234, 0.48);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+        line-height: 1.5;
+      }
       #startup-progress-track {
         height: 4px;
         margin: 18px 0 12px;
@@ -86,13 +94,40 @@
         transition: width 180ms ease;
       }
       #startup-meta {
-        display: flex;
-        justify-content: space-between;
-        gap: 16px;
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
         color: rgba(246, 242, 234, 0.56);
         font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
         font-size: 12px;
         line-height: 1.4;
+      }
+      #startup-meta span {
+        min-width: 0;
+        white-space: nowrap;
+      }
+      #startup-timings {
+        display: grid;
+        gap: 5px;
+        margin: 16px 0 0;
+        padding: 0;
+        list-style: none;
+        color: rgba(246, 242, 234, 0.54);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 11px;
+        line-height: 1.35;
+      }
+      #startup-timings li {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        min-height: 15px;
+      }
+      #startup-timings li span:first-child {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
       #startup-overlay.failed {
         pointer-events: auto;
@@ -129,13 +164,17 @@
       <div id="startup-panel">
         <p id="startup-title">Brain Visualizer</p>
         <p id="startup-stage">Starting renderer...</p>
+        <p id="startup-detail"></p>
         <div id="startup-progress-track" aria-hidden="true">
           <div id="startup-progress-bar"></div>
         </div>
         <div id="startup-meta">
           <span id="startup-percent">0%</span>
+          <span>step <span id="startup-steps">0/0</span></span>
+          <span>time <span id="startup-elapsed">0ms</span></span>
           <span>frames <span id="startup-frames">0</span></span>
         </div>
+        <ul id="startup-timings" aria-label="Startup stage timings"></ul>
       </div>
     </div>
 

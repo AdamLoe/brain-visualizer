@@ -48,16 +48,21 @@
 
 - **Decision.** The page shows an immediate loading/progress overlay from
   `index.html`, starts a lightweight rAF frame counter before wasm/backend work,
-  and keeps visible failure state if WebGPU startup fails. The frontend fallback
-  renderer does not acquire WebGPU, WebGL2, or 2D canvas contexts during GPU
-  startup.
+  and keeps visible failure state if WebGPU startup fails. Backend startup is
+  driven through measured `WasmGpuBackend.create_staged` / `startup_*` stages,
+  with a browser frame yield between stages and a rolling timing list in the
+  overlay. The frontend fallback renderer does not acquire WebGPU, WebGL2, or 2D
+  canvas contexts during GPU startup.
 - **Why.** Users should never see a blank or hung page while the heavy backend
   initializes, but the wasm backend must remain the single WebGPU surface owner.
-  DOM/CSS feedback gives paintable progress without creating duplicate devices
-  or locking the canvas into the wrong context.
+  DOM/CSS feedback plus staged backend calls gives paintable, measured progress
+  without creating duplicate devices or locking the canvas into the wrong
+  context. The staged backend instance is not handed to the rAF loop until all
+  resource stages finish.
 - **Applies to.** [`../architecture/web-frontend.md`](../architecture/web-frontend.md).
 - **Code anchors.** `web/index.html → #startup-overlay`;
   `web/src/main.ts → updateStartupOverlay, startGpuBackend`;
+  `crates/brain-visualizer/src/lib.rs → WasmGpuBackend::create_staged`;
   `web/src/render/renderer.ts → Renderer`.
 
 ## Discrete speed presets (not a continuous slider)

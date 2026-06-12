@@ -55,10 +55,50 @@ type StartupStatus = "loading" | "ready" | "failed";
 interface StartupState {
   status: StartupStatus;
   stage: string;
+  detail?: string;
   progress: number;
   frames: number;
   startedAtMs: number;
+  elapsedMs: number;
+  stageIndex: number;
+  totalStages: number;
   backendMs?: number;
+  timings: StartupStageTiming[];
+}
+
+interface StartupStageTiming {
+  name: string;
+  ms: number;
+}
+
+interface StagedGpuBackend extends WasmGpuBackend {
+  startup_build_manifold(): void;
+  startup_upload_neuron_buffers(): void;
+  startup_upload_render_resources(): void;
+  startup_allocate_lod_edge_resources(): void;
+  startup_upload_morphology(): void;
+  startup_finish_network(): void;
+  startup_build_render_pipelines(): void;
+  startup_resize_render_targets(): void;
+}
+
+interface StagedGpuBackendConstructor {
+  create(
+    canvas: HTMLCanvasElement,
+    n: number,
+    k: number,
+    seed: number,
+    iExt: number,
+    synapticScale: number,
+  ): Promise<WasmGpuBackend>;
+  create_staged?(
+    canvas: HTMLCanvasElement,
+    n: number,
+    k: number,
+    seed: number,
+    iExt: number,
+    synapticScale: number,
+  ): Promise<StagedGpuBackend>;
 }
 
 const BOOT_STARTED_AT_MS = performance.now();
@@ -68,6 +108,10 @@ let startupState: StartupState = {
   progress: 0,
   frames: 0,
   startedAtMs: BOOT_STARTED_AT_MS,
+  elapsedMs: 0,
+  stageIndex: 0,
+  totalStages: 0,
+  timings: [],
 };
 
 function updateStartupOverlay(update: {
@@ -76,11 +120,18 @@ function updateStartupOverlay(update: {
   progress?: number;
   frames?: number;
   backendMs?: number;
+  detail?: string;
+  stageIndex?: number;
+  totalStages?: number;
+  timings?: StartupStageTiming[];
 }): void {
+  const elapsedMs = performance.now() - startupState.startedAtMs;
   startupState = {
     ...startupState,
     ...update,
+    elapsedMs,
     progress: clampProgress(update.progress ?? startupState.progress),
+    timings: update.timings ?? startupState.timings,
   };
   const w = window as unknown as { __bvStartup: StartupState };
   w.__bvStartup = { ...startupState };
@@ -90,16 +141,38 @@ function updateStartupOverlay(update: {
   const bar = document.getElementById("startup-progress-bar");
   const percent = document.getElementById("startup-percent");
   const frames = document.getElementById("startup-frames");
+  const detail = document.getElementById("startup-detail");
+  const elapsed = document.getElementById("startup-elapsed");
+  const steps = document.getElementById("startup-steps");
+  const timings = document.getElementById("startup-timings");
   if (overlay) {
     overlay.classList.toggle("ready", startupState.status === "ready");
     overlay.classList.toggle("failed", startupState.status === "failed");
   }
   if (stage) stage.textContent = startupState.stage;
+  if (detail) detail.textContent = startupState.detail ?? "";
   if (bar) bar.style.width = `${Math.round(startupState.progress)}%`;
   if (percent) percent.textContent = startupState.status === "failed"
     ? "failed"
     : `${Math.round(startupState.progress)}%`;
   if (frames) frames.textContent = String(startupState.frames);
+  if (elapsed) elapsed.textContent = formatMs(startupState.elapsedMs);
+  if (steps) steps.textContent = startupState.totalStages > 0
+    ? `${startupState.stageIndex}/${startupState.totalStages}`
+    : "0/0";
+  if (timings) {
+    timings.replaceChildren(
+      ...startupState.timings.slice(-6).map((t) => {
+        const row = document.createElement("li");
+        const name = document.createElement("span");
+        const ms = document.createElement("span");
+        name.textContent = t.name;
+        ms.textContent = formatMs(t.ms);
+        row.append(name, ms);
+        return row;
+      }),
+    );
+  }
 }
 
 function publishFrameCounter(frameCounter: number): void {
@@ -114,6 +187,11 @@ function publishFrameCounter(frameCounter: number): void {
 
 function clampProgress(progress: number): number {
   return Math.max(0, Math.min(100, progress));
+}
+
+function formatMs(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
 }
 
 function nextAnimationFrame(): Promise<void> {
@@ -258,6 +336,187 @@ async function boot(): Promise<void> {
   // (live uniform edits AND the explicit Rebuild). Flushed via set_morphology_config
   // in the rafLoop &mut-discipline block. Latest-wins (a single JSON snapshot).
   let pendingMorphConfig: string | null = morphConfigToJson(loadMorphConfig());
+
+  // Sim tuning constants (Phase 2 locked values, verified by SOC sweep).
+  // Shared by both GPU and CPU backends so the two backends run identical dynamics.
+  const SIM_I_EXT    = 0.055;
+  const SIM_SYN_SCALE = 0.03;
+  // Aliases used by their respective backend startup paths.
+  const GPU_I_EXT    = SIM_I_EXT;
+  const GPU_SYN_SCALE = SIM_SYN_SCALE;
+
+  // GPU backend instance. Created once at boot; recreated on backend switch or
+  // tier change. null during init or when CPU backend is active.
+  let gpuBackend: WasmGpuBackend | null = null;
+
+  // Phase 6 CPU backend coordinator (BV24). Owns the worker + the SoA views the
+  // WebGL2 CpuRenderer draws. Tuning matches examples/cpu_check.rs / sim_check.rs.
+  const cpu = new CpuCoordinator(canvas, SIM_I_EXT, SIM_SYN_SCALE);
+
+  /**
+   * Create (or recreate) the wasm GPU backend for the current config.
+   * Startup uses the staged WASM API so the loading overlay can advance from
+   * real completed work and the browser can paint between expensive CPU/GPU
+   * setup blocks.
+   */
+  async function startGpuBackend(): Promise<void> {
+    const backendStartedAt = performance.now();
+    const timings: StartupStageTiming[] = [];
+    const progressStart = 54;
+    const progressEnd = 96;
+    const ctor = WasmGpuBackend as unknown as StagedGpuBackendConstructor;
+    let stagedBackend: StagedGpuBackend | null = null;
+
+    type BackendStage = {
+      name: string;
+      detail: string;
+      run(): void | Promise<void>;
+    };
+    const stages: BackendStage[] = [
+      {
+        name: "Acquire GPU + core pipelines",
+        detail: "requestAdapter, requestDevice, surface, compute pipelines",
+        run: async () => {
+          if (typeof ctor.create_staged !== "function") {
+            gpuBackend = await ctor.create(
+              canvas,
+              config.n,
+              config.k,
+              config.seed >>> 0,
+              GPU_I_EXT,
+              GPU_SYN_SCALE,
+            );
+            return;
+          }
+          stagedBackend = await ctor.create_staged(
+            canvas,
+            config.n,
+            config.k,
+            config.seed >>> 0,
+            GPU_I_EXT,
+            GPU_SYN_SCALE,
+          );
+        },
+      },
+      {
+        name: "Build manifold",
+        detail: "folded surface, neuron placement, spatial grid",
+        run: () => stagedBackend?.startup_build_manifold(),
+      },
+      {
+        name: "Upload neuron buffers",
+        detail: "positions, voltage/current fields, spike masks, grid CSR",
+        run: () => stagedBackend?.startup_upload_neuron_buffers(),
+      },
+      {
+        name: "Upload render mesh",
+        detail: "manifold vertex/index buffers and render uniforms",
+        run: () => stagedBackend?.startup_upload_render_resources(),
+      },
+      {
+        name: "Allocate LOD + edge buffers",
+        detail: "near-LOD append buffers and active-edge ring",
+        run: () => stagedBackend?.startup_allocate_lod_edge_resources(),
+      },
+      {
+        name: "Generate morphology",
+        detail: "axon/dendrite segments, soma spheres, active compaction buffers",
+        run: () => stagedBackend?.startup_upload_morphology(),
+      },
+      {
+        name: "Bind network resources",
+        detail: "compute/render bind groups and deterministic connect uniforms",
+        run: () => stagedBackend?.startup_finish_network(),
+      },
+      {
+        name: "Compile render pipelines",
+        detail: "surface, morphology, near-LOD, bloom pipelines",
+        run: () => stagedBackend?.startup_build_render_pipelines(),
+      },
+      {
+        name: "Create render targets",
+        detail: "depth target and bloom ping-pong textures",
+        run: () => stagedBackend?.startup_resize_render_targets(),
+      },
+    ];
+
+    const runStage = async (stage: BackendStage, index: number): Promise<boolean> => {
+      const beforeProgress = progressStart + ((index - 1) / stages.length) * (progressEnd - progressStart);
+      updateStartupOverlay({
+        stage: stage.name,
+        detail: stage.detail,
+        progress: beforeProgress,
+        stageIndex: index,
+        totalStages: stages.length,
+        timings,
+      });
+      await nextAnimationFrame();
+      const started = performance.now();
+      await stage.run();
+      const ms = performance.now() - started;
+      timings.push({ name: stage.name, ms });
+      const afterProgress = progressStart + (index / stages.length) * (progressEnd - progressStart);
+      updateStartupOverlay({
+        stage: stage.name,
+        detail: `${stage.detail} (${formatMs(ms)})`,
+        progress: afterProgress,
+        stageIndex: index,
+        totalStages: stages.length,
+        timings: [...timings],
+      });
+      console.log(`[startup] ${stage.name}: ${ms.toFixed(1)}ms`);
+      return stagedBackend !== null;
+    };
+
+    try {
+      updateStartupOverlay({
+        stage: "Preparing WebGPU backend...",
+        detail: `N=${config.n} K=${config.k} seed=0x${(config.seed >>> 0).toString(16)}`,
+        progress: progressStart,
+        stageIndex: 0,
+        totalStages: stages.length,
+        timings,
+      });
+
+      for (let i = 0; i < stages.length; i++) {
+        const stillStaged = await runStage(stages[i], i + 1);
+        // Old generated packages only expose create(); that call returns a fully
+        // initialized backend, so the remaining explicit stages are unavailable.
+        if (i === 0 && !stillStaged) break;
+      }
+      if (stagedBackend !== null) {
+        gpuBackend = stagedBackend;
+      }
+
+      pendingSettingsPush = true;
+      pendingMorphConfig = morphConfigToJson(loadMorphConfig());
+      const backendMs = performance.now() - backendStartedAt;
+      updateStartupOverlay({
+        stage: "Backend ready. Rendering first frame...",
+        detail: `${timings.length} startup stages in ${formatMs(backendMs)}`,
+        progress: 98,
+        stageIndex: timings.length,
+        totalStages: stages.length,
+        backendMs,
+        timings: [...timings],
+      });
+      console.log(`[main] WasmGpuBackend startup completed in ${backendMs.toFixed(1)}ms`);
+    } catch (e) {
+      console.error("[main] GPU backend creation failed:", e);
+      showToast("WebGPU init failed — check browser support");
+      const message = e instanceof Error ? e.message : String(e);
+      updateStartupOverlay({
+        status: "failed",
+        stage: `WebGPU startup failed: ${message}`,
+        detail: timings.length > 0 ? `${timings.length} stages completed before failure` : undefined,
+        progress: 100,
+        timings: [...timings],
+      });
+      gpuBackend = null;
+    }
+  }
+
+  const gpuStartupPromise = startGpuBackend();
 
   window.addEventListener("resize", () => {
     // UX overhaul: when the settings panel is open, the canvas occupies only the
@@ -463,69 +722,6 @@ async function boot(): Promise<void> {
   // V2 Phase 0: GLOW_TAU and POINT_RADIUS are now sourced from VisualSettings
   // (pushed to the backend via update_settings).  The render_frame call no
   // longer accepts them as positional arguments.
-
-  // Sim tuning constants (Phase 2 locked values, verified by SOC sweep).
-  // Shared by both GPU and CPU backends so the two backends run identical dynamics.
-  const SIM_I_EXT    = 0.055;
-  const SIM_SYN_SCALE = 0.03;
-  // Aliases used by their respective backend startup paths.
-  const GPU_I_EXT    = SIM_I_EXT;
-  const GPU_SYN_SCALE = SIM_SYN_SCALE;
-
-  // GPU backend instance. Created once at boot; recreated on backend switch or
-  // tier change. null during init or when CPU backend is active.
-  let gpuBackend: WasmGpuBackend | null = null;
-
-  // Phase 6 CPU backend coordinator (BV24). Owns the worker + the SoA views the
-  // WebGL2 CpuRenderer draws. Tuning matches examples/cpu_check.rs / sim_check.rs.
-  const cpu = new CpuCoordinator(canvas, SIM_I_EXT, SIM_SYN_SCALE);
-
-  /**
-   * Create (or recreate) the wasm GPU backend for the current config.
-   * The GpuBackend owns the wgpu canvas surface; the Renderer wrapper stays
-   * passive so startup never creates a duplicate canvas/device context.
-   */
-  async function startGpuBackend(): Promise<void> {
-    const backendStartedAt = performance.now();
-    try {
-      updateStartupOverlay({ stage: "Preparing WebGPU backend...", progress: 58 });
-      await nextAnimationFrame();
-      updateStartupOverlay({ stage: "Creating WebGPU device and pipelines...", progress: 68 });
-      // WasmGpuBackend.create() acquires the browser WebGPU device, creates a
-      // wgpu surface from the canvas, configures it, builds all pipelines,
-      // uploads the manifold, and returns a ready-to-use backend.
-      gpuBackend = await WasmGpuBackend.create(
-        canvas,
-        config.n,
-        config.k,
-        config.seed >>> 0,
-        GPU_I_EXT,
-        GPU_SYN_SCALE,
-      ) as WasmGpuBackend;
-      // Boot-apply: push every persisted config surface once backend is ready.
-      // AppConfig already constructed this backend and seeded JS loop state;
-      // visual settings and morphology config cross by explicit backend calls.
-      pendingSettingsPush = true;
-      pendingMorphConfig = morphConfigToJson(loadMorphConfig());
-      const backendMs = performance.now() - backendStartedAt;
-      updateStartupOverlay({
-        stage: "Backend ready. Rendering first frame...",
-        progress: 94,
-        backendMs,
-      });
-      console.log(`[main] WasmGpuBackend created in ${backendMs.toFixed(1)}ms`);
-    } catch (e) {
-      console.error("[main] GPU backend creation failed:", e);
-      showToast("WebGPU init failed — check browser support");
-      const message = e instanceof Error ? e.message : String(e);
-      updateStartupOverlay({
-        status: "failed",
-        stage: `WebGPU startup failed: ${message}`,
-        progress: 100,
-      });
-      gpuBackend = null;
-    }
-  }
 
   // V2 Phase 0: subscribe to settings changes.  Set a flag (never call the
   // backend directly from the callback — it may fire while rafLoop holds &mut).
@@ -769,7 +965,7 @@ async function boot(): Promise<void> {
   cancelAnimationFrame(startupRafHandle);
   frameCounter = startupFrameCounter;
   rafHandle = requestAnimationFrame(rafLoop);
-  void startGpuBackend();
+  void gpuStartupPromise;
 
   console.log("[main] Consolidation ready — OD11 GPU bridge wired (WasmGpuBackend); rAF started before async GPU init");
 }

@@ -196,7 +196,7 @@ mod wasm_entry {
     // Created via: `const app = await WasmGpuBackend.create(canvas, n, k, seed, i_ext, syn)`
     // Returns a JS Promise<WasmGpuBackend>.
 
-    use crate::sim::gpu::{GpuBackend, VisualSettings};
+    use crate::sim::gpu::{GpuBackend, NetworkBuildState, VisualSettings};
     use wasm_bindgen_futures::future_to_promise;
 
     /// Browser GPU backend. Own the wgpu surface; delegates all sim/render to
@@ -208,6 +208,7 @@ mod wasm_entry {
         surface_format: wgpu::TextureFormat,
         width: u32,
         height: u32,
+        pending_network: Option<NetworkBuildState>,
     }
 
     #[wasm_bindgen]
@@ -272,11 +273,121 @@ mod wasm_entry {
                     surface_format: fmt,
                     width: w,
                     height: h,
+                    pending_network: None,
                 };
 
                 // wasm-bindgen requires JsValue; wrap the struct.
                 Ok(JsValue::from(backend))
             })
+        }
+
+        /// Async staged factory. This acquires WebGPU and builds the core
+        /// compute backend, but intentionally leaves network/resource
+        /// initialization to the explicit `startup_*` methods below so JS can
+        /// yield between expensive stages and update real progress.
+        pub fn create_staged(
+            canvas: web_sys::HtmlCanvasElement,
+            n: usize,
+            k: usize,
+            seed: u32,
+            i_ext: f32,
+            synaptic_scale: f32,
+        ) -> js_sys::Promise {
+            future_to_promise(async move {
+                let (ctx, surface, fmt) = GpuBackend::acquire_web(canvas)
+                    .await
+                    .map_err(|e| JsValue::from_str(&format!("[gpu] acquire_web: {e}")))?;
+
+                let surf_config = surface.get_configuration();
+                let (w, h) = surf_config
+                    .map(|c| (c.width, c.height))
+                    .unwrap_or((800, 600));
+
+                let n = clamp_neuron_count(n);
+                let config = SimConfig {
+                    n,
+                    k,
+                    seed: seed as u64,
+                    i_ext,
+                    backend: crate::sim::backend::BackendKind::Gpu,
+                    ..SimConfig::default()
+                };
+
+                let mut inner = GpuBackend::new(ctx, config);
+                inner.set_i_ext(i_ext);
+                inner.set_synaptic_scale(synaptic_scale);
+
+                web_sys::console::log_1(
+                    &format!("[gpu] staged backend acquired: N={n} K={k} size={w}×{h}").into(),
+                );
+
+                Ok(JsValue::from(WasmGpuBackend {
+                    inner,
+                    surface,
+                    surface_format: fmt,
+                    width: w,
+                    height: h,
+                    pending_network: None,
+                }))
+            })
+        }
+
+        /// Staged startup: build the CPU manifold and retain it for upload.
+        pub fn startup_build_manifold(&mut self) {
+            let config = self.inner.config().clone();
+            self.pending_network = Some(self.inner.begin_initialize(&config));
+        }
+
+        /// Staged startup: upload neuron, grid, and sim scratch buffers.
+        pub fn startup_upload_neuron_buffers(&mut self) -> Result<(), JsValue> {
+            let state = self.pending_network.as_ref().ok_or_else(|| {
+                JsValue::from_str("[gpu] startup_upload_neuron_buffers before manifold build")
+            })?;
+            self.inner.initialize_neuron_buffers(state);
+            Ok(())
+        }
+
+        /// Staged startup: upload the manifold render mesh and render uniforms.
+        pub fn startup_upload_render_resources(&mut self) -> Result<(), JsValue> {
+            let state = self.pending_network.as_ref().ok_or_else(|| {
+                JsValue::from_str("[gpu] startup_upload_render_resources before manifold build")
+            })?;
+            self.inner.initialize_render_resources(state);
+            Ok(())
+        }
+
+        /// Staged startup: allocate near-LOD and active-edge resources.
+        pub fn startup_allocate_lod_edge_resources(&mut self) -> Result<(), JsValue> {
+            let state = self.pending_network.as_ref().ok_or_else(|| {
+                JsValue::from_str("[gpu] startup_allocate_lod_edge_resources before manifold build")
+            })?;
+            self.inner.initialize_lod_edge_resources(state);
+            Ok(())
+        }
+
+        /// Staged startup: generate/upload morphology geometry.
+        pub fn startup_upload_morphology(&mut self) -> Result<(), JsValue> {
+            let state = self.pending_network.as_ref().ok_or_else(|| {
+                JsValue::from_str("[gpu] startup_upload_morphology before manifold build")
+            })?;
+            self.inner.initialize_morph_resources(state);
+            Ok(())
+        }
+
+        /// Staged startup: refresh bind groups and reset per-network runtime state.
+        pub fn startup_finish_network(&mut self) {
+            self.inner.finish_initialize();
+            self.pending_network = None;
+        }
+
+        /// Staged startup: build render pipelines for the configured surface.
+        pub fn startup_build_render_pipelines(&mut self) {
+            self.inner.build_render_pipelines(self.surface_format);
+        }
+
+        /// Staged startup: create depth/bloom render targets for the surface size.
+        pub fn startup_resize_render_targets(&mut self) {
+            self.inner.resize_render_targets(self.width, self.height);
         }
 
         // ── Per-frame API ────────────────────────────────────────────────────

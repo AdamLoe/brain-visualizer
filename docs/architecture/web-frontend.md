@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-11
+last_updated:  2026-06-12
 ---
 
 # Web Frontend
@@ -32,7 +32,7 @@ avoid wasm-bindgen reentrancy panics.
 - `web/src/ui/hud.ts → CornerHud` — public HUD shell (layout and update cadence);
   metric internals are owned by [`profiling.md`](profiling.md)
 - `crates/brain-visualizer/src/lib.rs` — the wasm_bindgen entry surface:
-  `WasmGpuBackend.create` lifecycle, the JS-facing tick/render/settings API,
+  `WasmGpuBackend.create` / `create_staged` lifecycle, the JS-facing tick/render/settings API,
   the &mut reentrancy discipline (the data contracts that cross —
   `VisualSettings`, `SimConfig`/`TickStats` — are owned by
   [`simulation.md`](simulation.md) and [`dev-panel.md`](dev-panel.md); this
@@ -78,19 +78,30 @@ through `WasmGpuBackend.render_frame()`.
 `web/index.html` includes a fixed `#startup-overlay` in the initial HTML, so the
 browser paints a loading surface before the TypeScript module and wasm init do
 any heavy work. `main.ts` updates `window.__bvStartup` and the overlay through
-coarse stages: wasm load, isolation/config, canvas/input wiring, animation-loop
-start, WebGPU preparation, backend creation, first frame, and failure. The
-overlay includes a progress bar and frame counter; on success it fades out after
-the first GPU frame, and on backend failure it remains visible with the error.
+coarse page stages, then through the measured backend stages. The overlay shows
+the current stage, detail text, elapsed time, completed stage count, frame
+counter, progress bar, and the most recent per-stage timings. On success it
+fades out after the first GPU frame; on backend failure it remains visible with
+the error and any completed timings.
 
-`boot()` also starts a lightweight startup `requestAnimationFrame` loop before
+`boot()` starts a lightweight startup `requestAnimationFrame` loop before
 `init()` so tests and users can see `window.__bvFrameCounter` advance while wasm
-and backend work is pending. The real app `rafLoop` replaces that lightweight
-loop before `WasmGpuBackend.create()` is kicked off. Backend creation yields for
-one animation frame before entering the Rust/WASM async factory, which gives the
-overlay a paint opportunity without changing WebGPU ownership. The old
-pre-backend `init_manifold()` logging path was removed; the real manifold is now
-created only inside `WasmGpuBackend.create()` / backend initialization.
+and backend work is pending. GPU startup begins as soon as config/canvas and the
+pending-flag queues exist, while the remaining HUD/dev-panel/control wiring
+continues during async WebGPU adapter/device acquisition. The real app `rafLoop`
+replaces the lightweight loop later, but it sees `gpuBackend === null` until the
+staged backend has completed every startup stage. This prevents the rAF loop
+from touching half-built GPU resources.
+
+The staged path is `WasmGpuBackend.create_staged()` followed by explicit
+`startup_*` calls: build manifold, upload neuron/grid buffers, upload render
+mesh, allocate LOD/edge buffers, generate/upload morphology, refresh bind
+groups/reset state, compile render pipelines, and create render targets. `main.ts`
+awaits one animation frame before each stage and records its wall-clock duration,
+so the progress bar advances from completed work instead of a single fake
+backend percentage. The legacy `WasmGpuBackend.create()` monolith remains as a
+compatibility fallback. The old pre-backend `init_manifold()` logging path was
+removed; the real manifold is now created only inside the backend startup path.
 
 ## Wasm call boundary
 
@@ -102,6 +113,7 @@ Three categories of backend call, each with a different cost profile:
 | `gpuBackend.tick(ticks, excitability)` | Every frame (time-based accumulator) | Submits compute passes; returns spike count |
 | `gpuBackend.update_settings(Float32Array)` | On settings change | Pushes `VisualSettings` uniform; one per change event |
 | `gpuBackend.set_morphology_config(json)` | On morphology config apply | Separate JSON path for the dev-panel morphology config; the backend diffs and runs the narrowest update. Distinct from the Float32Array — see below |
+| `gpuBackend.startup_*()` | Startup only | Staged network/resource creation. JS yields between calls and records timings; the instance is not assigned to the rAF-owned `gpuBackend` until complete. |
 
 `render_frame` receives the MVP matrix and billboard axes from `Camera`; it does
 not read back any GPU state. The struct contract for `VisualSettings` and the
@@ -168,10 +180,11 @@ is available on mobile too.
 
 `web/src/render/renderer.ts → Renderer.init()` is intentionally passive: it logs
 readiness but does not acquire the WebGPU adapter/device, configure the canvas,
-or create fallback WebGL2/2D contexts. `WasmGpuBackend.create()` is the only live
-startup path that acquires the browser WebGPU device and surface. `Renderer.render()`
-is a no-op before backend readiness; the startup overlay owns visible feedback.
-The HDR render target lives inside the wasm backend, not in the TS wrapper.
+or create fallback WebGL2/2D contexts. `WasmGpuBackend.create_staged()` (or the
+legacy `create()` fallback) is the only live startup path that acquires the
+browser WebGPU device and surface. `Renderer.render()` is a no-op before backend
+readiness; the startup overlay owns visible feedback. The HDR render target
+lives inside the wasm backend, not in the TS wrapper.
 
 ## Types and DEFAULT_CONFIG
 
@@ -226,8 +239,9 @@ Wiring:
 There is no intro code, no scripted seed spike, and no simulation animation
 sequence in `main.ts` or anywhere in the frontend. Startup has a DOM loading
 overlay only; once the backend is ready, the sim starts from its natural silent
-state. The `boot()` function starts rAF before async GPU creation so the page
-keeps painting while the backend is pending. The posterior→anterior propagation
+state. The `boot()` function starts rAF before async GPU creation and drives
+staged backend startup with frame yields so the page keeps painting while the
+backend is pending. The posterior→anterior propagation
 that serves as the visual "wake-up" emerges from the sim's ambient input-region
 drive — the sim owns that drive; the frontend's only role is to not suppress it. See
 [`simulation.md`](simulation.md) for the `I_ext` wiring.

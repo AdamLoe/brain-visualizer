@@ -23,6 +23,16 @@ use resources::{
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+/// CPU-side state carried between staged GPU startup calls.
+///
+/// Browser startup drives these stages from TypeScript with a frame yield
+/// between calls, so the loading UI can paint real progress instead of waiting
+/// behind one monolithic `initialize()` call.
+pub struct NetworkBuildState {
+    config: SimConfig,
+    manifold: crate::manifold::Manifold,
+}
+
 // ─── V2 Phase A: metrics readback ─────────────────────────────────────────────
 
 /// Voltage clamp range + fixed-point scale for the metrics reduction. Must match
@@ -893,12 +903,12 @@ impl GpuBackend {
     /// None if morphology buffers are absent.
     pub fn read_active_segment_count(&self) -> Option<(u32, u32)> {
         let mb = self.resources.morph_buffers.as_ref()?;
-        let mut enc =
-            self.ctx
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("read-active-segment-count"),
-                });
+        let mut enc = self
+            .ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("read-active-segment-count"),
+            });
         enc.copy_buffer_to_buffer(&mb.active_selected, 0, &mb.selected_staging, 0, 4);
         self.ctx.queue.submit([enc.finish()]);
         let slice = mb.selected_staging.slice(..);
@@ -935,51 +945,69 @@ impl GpuBackend {
         self.i_ext = i_ext;
     }
 
-    /// Build the network from a manifold and upload the silent-start state.
-    /// Rare-path; allocates. Call once after `new` and on every tier change.
-    pub fn initialize(&mut self, config: &SimConfig) {
+    /// Build the CPU manifold and start a staged network upload.
+    pub fn begin_initialize(&mut self, config: &SimConfig) -> NetworkBuildState {
         self.config = config.clone();
         let manifold = crate::build_manifold(config);
+        NetworkBuildState {
+            config: config.clone(),
+            manifold,
+        }
+    }
+
+    /// Upload neuron/grid/sim buffers for a staged network build.
+    pub fn initialize_neuron_buffers(&mut self, state: &NetworkBuildState) {
         self.resources.resize_neurons(
             &self.ctx.device,
             &self.ctx.queue,
-            config,
-            &manifold.neuron_positions,
-            &manifold.neuron_regions,
-            &manifold.spatial_grid,
+            &state.config,
+            &state.manifold.neuron_positions,
+            &state.manifold.neuron_regions,
+            &state.manifold.spatial_grid,
         );
-        // Phase 3: upload manifold mesh + create render uniform buffers.
+    }
+
+    /// Upload manifold mesh + create render uniform buffers for a staged build.
+    pub fn initialize_render_resources(&mut self, state: &NetworkBuildState) {
         self.resources.init_render_resources(
             &self.ctx.device,
-            &manifold.vertices,
-            &manifold.faces,
-            config.n as u32,
-            manifold.spatial_grid.dim,
+            &state.manifold.vertices,
+            &state.manifold.faces,
+            state.config.n as u32,
+            state.manifold.spatial_grid.dim,
         );
-        // Phase 4: near-LOD GPU buffers (allocated once; cleared each frame).
+    }
+
+    /// Allocate near-LOD + persistent edge resources for a staged build.
+    pub fn initialize_lod_edge_resources(&mut self, state: &NetworkBuildState) {
         self.resources.init_near_lod_resources(
             &self.ctx.device,
             &self.ctx.queue,
-            config,
-            &manifold.spatial_grid,
+            &state.config,
+            &state.manifold.spatial_grid,
         );
-        // V2 Phase D: persistent edge ring (write_index + ring cleared here only).
         self.resources
             .init_edge_resources(&self.ctx.device, &self.ctx.queue);
-        // Morphology: generate + upload procedural neuron geometry (soma +
-        // dendrites + axon arbor). Regenerated on every network (re)build.
-        // v0.3.1: generator params come from the current morphology config.
+    }
+
+    /// Generate and upload morphology buffers for a staged build.
+    pub fn initialize_morph_resources(&mut self, state: &NetworkBuildState) {
         let morph_params = self.current_morph_params();
         let reach = self.current_reach();
         self.resources.init_morph_resources(
             &self.ctx.device,
-            &manifold.neuron_positions,
-            &manifold.spatial_grid,
-            &manifold.neuron_regions,
-            config,
+            &state.manifold.neuron_positions,
+            &state.manifold.spatial_grid,
+            &state.manifold.neuron_regions,
+            &state.config,
             &morph_params,
             reach,
         );
+    }
+
+    /// Finish staged initialization by refreshing bind groups and resetting
+    /// per-run state.
+    pub fn finish_initialize(&mut self) {
         self.resources
             .refresh_bind_groups(&self.ctx.device, &self.layouts);
         // Heavy-tailed reach: push the live knobs into the freshly (re)written
@@ -998,6 +1026,17 @@ impl GpuBackend {
         self.last_cascade_age = 0;
         self.ticks_since_metrics_issue = METRICS_ISSUE_INTERVAL;
         self.edges_emitted_last = 0;
+    }
+
+    /// Build the network from a manifold and upload the silent-start state.
+    /// Rare-path; allocates. Call once after `new` and on every tier change.
+    pub fn initialize(&mut self, config: &SimConfig) {
+        let state = self.begin_initialize(config);
+        self.initialize_neuron_buffers(&state);
+        self.initialize_render_resources(&state);
+        self.initialize_lod_edge_resources(&state);
+        self.initialize_morph_resources(&state);
+        self.finish_initialize();
     }
 
     /// Build the render pipelines for a given color format.

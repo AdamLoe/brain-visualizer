@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-04
+last_updated:  2026-06-12
 ---
 
 # GPU backend / frame graph
@@ -33,6 +33,10 @@ GPU-resident state straight to the render passes.
   GpuPipelines` (`build`, `build_render`, `build_near_lod`), `GpuLayouts`.
 - Device/queue acquisition — `GpuBackend::acquire_web` / `acquire_native`,
   `GpuContext`.
+- Browser startup staging — `crates/brain-visualizer/src/lib.rs →
+  WasmGpuBackend::create_staged` and the `startup_*` methods drive
+  `GpuBackend::begin_initialize`, the staged resource upload helpers, and
+  `finish_initialize`.
 - The standing guardrail constants `DRAW_LEGACY_CYLINDERS`,
   `DRAW_LEGACY_NEAR_SPHERES`, `DRAW_LEGACY_RIBBONS` that gate retired passes out
   of the graph, and `crates/brain-visualizer/src/sim/gpu/pipelines.rs →
@@ -157,6 +161,32 @@ All large buffers are **persistent across frames**. Allocation happens only on a
 - **curve-lift setting change** — `regenerate_morphology` rebuilds only the morph
   buffers + refreshes bind groups (guarded so dragging other sliders never
   reallocates).
+
+### Browser startup staging
+
+The browser does not call the monolithic `WasmGpuBackend::create()` during normal
+boot. `web/src/main.ts → startGpuBackend` uses `WasmGpuBackend::create_staged()`
+to acquire WebGPU and construct the core compute backend, then calls explicit
+startup stages with a browser frame yield between each call:
+
+1. `startup_build_manifold` → `GpuBackend::begin_initialize` builds the CPU
+   manifold and stores `NetworkBuildState`.
+2. `startup_upload_neuron_buffers` → `GpuResources::resize_neurons`.
+3. `startup_upload_render_resources` → `GpuResources::init_render_resources`.
+4. `startup_allocate_lod_edge_resources` →
+   `init_near_lod_resources` + `init_edge_resources`.
+5. `startup_upload_morphology` → `GpuResources::init_morph_resources`.
+6. `startup_finish_network` → `refresh_bind_groups`, `write_connect_uniform`,
+   and the per-network runtime-state reset.
+7. `startup_build_render_pipelines` → `GpuBackend::build_render_pipelines`.
+8. `startup_resize_render_targets` → `GpuBackend::resize_render_targets`.
+
+This staging does **not** move WebGPU ownership off the main thread and does not
+make individual Rust stages preemptible. It lets the DOM loading overlay paint
+and report measured per-stage timings between structural allocation blocks, and
+it creates an explicit boundary for a future worker-prepared manifold/morphology
+path. The rAF loop must not receive the staged `WasmGpuBackend` until all startup
+stages complete.
 
 ### bind_groups_dirty rebuild rule
 
