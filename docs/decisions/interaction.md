@@ -113,7 +113,8 @@
 - **Applies to.** [`../architecture/web-frontend.md`](../architecture/web-frontend.md),
   [`../architecture/scaling.md`](../architecture/scaling.md).
 - **Code anchors.** `web/src/core/types.ts → loadConfig`, `saveConfig`
-  (key `bv2_config_v1`); `web/src/ui/controls.ts → setTier`, `setBackend`, `setSpeed`.
+  (key `bv2_config_v2`); `web/src/main.ts → boot` (stale CPU backend saves are
+  coerced to GPU at startup); `web/src/ui/controls.ts → setTier`, `setSpeed`.
 
 ## See also
 

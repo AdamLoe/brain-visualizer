@@ -196,19 +196,23 @@ to `DEFAULT_CONFIG` on mismatch/parse-error/missing key, a field-by-field
 a `try/catch` so a blocked localStorage (private browsing, quota) degrades
 silently.
 
-**Persisted fields:** `n`, `k`, `tier`, `backend`, `speed`, `excitability`.
+**Persisted fields:** `n`, `k`, `tier`, `speed`, `excitability`, `ticksPerSec`.
+Stale saved `backend: "cpu"` values are coerced back to `"gpu"` at boot because
+V2 keeps the CPU path parked and hidden.
 **Not persisted:** `seed` (a fixed constant) and any runtime counters.
 
 Wiring:
 
 - **Boot** — `web/src/main.ts → boot` seeds `config` from `loadConfig()` (not
-  `DEFAULT_CONFIG` directly). The mobile profile override is applied **after**
-  load and then re-saved, so the forced low-tier profile survives a reload.
-- **On mutation** — every `AppConfig` field change saves: tier/backend/speed
+  `DEFAULT_CONFIG` directly), then forces `backend = "gpu"` before backend
+  startup so stale CPU saves cannot put the rAF loop on the parked CPU branch.
+  The mobile profile override is applied **after** load and then re-saved, so
+  the forced low-tier profile survives a reload.
+- **On mutation** — every active `AppConfig` field change saves: tier/speed
   setters and the `Controls` class methods in `web/src/ui/controls.ts` call
   `saveConfig`, and the dev-panel N/K rebuild path in `main.ts` saves after
-  mutating `config.n`/`config.k`. `setBackend` saves *after* `restartFn` so a
-  CPU→GPU fallback (backend reverting on failure) persists the actual backend.
+  mutating `config.n`/`config.k`. The old backend setter still exists for
+  compatibility, but V2 boot forces GPU because the backend toggle is hidden.
 - **Excitability** — the live control is the dev-panel excitability slider; its
   `onExcitability` handler in `main.ts` writes `config.excitability` and saves.
   At boot, `web/src/ui/controls.ts → seedExcitability` primes both the current

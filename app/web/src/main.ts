@@ -149,6 +149,10 @@ async function boot(): Promise<void> {
   // 0.1.1: restore the user's last-used config from localStorage (n/k/tier/
   // backend/speed/excitability). Mobile override is applied AFTER load.
   const config: AppConfig = loadConfig();
+  if (config.backend !== "gpu") {
+    config.backend = "gpu";
+    saveConfig(config);
+  }
   // 0.1.1: seed the excitability lerp from the persisted config so a reload
   // restores the user's last brain-state/excitability (no ramp from default).
   seedExcitability(config.excitability);
