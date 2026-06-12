@@ -7,8 +7,8 @@
 //!    (`gyrify.rs`),
 //! 4. sample N neuron positions inside the same folded envelope with
 //!    cortical-shell bias,
-//! 5. assign Input/Association/Output regions by deterministic hash shuffle
-//!    (`regions.rs`),
+//! 5. assign Input/Association/Output regions with the selected deterministic
+//!    assignment mode (`regions.rs`),
 //! 6. build the integer spatial grid for connectivity & stimulation lookup.
 //!
 //! Entirely host-testable; no GPU / wasm dependency.
@@ -17,7 +17,7 @@ pub mod gyrify;
 pub mod icosphere;
 pub mod regions;
 
-pub use regions::RegionKind;
+pub use regions::{RegionAssignmentMode, RegionKind};
 
 use crate::connectivity::hash::mix_key;
 use crate::connectivity::spatial::SpatialGrid;
@@ -69,6 +69,8 @@ pub struct ManifoldParams {
     pub grid_dim: u32,
     /// Gyrification controls.
     pub gyrify: GyrifyParams,
+    /// Region assignment strategy. Defaults to the production hash-random split.
+    pub region_assignment: RegionAssignmentMode,
 }
 
 impl ManifoldParams {
@@ -79,7 +81,13 @@ impl ManifoldParams {
             seed,
             grid_dim: DEFAULT_GRID_DIM,
             gyrify: GyrifyParams::default(),
+            region_assignment: RegionAssignmentMode::HashRandom,
         }
+    }
+
+    pub fn with_region_assignment(mut self, mode: RegionAssignmentMode) -> Self {
+        self.region_assignment = mode;
+        self
     }
 }
 
@@ -98,7 +106,11 @@ impl Manifold {
         let faces = ico.faces;
 
         let neuron_positions = place_neurons(params.n, params.seed, &fold_field);
-        let neuron_regions = regions::assign_regions(&neuron_positions, ANTERIOR_POSTERIOR_AXIS);
+        let neuron_regions = regions::assign_regions_with_mode(
+            &neuron_positions,
+            ANTERIOR_POSTERIOR_AXIS,
+            params.region_assignment,
+        );
         let spatial_grid = SpatialGrid::build(&neuron_positions, params.grid_dim);
 
         Manifold {
@@ -283,6 +295,28 @@ mod tests {
         assert!((input as f32 / n - 0.30).abs() < 0.03, "input frac off");
         assert!((output as f32 / n - 0.30).abs() < 0.03, "output frac off");
         assert!((assoc as f32 / n - 0.40).abs() < 0.05, "assoc frac off");
+    }
+
+    #[test]
+    fn default_region_assignment_mode_is_hash_random() {
+        let p = ManifoldParams::new(128, 11);
+        assert_eq!(p.region_assignment, RegionAssignmentMode::HashRandom);
+        let m = Manifold::generate(&p);
+        let expected = regions::assign_regions(&m.neuron_positions, ANTERIOR_POSTERIOR_AXIS);
+        assert_eq!(m.neuron_regions, expected);
+    }
+
+    #[test]
+    fn prototype_region_assignment_mode_is_opt_in() {
+        let p = ManifoldParams::new(2000, 11)
+            .with_region_assignment(RegionAssignmentMode::AnteriorPosteriorPrototype);
+        let m = Manifold::generate(&p);
+        let expected = regions::assign_regions_with_mode(
+            &m.neuron_positions,
+            ANTERIOR_POSTERIOR_AXIS,
+            RegionAssignmentMode::AnteriorPosteriorPrototype,
+        );
+        assert_eq!(m.neuron_regions, expected);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-11
+last_updated:  2026-06-12
 ---
 
 # Simulation model
@@ -61,10 +61,13 @@ catches up `leak^dormant`) for its event-driven active list — same math, only 
 sink: dissipation is the global E/I balance plus the leak. A mild anterior (+Z)
 feed-forward bias on a fraction of excitatory synapses (in the connectivity rule)
 gives activity a direction. Start silent (v=0 everywhere); ambient drive lights the
-input region; activity propagates through association to output. Region membership
-is assigned **uniformly at random over the volume**, not spatially blocked — the
-input/assoc/output split is functional (who gets drive, who relays), not a
-contiguous anatomical lobe. See [`connectivity.md`](connectivity.md) for the bias.
+input region; activity propagates through association to output. Production
+region membership is assigned **uniformly at random over the volume**, not
+spatially blocked — the input/assoc/output split is functional (who gets drive,
+who relays), not a contiguous anatomical lobe. The internal anterior-posterior
+region prototype is a build-time assignment mode only; it does not change this
+drive path, connectivity, or LIF constants. See [`connectivity.md`](connectivity.md)
+for the bias and [`manifold.md`](manifold.md) for the assignment modes.
 
 ## Dynamics knobs (the live tuning surface)
 

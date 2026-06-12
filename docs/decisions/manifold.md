@@ -49,17 +49,27 @@
 ## Region assignment by hash-shuffle, not spatial blocking
 
 - **Decision.** Input (30%), Association (40%), and Output (30%) regions are
-  assigned by shuffling neuron indices with a deterministic integer hash and
-  slicing the result, producing a spatially random (non-contiguous) assignment.
+  assigned by default by shuffling neuron indices with a deterministic integer
+  hash and slicing the result, producing a spatially random (non-contiguous)
+  assignment. A bounded internal prototype mode can instead use the
+  anterior-posterior axis with deterministic jitter to bias input posterior and
+  output anterior, but it is opt-in and not exposed as a public control.
 - **Why.** The anterior–posterior spatial blocking originally proposed in
-  `ANTERIOR_POSTERIOR_AXIS` is defined in the code but the `assign_regions`
-  function does not use it. The hash-shuffle achieves the correct proportions
-  with stable, reproducible results across any neuron count. The biological
-  anterior–posterior gradient is expressed instead through the connectivity
-  feed-forward bias owned by the simulation.
+  `ANTERIOR_POSTERIOR_AXIS` is now available only as a review prototype because
+  promoting it would change the startup visual/dynamics story. The hash-shuffle
+  achieves the correct proportions with stable, reproducible results across any
+  neuron count. The biological anterior–posterior gradient is expressed in the
+  default build through the connectivity feed-forward bias owned by the
+  simulation.
 - **Applies to.** [`../architecture/manifold.md`](../architecture/manifold.md)
-- **Code anchors.** `crates/brain-visualizer/src/manifold/regions.rs → assign_regions`;
-  `crates/brain-visualizer/src/manifold/mod.rs → ANTERIOR_POSTERIOR_AXIS`
+- **Code anchors.** `crates/brain-visualizer/src/manifold/regions.rs →
+  RegionAssignmentMode, assign_regions, assign_regions_with_mode`;
+  `crates/brain-visualizer/src/manifold/mod.rs → ManifoldParams,
+  ANTERIOR_POSTERIOR_AXIS`
+- **Tradeoffs.** The prototype gives a more legible posterior-to-anterior visual
+  story without changing connectivity, drive, or type-byte encoding, but the
+  localized drive may change apparent wave startup and needs visual/dynamics
+  review before any default promotion.
 - **Revisit when.** Spatial blocking is needed for the cursor-stimulation
   "click posterior to activate input region" UX to work reliably.
 

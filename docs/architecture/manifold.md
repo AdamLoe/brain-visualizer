@@ -22,7 +22,7 @@ dedicated module worker; WebGPU upload still happens on the main thread.
 - Structured fold field / gyrification — `crates/brain-visualizer/src/manifold/gyrify.rs → GyrifyParams, FoldField, gyrify_with_field`
 - Brain-envelope shaping primitive — `crates/brain-visualizer/src/manifold/mod.rs → brain_outer_radius, brain_surface_point`
 - Neuron volume placement — `crates/brain-visualizer/src/manifold/mod.rs → place_neurons`
-- Region assignment — `crates/brain-visualizer/src/manifold/regions.rs → RegionKind, assign_regions`
+- Region assignment — `crates/brain-visualizer/src/manifold/regions.rs → RegionKind, RegionAssignmentMode, assign_regions, assign_regions_with_mode`
 - Spatial grid — `crates/brain-visualizer/src/manifold/mod.rs → DEFAULT_GRID_DIM`
 - Anterior–posterior axis constant — `crates/brain-visualizer/src/manifold/mod.rs → ANTERIOR_POSTERIOR_AXIS`
 - Per-neuron morphology geometry — `crates/brain-visualizer/src/sim/morphology.rs → Morphology, MorphSegment, MorphSphereInstance, generate, emit_soma_spheres`
@@ -85,13 +85,19 @@ The six-step pipeline runs synchronously in `crates/brain-visualizer/src/manifol
    optional surface pass is off.
 
 5. **Region assignment** (`crates/brain-visualizer/src/manifold/regions.rs → assign_regions`): the
-   30/40/30 split (Input/Association/Output) is applied by shuffling neuron
-   indices with a deterministic hash and slicing the result, so the split is
-   spatially random rather than spatially blocked. The `_axis` parameter is
-   accepted but unused — the code comment and the old anterior–posterior intent
-   are preserved as `ANTERIOR_POSTERIOR_AXIS` in `mod.rs`, but the actual
-   assignment is hash-driven. The region fractions (30/40/30) are tested by
-   `crates/brain-visualizer/src/manifold/mod.rs → region_split_approx_30_40_30`.
+   default 30/40/30 split (Input/Association/Output) is applied by shuffling
+   neuron indices with a deterministic hash and slicing the result, so the split
+   is spatially random rather than spatially blocked. `ManifoldParams` defaults
+   to `RegionAssignmentMode::HashRandom`; all production/browser construction
+   paths use that default. An internal opt-in prototype
+   (`assign_regions_with_mode` with `RegionAssignmentMode::AnteriorPosteriorPrototype`)
+   uses `ANTERIOR_POSTERIOR_AXIS` to rank neurons by projection plus
+   deterministic jitter, keeping exact 30/40/30 counts while making input
+   posterior-biased, output anterior-biased, and association central. The region
+   fractions and default/prototype routing are tested by
+   `crates/brain-visualizer/src/manifold/mod.rs → region_split_approx_30_40_30`,
+   `default_region_assignment_mode_is_hash_random`, and
+   `prototype_region_assignment_mode_is_opt_in`.
 
 6. **Spatial grid** (`crates/brain-visualizer/src/manifold/mod.rs`): after placement, a uniform integer
    grid (`DEFAULT_GRID_DIM = 16`, giving 4096 cells) is built over the neuron

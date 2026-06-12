@@ -1,17 +1,13 @@
 ---
-status:        draft
+status:        shipped
 owner:         unassigned
 last_updated:  2026-06-12
-okay_to_delete: false
+okay_to_delete: true
 long_lived:    false
 owning_docs:
   - architecture/manifold.md
   - architecture/simulation.md
-  - architecture/web-frontend.md
-  - architecture/profiling.md
   - decisions/manifold.md
-  - decisions/dynamics.md
-  - decisions/interaction.md
 ---
 
 # Stream E: Visual Outcome Polish And Region Coherence Prototype
@@ -91,7 +87,17 @@ assignment.
 
 ## Migration Notes
 
-At ship time, migrate current-state facts into `architecture/manifold.md`,
-`architecture/simulation.md`, and `architecture/web-frontend.md`; migrate the
-region-assignment tradeoff into `decisions/manifold.md` and dynamics notes into
-`decisions/dynamics.md` if behavior changes.
+Shipped as the bounded Rust-only prototype. Current-state facts were migrated
+into `architecture/manifold.md` and `architecture/simulation.md`: default
+region assignment remains hash-random, `ManifoldParams` has an opt-in
+`RegionAssignmentMode::AnteriorPosteriorPrototype`, and the prototype is a
+build-time assignment mode that does not retune connectivity, drive, or LIF
+constants. The default-vs-prototype tradeoff was migrated into
+`decisions/manifold.md`.
+
+No web/HUD/profiling docs changed because this stream added no public UI,
+settings contract, HUD wording, or metrics surface. Visual/dynamics promotion
+review remains manual: the prototype is intentionally internal and not exposed
+through the browser/dev panel, so screenshots or clips require a reviewer to
+wire a temporary local call site or inspect a dedicated future harness before
+changing the default.
