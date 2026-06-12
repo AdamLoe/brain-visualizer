@@ -103,7 +103,7 @@ For worker-prepared browser rebuilds, the same generated facts cross the
 JS/WASM boundary as explicit flat arrays: positions, region codes, surface
 vertices/faces, and the spatial-grid CSR (`min`, `cell_size`, `dim`,
 `cell_start`, `cell_neurons`). `PreparedNetworkBuild::from_flat_payload`
-validates N/K/seed length agreement, region-code range, face indices, CSR
+validates metadata/count agreement, region-code range, face indices, CSR
 span/monotonicity, and one grid entry per neuron before WebGPU upload can
 replace resources.
 
