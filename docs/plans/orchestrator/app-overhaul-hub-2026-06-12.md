@@ -73,7 +73,7 @@ stages.
 | C2 | Legacy render/dead-code amnesty | Drafted | Split from original Stream C after plan review. | Wait until D1 and B1 are no longer touching render/settings surfaces. | Conflicts with D1/B1. |
 | D1 | Morphology segment scaling | Shipped | Chunked morphology resources, per-chunk compaction/draw, docs migration, cargo test, and render_check landed in `593b7d3`. | Use as the settled upload boundary for D2 worker payload integration. | Real high-N browser/GPU smoke remains environment-dependent. |
 | D2 | Rebuild responsiveness | Partially implemented | Worker-prepared N/K/seed payload integration landed: flat GPU-agnostic payload, Rust validation/round-trip tests, worker latest-wins stale rejection, and main-thread prepared upload through D1 chunking boundary. | Continue startup worker prep, standalone morphology generator worker prep, and high-N/frame-counter smoke. | Browser high-N responsiveness evidence remains deferred. |
-| E | Visual outcome and region coherence | Drafted | `stream-e-visual-outcome-polish-hud-truthfulness-2026-06-12.md` persisted. | Plan review. | Prototype can ship opt-in; default promotion needs review. |
+| E | Visual outcome and region coherence | Shipped | Internal opt-in anterior/posterior prototype landed in `b7fbc66`; default hash-random assignment remains unchanged; cargo test passed. | Manual visual/dynamics review before any default promotion. | No screenshot/clip captured because the prototype is internal-only. |
 
 ## Activation Plan
 
@@ -83,7 +83,7 @@ stages.
 | 2 | Pending | B2 simulation correctness gates | Valuable but overlaps `sim/gpu/mod.rs`; run after B1 or with strict file-region ownership. |
 | 3 | Done | D1 morphology segment scaling | Shipped in `593b7d3`; chunking remains a main-thread GPU upload/resource policy. |
 | 4 | Ready | D2 worker upload integration | D1 settled the upload/chunking boundary; worker payloads must remain flat and GPU-agnostic. |
-| 5 | Pending | Stream E spatial-region prototype | Can run after correctness/contracts; promotion to default requires review. |
+| 5 | Done | Stream E spatial-region prototype | Shipped as an internal opt-in mode; promotion to default requires visual/dynamics review. |
 | Decision-gated | Pending | A2 production telemetry enablement, C1 CPU deletion, C2 legacy render amnesty | Requires owner decision or dependency clearance. |
 
 ## Decisions Log
