@@ -11,6 +11,8 @@
 //! with a clear message rather than failing — but in this environment llvmpipe
 //! is present.
 
+mod common;
+
 use brain_visualizer::connectivity::hash::{hash32, mix_key};
 use brain_visualizer::sim::gpu::pipelines::HASH_WGSL;
 use wgpu::util::DeviceExt;
@@ -63,22 +65,10 @@ fn wgsl_matches_rust_for_golden_vectors() {
 async fn run() {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
 
-    let adapter = match instance
-        .request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: None,
-            force_fallback_adapter: false,
-        })
-        .await
-    {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!(
-                "SKIP wgsl determinism: no wgpu adapter ({e}). \
-                 Run on a host with a GPU or llvmpipe to exercise the BV22 gate."
-            );
-            return;
-        }
+    let Some(adapter) =
+        common::request_native_adapter_or_skip("wgsl_hash_determinism", &instance).await
+    else {
+        return;
     };
     eprintln!("[wgsl-determinism] adapter = {:?}", adapter.get_info().name);
 

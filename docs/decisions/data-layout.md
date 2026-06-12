@@ -32,18 +32,19 @@
 
 ## Fixed-point overflow policy
 
-- **Decision.** S = 2^12 is not an overflow proof: high fan-in during
-  synchronised firing can overflow i32. Production code must either (a) measure
-  and prove a per-tick fan-in bound for every tier with a debug high-water
-  counter and warning threshold, or (b) use a saturating atomic
-  compare-exchange loop. Plain `atomicAdd` is acceptable only during early
-  development if overflow detection is treated as a blocker before tier caps
-  are locked.
+- **Decision.** The production scatter path keeps plain i32 `atomicAdd` plus a
+  `max_abs_current` high-water counter, and the native test suite proves the
+  product envelope with a synchronous full-network stress gate. The gate fails
+  if the measured high-water loses its fixed i32 safety margin; saturating
+  atomics are reserved for the moment that executable bound no longer holds.
 - **Why.** Silent overflow-to-negative causes hyperpolarisation instead of
-  depolarisation — a correctness bug invisible from the render side.
+  depolarisation, but saturating compare-exchange would add complexity to the hot
+  scatter path before the measured product envelope needs it.
 - **Applies to.** [`../architecture/data-model.md`](../architecture/data-model.md).
-- **Revisit when.** Biological weights, K, connectivity locality, or
-  excitability are revised upward.
+- **Code anchors.** `crates/brain-visualizer/src/sim/gpu/shaders/scatter.wgsl → scatter`;
+  `crates/brain-visualizer/tests/gpu_current_overflow.rs → synchronized_scatter_current_stays_below_i32_margin`.
+- **Revisit when.** Biological weights, K, connectivity locality, excitability,
+  or tier caps are revised upward enough to shrink the measured margin.
 
 ## CPU scatter uses the same fixed-point atomics
 

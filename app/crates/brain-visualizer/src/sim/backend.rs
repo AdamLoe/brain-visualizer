@@ -236,6 +236,11 @@ mod tests {
         assert_eq!(tick_diff(5, 3), 2);
         // Wrap across the 24-bit boundary.
         assert_eq!(tick_diff(1, TICK_MASK), 2);
+        assert_eq!(tick_diff(0, TICK_MASK), 1);
+        assert_eq!(tick_diff(3, TICK_MASK - 1), 5);
+        assert_eq!(tick_diff(0x0080_0000, 0), 0x0080_0000);
+        assert_eq!(tick_diff(0x007F_FFFF, 0), 0x007F_FFFF);
+        assert_eq!(tick_diff(0, 0x0080_0001), 0x007F_FFFF);
     }
 
     #[test]

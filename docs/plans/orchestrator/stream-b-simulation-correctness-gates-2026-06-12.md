@@ -1,8 +1,8 @@
 ---
-status:        draft
+status:        shipped
 owner:         unassigned
 last_updated:  2026-06-12
-okay_to_delete: false
+okay_to_delete: true
 long_lived:    false
 owning_docs:
   - architecture/data-model.md
@@ -90,7 +90,16 @@ acceptable.
 
 ## Migration Notes
 
-At ship time, migrate durable facts into `architecture/data-model.md`,
-`architecture/simulation.md`, `architecture/build-and-deploy.md`,
-`agent-context/testing-how-to.md`, `decisions/data-layout.md`, and
-`decisions/dynamics.md`.
+Migrated:
+
+- `architecture/data-model.md` now owns the executable fixed-point overflow
+  high-water policy and the 24-bit tick-wrap gate.
+- `architecture/build-and-deploy.md` and `agent-context/testing-how-to.md` now
+  document the strict native wgpu adapter behavior and the new overflow/tick
+  integration tests.
+- `decisions/data-layout.md` now records the current choice to keep plain
+  scatter `atomicAdd` behind an executable stress margin, with saturating atomics
+  as the revisit path.
+
+No `simulation.md` or `decisions/dynamics.md` update was needed because the LIF
+dynamics, energy model, and tuning semantics did not change.

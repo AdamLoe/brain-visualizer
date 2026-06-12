@@ -9,6 +9,8 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
+mod common;
+
 use brain_visualizer::sim::backend::{SimBackend, SimConfig};
 use brain_visualizer::sim::gpu::GpuBackend;
 
@@ -44,12 +46,9 @@ fn mean_rate_hz(backend: &mut GpuBackend, excit: f32, warmup: u32, measure: u32)
 
 #[test]
 fn gpu_excitability_sweep_and_no_overflow() {
-    let ctx = match pollster::block_on(GpuBackend::acquire_native()) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("SKIP gpu_sim_dynamics: {e}");
-            return;
-        }
+    let Some(ctx) = pollster::block_on(common::acquire_native_context_or_skip("gpu_sim_dynamics"))
+    else {
+        return;
     };
     let mut backend = GpuBackend::new(
         ctx,

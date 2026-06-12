@@ -144,13 +144,22 @@ Five verification surfaces are used regularly:
 - `crates/brain-visualizer/src/sim/scaler.rs` — `propose` shrink/grow/clamp logic.
 - `crates/brain-visualizer/tests/wgsl_hash_determinism.rs` — runs the production `hash.wgsl` under
   llvmpipe and compares golden-vector output to the Rust `hash32`/`mix_key`
-  implementation. Skips (not fails) if no adapter is available.
+  implementation.
 - `crates/brain-visualizer/tests/wgsl_target_determinism.rs` — proves `target_neuron` WGSL and Rust
   `connectivity::target()` produce bit-identical synapse targets for a real
   manifold grid under llvmpipe. The definitive cross-language determinism gate.
 - `crates/brain-visualizer/tests/gpu_sim_dynamics.rs` — drives the GPU backend through an excitability
   sweep and asserts qualitative dynamics (non-zero spikes, seizure > focused,
-  no NaN/overflow). Skips if no adapter available.
+  no NaN/overflow).
+- `crates/brain-visualizer/tests/gpu_current_overflow.rs` — forces a synchronous
+  full-network spike at product max N and fails if the fixed-point current
+  high-water loses its i32 margin.
+- `crates/brain-visualizer/tests/wgsl_tick_wrap.rs` — executes production WGSL
+  tick-diff helpers and the metrics reducer across the 24-bit wrap boundary.
+
+Native wgpu tests skip locally when no adapter is available, with an explicit
+`SKIP ... no wgpu adapter/device` message. Set `BV_REQUIRE_WGPU_TESTS=1` (or run
+under `CI`) to make the same adapter/device failure hard-fail the test process.
 
 **`cargo run -p brain-visualizer --example render_check`** — native production-render smoke gate for render, morphology, stimulation, and bloom.
 

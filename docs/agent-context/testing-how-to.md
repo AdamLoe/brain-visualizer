@@ -13,10 +13,16 @@ Run `cargo` from `app/` (workspace root) and `npm` from `app/web/`.
 
 - **`cargo test -p brain-visualizer`** — host unit tests plus the integration gates in `crates/brain-visualizer/tests/`:
   the CPU/GPU hash + target determinism gates
-  (`crates/brain-visualizer/tests/wgsl_hash_determinism.rs`, `crates/brain-visualizer/tests/wgsl_target_determinism.rs`) and the
-  sim-dynamics check (`crates/brain-visualizer/tests/gpu_sim_dynamics.rs`). These run under **llvmpipe**
-  in headless/WSL2 — no real GPU needed (a software Vulkan adapter validates the
-  WGSL).
+  (`crates/brain-visualizer/tests/wgsl_hash_determinism.rs`, `crates/brain-visualizer/tests/wgsl_target_determinism.rs`),
+  sim dynamics (`crates/brain-visualizer/tests/gpu_sim_dynamics.rs`), fixed-point
+  current overflow stress (`crates/brain-visualizer/tests/gpu_current_overflow.rs`),
+  and 24-bit tick wrap (`crates/brain-visualizer/tests/wgsl_tick_wrap.rs`). These
+  run under **llvmpipe** in headless/WSL2 — no real GPU needed (a software Vulkan
+  adapter validates the WGSL).
+- **`BV_REQUIRE_WGPU_TESTS=1 cargo test -p brain-visualizer`** — same native test
+  suite, but adapter/device acquisition failure is a hard failure. Without this
+  env var, local no-adapter machines skip the native wgpu tests with explicit
+  `SKIP ... no wgpu adapter/device` messages.
 - **`cargo run -p brain-visualizer --example render_check`** — native render-path smoke gate:
   offscreen render, stimulation path, morphology draw, and bloom path.
 - **`cargo run -p brain-visualizer --example morph_view`** — native artifact/review harness:
@@ -48,6 +54,9 @@ changes offline. What each covers is owned by
 - **llvmpipe is software emulation.** Any throughput/perf number it produces is
   not representative of a real GPU and must not be locked into docs as a
   benchmark. It validates correctness, not speed.
+- **Strict adapter mode can only prove the strict branch when no adapter is
+  actually absent.** On machines with llvmpipe, `BV_REQUIRE_WGPU_TESTS=1` proves
+  the tests run under strict mode, not the no-adapter failure path itself.
 - The threaded CPU path needs the `cpu-threads` feature (and, on wasm, a nightly
   build-std recipe) — see
   [`../architecture/build-and-deploy.md`](../architecture/build-and-deploy.md).

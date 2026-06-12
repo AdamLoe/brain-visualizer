@@ -8,6 +8,8 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
+mod common;
+
 use brain_visualizer::connectivity::{target, ReachParams};
 use brain_visualizer::manifold::{Manifold, ManifoldParams};
 use brain_visualizer::sim::backend::neuron_type_byte;
@@ -68,19 +70,10 @@ fn wgsl_target_matches_rust() {
 
 async fn run() {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let adapter = match instance
-        .request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: None,
-            force_fallback_adapter: false,
-        })
-        .await
-    {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!("SKIP wgsl_target_determinism: no adapter ({e})");
-            return;
-        }
+    let Some(adapter) =
+        common::request_native_adapter_or_skip("wgsl_target_determinism", &instance).await
+    else {
+        return;
     };
     let mut limits = wgpu::Limits::downlevel_defaults();
     limits.max_storage_buffers_per_shader_stage =

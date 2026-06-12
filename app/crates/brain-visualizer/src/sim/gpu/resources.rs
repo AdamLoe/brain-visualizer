@@ -1158,7 +1158,9 @@ impl GpuResources {
         let v_zero = vec![0f32; n];
         let i_zero = vec![0i32; n];
 
-        let st_init = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC;
+        let st_init = wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_SRC
+            | wgpu::BufferUsages::COPY_DST;
         alloc_field(
             device,
             &mut nb.pos_x,
