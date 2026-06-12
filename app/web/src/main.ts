@@ -612,8 +612,9 @@ async function boot(): Promise<void> {
     // UX round 2: wire sim handlers (excitability, speed-tps, network rebuild).
     // onExcitability: delegates to setExcitabilityTarget; existing lerp smoothly approaches.
     // onSpeed: sets targetTicksPerSec (1–60); time-based accumulator uses it next frame.
-    // onNetwork: deferred rebuild — queues a latest-wins coordinator request
-    // flushed from rafLoop under the same &mut discipline as all other backend mutations.
+    // onNetwork: worker-prepared rebuild — the worker builds the CPU payload, and
+    // rafLoop applies the latest ready payload under the same &mut discipline as
+    // all other backend mutations.
     if (typeof (devPanel as unknown as { setSimHandlers: unknown }).setSimHandlers === "function") {
       (devPanel as unknown as {
         setSimHandlers(h: {
@@ -869,7 +870,7 @@ async function boot(): Promise<void> {
     // V2 Phase B: brain reset — now a no-op stub (UX round 2 removed the UI).
     if (pendingBrainReset && gpuBackend) {
       pendingBrainReset = false;
-      // No-op: brain-reset pending UI removed; network rebuilds go via the coordinator.
+      // No-op: brain-reset pending UI removed; network rebuilds go via the build worker.
     }
     if (gpuBackend) {
       const preparedPayload = networkBuildClient.consumeReady();
