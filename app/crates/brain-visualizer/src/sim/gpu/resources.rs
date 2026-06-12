@@ -1771,16 +1771,48 @@ impl GpuResources {
             &source_types,
             reach,
         );
-        let segment_count =
-            u32::try_from(morph.segments.len()).expect("morphology segment count exceeds u32");
         let dropped = morph.dropped;
         let stats = morph.stats;
         let process_roots = morph.process_roots;
         let segments = morph.segments;
-        eprintln!(
-            "[morphology] generated {} segments for {} neurons ({} dropped); incoming raw={} groups={} in_degree mean/p99/max={:.2}/{}/{} visible_groups mean/p99/max={:.2}/{}/{} incoming capped/dropped={}/{}",
-            segment_count,
+        // Wave 2: soma sphere instances (one per neuron). Radius = params.base_radius
+        // (the soma-end R0 that anchors all dendrite/axon branches).
+        let spheres = crate::sim::morphology::emit_soma_spheres(
+            positions,
+            &source_types,
+            params,
+            &process_roots,
+        );
+        self.init_morph_resources_from_prepared(
+            device,
+            segments,
+            spheres,
+            *params,
+            stats,
+            dropped,
             positions.len(),
+        );
+    }
+
+    /// Upload already-prepared morphology payloads. The payload remains a flat,
+    /// GPU-agnostic CPU contract; this method owns all WebGPU chunking,
+    /// allocation, and compaction-resource policy.
+    pub fn init_morph_resources_from_prepared(
+        &mut self,
+        device: &wgpu::Device,
+        segments: Vec<MorphSegment>,
+        spheres: Vec<MorphSphereInstance>,
+        params: crate::sim::morphology::MorphologyParams,
+        stats: crate::sim::morphology::MorphologyStats,
+        dropped: usize,
+        neuron_count: usize,
+    ) {
+        let segment_count =
+            u32::try_from(segments.len()).expect("morphology segment count exceeds u32");
+        eprintln!(
+            "[morphology] prepared {} segments for {} neurons ({} dropped); incoming raw={} groups={} in_degree mean/p99/max={:.2}/{}/{} visible_groups mean/p99/max={:.2}/{}/{} incoming capped/dropped={}/{}",
+            segment_count,
+            neuron_count,
             dropped,
             stats.incoming_raw_count,
             stats.incoming_socket_group_count,
@@ -1889,14 +1921,6 @@ impl GpuResources {
                 .unwrap_or(0),
         );
 
-        // Wave 2: soma sphere instances (one per neuron). Radius = params.base_radius
-        // (the soma-end R0 that anchors all dendrite/axon branches).
-        let spheres = crate::sim::morphology::emit_soma_spheres(
-            positions,
-            &source_types,
-            params,
-            &process_roots,
-        );
         let sphere_count = spheres.len() as u32;
         // Non-empty guard: wgpu rejects zero-sized buffers.
         let sphere_data: Vec<MorphSphereInstance> = if spheres.is_empty() {
@@ -1938,7 +1962,7 @@ impl GpuResources {
             morph_uniform,
             sphere_buffer,
             sphere_count,
-            params: *params,
+            params,
             stats,
         });
         self.bind_groups_dirty = true;

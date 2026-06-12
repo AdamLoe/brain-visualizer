@@ -12,7 +12,8 @@ neuron, and the
 host-side morphology geometry that gives each neuron a visible soma + dendrite
 tree + axon arbor. All of this runs on the CPU at `initialize()` time; the
 resulting buffers are uploaded once to the GPU and remain static for the
-life of the network.
+life of the network. Browser N/K/seed rebuilds can prepare this CPU payload in a
+dedicated module worker; WebGPU upload still happens on the main thread.
 
 ## What it owns
 
@@ -27,6 +28,9 @@ life of the network.
 - Per-neuron morphology geometry — `crates/brain-visualizer/src/sim/morphology.rs → Morphology, MorphSegment, MorphSphereInstance, generate, emit_soma_spheres`
 - Manifold surface render shader — `crates/brain-visualizer/src/sim/gpu/shaders/render_manifold.wgsl`
 - Morphology render shader — `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl`
+- Prepared-network payload validation — `crates/brain-visualizer/src/sim/gpu/mod.rs →
+  PreparedNetworkBuild`, which reconstructs `Manifold`, `SpatialGrid`,
+  `MorphSegment`, and `MorphSphereInstance` from explicit typed arrays.
 
 ## What it does NOT own
 
@@ -94,6 +98,14 @@ The six-step pipeline runs synchronously in `crates/brain-visualizer/src/manifol
    positions for O(1) neighborhood lookup during connectivity generation and
    cursor stimulation. The current folded-placement verification recorded
    `occupied_cells = 1409` and `max_cell_occupancy = 43`.
+
+For worker-prepared browser rebuilds, the same generated facts cross the
+JS/WASM boundary as explicit flat arrays: positions, region codes, surface
+vertices/faces, and the spatial-grid CSR (`min`, `cell_size`, `dim`,
+`cell_start`, `cell_neurons`). `PreparedNetworkBuild::from_flat_payload`
+validates N/K/seed length agreement, region-code range, face indices, CSR
+span/monotonicity, and one grid entry per neuron before WebGPU upload can
+replace resources.
 
 ## Region encoding invariant
 
@@ -197,7 +209,7 @@ only for visible socket groups and axon leaves by summed absolute weight.
 Unique-target coverage is the acceptance target, and the shared arbor is
 budgeted with named segment classes plus slack rather than an opaque fixed cap.
 
-`MorphSegment` is the **branch-only** contract: 48 bytes, std430, 16-aligned. It carries two endpoints (`a`, `b`), `radius_a`, `radius_b`, `neuron_id`, `path_len`, `kind` (0=dendrite, 1=axon), and `target_id`. Field order is a hard Rust ↔ WGSL contract — see `crates/brain-visualizer/src/sim/morphology.rs → MorphSegment` and the matching WGSL struct in `render_morphology.wgsl`. The size assert is `crates/brain-visualizer/src/sim/morphology.rs → segment_layout_is_48_bytes`. GPU upload chunks the flat list into multiple segment storage bindings when needed; chunking does not change this record layout or the generator's flat output.
+`MorphSegment` is the **branch-only** contract: 48 bytes, std430, 16-aligned. It carries two endpoints (`a`, `b`), `radius_a`, `radius_b`, `neuron_id`, `path_len`, `kind` (0=dendrite, 1=axon), and `target_id`. Field order is a hard Rust ↔ WGSL contract — see `crates/brain-visualizer/src/sim/morphology.rs → MorphSegment` and the matching WGSL struct in `render_morphology.wgsl`. The size assert is `crates/brain-visualizer/src/sim/morphology.rs → segment_layout_is_48_bytes`. GPU upload chunks the flat list into multiple segment storage bindings when needed; chunking does not change this record layout or the generator's flat output. Prepared rebuild payloads do not serialize this struct as guessed raw bytes: they carry explicit field arrays (`segment_endpoints`, `segment_path_len`, owner/kind/target ids), and Rust reconstructs canonical `MorphSegment` values before upload.
 
 `MorphSphereInstance` is the **soma-only** contract: 48 bytes, 16-aligned. One instance per neuron, emitted at `initialize()` time by `crates/brain-visualizer/src/sim/morphology.rs → emit_soma_spheres` from the neuron position arrays plus the matching host-side `ProcessRoot` descriptor. Fields: `center: [f32; 3]`, `radius: f32` (= `params::R0`), `neuron_id: u32`, `kind: u32` (= 2 for soma), `_pad0`, `_pad1`, `root_dir: [f32; 3]`, and `root_pull: f32`. `root_dir/root_pull` carry the dominant axon root direction and bounded deformation strength consumed by `render_morphology.wgsl → vs_sphere`; neurons with no unique outgoing target get zero pull. The size assert is `crates/brain-visualizer/src/sim/morphology.rs → sphere_instance_layout_is_48_bytes`.
 

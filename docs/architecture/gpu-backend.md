@@ -37,6 +37,10 @@ GPU-resident state straight to the render passes.
   WasmGpuBackend::create_staged` and the `startup_*` methods drive
   `GpuBackend::begin_initialize`, the staged resource upload helpers, and
   `finish_initialize`.
+- Worker-prepared network ingestion — `crates/brain-visualizer/src/sim/gpu/mod.rs →
+  PreparedNetworkBuild` validates/reconstructs flat CPU payloads, and
+  `crates/brain-visualizer/src/lib.rs → WasmGpuBackend::apply_prepared_network`
+  enters the same main-thread WebGPU upload/resource path as direct builds.
 - The standing guardrail constants `DRAW_LEGACY_CYLINDERS`,
   `DRAW_LEGACY_NEAR_SPHERES`, `DRAW_LEGACY_RIBBONS` that gate retired passes out
   of the graph, and `crates/brain-visualizer/src/sim/gpu/pipelines.rs →
@@ -164,6 +168,15 @@ All large buffers are **persistent across frames**. Allocation happens only on a
 - **curve-lift setting change** — `regenerate_morphology` rebuilds only the morph
   buffers + refreshes bind groups (guarded so dragging other sliders never
   reallocates).
+- **worker-prepared network rebuild** — `PreparedNetworkBuild` carries the CPU
+  manifold, placement, spatial grid, morphology segments, soma instances, and
+  metadata produced away from the main thread. The payload is GPU-agnostic and
+  flat; `GpuBackend::initialize_prepared` still runs `resize_neurons`,
+  `init_render_resources`, `init_near_lod_resources`, `init_edge_resources`,
+  `GpuResources::init_morph_resources_from_prepared`, and `finish_initialize`
+  on the main thread. Segment chunking remains an upload/resource policy inside
+  `GpuResources`; the worker never encodes chunk layout or creates WebGPU
+  resources.
 
 ### Browser startup staging
 
@@ -186,10 +199,10 @@ startup stages with a browser frame yield between each call:
 
 This staging does **not** move WebGPU ownership off the main thread and does not
 make individual Rust stages preemptible. It lets the DOM loading overlay paint
-and report measured per-stage timings between structural allocation blocks, and
-it creates an explicit boundary for a future worker-prepared manifold/morphology
-path. The rAF loop must not receive the staged `WasmGpuBackend` until all startup
-stages complete.
+and report measured per-stage timings between structural allocation blocks. The
+same upload helpers are now also the boundary used by worker-prepared network
+payloads after startup. The rAF loop must not receive the staged
+`WasmGpuBackend` until all startup stages complete.
 
 ### bind_groups_dirty rebuild rule
 

@@ -31,6 +31,444 @@ use std::sync::Arc;
 pub struct NetworkBuildState {
     config: SimConfig,
     manifold: crate::manifold::Manifold,
+    prepared_morphology: Option<PreparedMorphology>,
+}
+
+pub const PREPARED_NETWORK_VERSION: u32 = 1;
+
+pub struct PreparedMorphology {
+    segments: Vec<crate::sim::morphology::MorphSegment>,
+    spheres: Vec<crate::sim::morphology::MorphSphereInstance>,
+    params: crate::sim::morphology::MorphologyParams,
+    stats: crate::sim::morphology::MorphologyStats,
+    dropped: usize,
+}
+
+pub struct PreparedNetworkBuild {
+    config: SimConfig,
+    manifold: crate::manifold::Manifold,
+    morphology: PreparedMorphology,
+}
+
+impl PreparedNetworkBuild {
+    pub fn prepare(
+        config: SimConfig,
+        params: crate::sim::morphology::MorphologyParams,
+        reach: crate::connectivity::ReachParams,
+    ) -> Self {
+        let manifold = crate::build_manifold(&config);
+        let source_types =
+            crate::sim::morphology::build_source_types(config.seed_lo(), &manifold.neuron_regions);
+        let morph = crate::sim::morphology::generate(
+            &manifold.neuron_positions,
+            &manifold.spatial_grid,
+            config.k,
+            config.seed_lo(),
+            &params,
+            &source_types,
+            reach,
+        );
+        let spheres = crate::sim::morphology::emit_soma_spheres(
+            &manifold.neuron_positions,
+            &source_types,
+            &params,
+            &morph.process_roots,
+        );
+        let morphology = PreparedMorphology {
+            segments: morph.segments,
+            spheres,
+            params,
+            stats: morph.stats,
+            dropped: morph.dropped,
+        };
+        Self {
+            config,
+            manifold,
+            morphology,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_flat_payload(
+        config: SimConfig,
+        positions: &[f32],
+        region_codes: &[u8],
+        grid_min: &[f32],
+        grid_cell_size: f32,
+        grid_dim: u32,
+        grid_cell_start: &[u32],
+        grid_cell_neurons: &[u32],
+        vertices: &[f32],
+        faces: &[u32],
+        segment_endpoints: &[f32],
+        segment_path_len: &[f32],
+        segment_neuron_ids: &[u32],
+        segment_kinds: &[u32],
+        segment_target_ids: &[u32],
+        sphere_geometry: &[f32],
+        sphere_neuron_ids: &[u32],
+        sphere_kinds: &[u32],
+        params: crate::sim::morphology::MorphologyParams,
+        stats: crate::sim::morphology::MorphologyStats,
+        dropped: usize,
+    ) -> Result<Self, String> {
+        if config.n == 0 {
+            return Err("prepared payload N must be > 0".into());
+        }
+        let positions = vec3s("positions", positions, config.n)?;
+        let vertices = vec3s("vertices", vertices, vertices.len() / 3)?;
+        if vertices.is_empty() {
+            return Err("prepared payload vertices must be non-empty".into());
+        }
+        if faces.len() % 3 != 0 {
+            return Err("prepared payload faces length must be divisible by 3".into());
+        }
+        if region_codes.len() != config.n {
+            return Err(format!(
+                "prepared payload region length {} != N {}",
+                region_codes.len(),
+                config.n
+            ));
+        }
+        let neuron_regions = region_codes
+            .iter()
+            .copied()
+            .map(region_from_code)
+            .collect::<Result<Vec<_>, _>>()?;
+        if grid_min.len() != 3 {
+            return Err("prepared payload grid_min length must be 3".into());
+        }
+        if !grid_cell_size.is_finite() || grid_cell_size <= 0.0 {
+            return Err("prepared payload grid_cell_size must be finite and positive".into());
+        }
+        if grid_dim == 0 {
+            return Err("prepared payload grid_dim must be > 0".into());
+        }
+        let cell_count = grid_dim
+            .checked_mul(grid_dim)
+            .and_then(|v| v.checked_mul(grid_dim))
+            .ok_or_else(|| "prepared payload grid_dim overflows cell count".to_string())?
+            as usize;
+        if grid_cell_start.len() != cell_count + 1 {
+            return Err(format!(
+                "prepared payload cell_start length {} != dim^3+1 {}",
+                grid_cell_start.len(),
+                cell_count + 1
+            ));
+        }
+        if grid_cell_neurons.len() != config.n {
+            return Err(format!(
+                "prepared payload cell_neurons length {} != N {}",
+                grid_cell_neurons.len(),
+                config.n
+            ));
+        }
+        if grid_cell_start.first().copied() != Some(0)
+            || grid_cell_start.last().copied() != Some(config.n as u32)
+        {
+            return Err("prepared payload cell_start must span 0..N".into());
+        }
+        for window in grid_cell_start.windows(2) {
+            if window[0] > window[1] {
+                return Err("prepared payload cell_start must be monotonic".into());
+            }
+        }
+        let mut seen = vec![false; config.n];
+        for &id in grid_cell_neurons {
+            let idx = id as usize;
+            if idx >= config.n {
+                return Err(format!(
+                    "prepared payload cell_neurons id {id} out of range"
+                ));
+            }
+            if seen[idx] {
+                return Err(format!("prepared payload cell_neurons duplicate id {id}"));
+            }
+            seen[idx] = true;
+        }
+        if faces.iter().any(|&idx| idx as usize >= vertices.len()) {
+            return Err("prepared payload face index out of range".into());
+        }
+
+        let segment_count = segment_path_len.len();
+        if segment_endpoints.len() != segment_count * 8
+            || segment_neuron_ids.len() != segment_count
+            || segment_kinds.len() != segment_count
+            || segment_target_ids.len() != segment_count
+        {
+            return Err("prepared payload segment field lengths disagree".into());
+        }
+        let mut segments = Vec::with_capacity(segment_count);
+        for i in 0..segment_count {
+            let base = i * 8;
+            let neuron_id = segment_neuron_ids[i];
+            let target_id = segment_target_ids[i];
+            if neuron_id as usize >= config.n || target_id as usize >= config.n {
+                return Err(format!(
+                    "prepared payload segment {i} neuron id out of range"
+                ));
+            }
+            let kind = segment_kinds[i];
+            if kind > 1 {
+                return Err(format!("prepared payload segment {i} kind {kind} invalid"));
+            }
+            segments.push(crate::sim::morphology::MorphSegment {
+                a: [
+                    segment_endpoints[base],
+                    segment_endpoints[base + 1],
+                    segment_endpoints[base + 2],
+                ],
+                radius_a: segment_endpoints[base + 3],
+                b: [
+                    segment_endpoints[base + 4],
+                    segment_endpoints[base + 5],
+                    segment_endpoints[base + 6],
+                ],
+                radius_b: segment_endpoints[base + 7],
+                neuron_id,
+                path_len: segment_path_len[i],
+                kind,
+                target_id,
+            });
+        }
+
+        let sphere_count = sphere_neuron_ids.len();
+        if sphere_geometry.len() != sphere_count * 8 || sphere_kinds.len() != sphere_count {
+            return Err("prepared payload sphere field lengths disagree".into());
+        }
+        let mut spheres = Vec::with_capacity(sphere_count);
+        for i in 0..sphere_count {
+            let base = i * 8;
+            let neuron_id = sphere_neuron_ids[i];
+            if neuron_id as usize >= config.n {
+                return Err(format!(
+                    "prepared payload sphere {i} neuron id out of range"
+                ));
+            }
+            let kind = sphere_kinds[i];
+            if kind != 2 {
+                return Err(format!("prepared payload sphere {i} kind {kind} invalid"));
+            }
+            spheres.push(crate::sim::morphology::MorphSphereInstance {
+                center: [
+                    sphere_geometry[base],
+                    sphere_geometry[base + 1],
+                    sphere_geometry[base + 2],
+                ],
+                radius: sphere_geometry[base + 3],
+                neuron_id,
+                kind,
+                _pad0: 0,
+                _pad1: 0,
+                root_dir: [
+                    sphere_geometry[base + 4],
+                    sphere_geometry[base + 5],
+                    sphere_geometry[base + 6],
+                ],
+                root_pull: sphere_geometry[base + 7],
+            });
+        }
+
+        let manifold = crate::manifold::Manifold {
+            vertices,
+            faces: faces.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect(),
+            neuron_positions: positions,
+            neuron_regions,
+            spatial_grid: crate::connectivity::spatial::SpatialGrid {
+                min: [grid_min[0], grid_min[1], grid_min[2]],
+                cell_size: grid_cell_size,
+                dim: grid_dim,
+                cell_start: grid_cell_start.to_vec(),
+                cell_neurons: grid_cell_neurons.to_vec(),
+            },
+        };
+        let morphology = PreparedMorphology {
+            segments,
+            spheres,
+            params,
+            stats,
+            dropped,
+        };
+        Ok(Self {
+            config,
+            manifold,
+            morphology,
+        })
+    }
+
+    pub fn config(&self) -> &SimConfig {
+        &self.config
+    }
+
+    pub fn manifold(&self) -> &crate::manifold::Manifold {
+        &self.manifold
+    }
+
+    pub fn morphology(&self) -> &PreparedMorphology {
+        &self.morphology
+    }
+
+    pub fn positions_f32(&self) -> Vec<f32> {
+        self.manifold
+            .neuron_positions
+            .iter()
+            .flat_map(|p| p.iter().copied())
+            .collect()
+    }
+
+    pub fn region_codes(&self) -> Vec<u8> {
+        self.manifold
+            .neuron_regions
+            .iter()
+            .copied()
+            .map(region_code)
+            .collect()
+    }
+
+    pub fn vertices_f32(&self) -> Vec<f32> {
+        self.manifold
+            .vertices
+            .iter()
+            .flat_map(|v| v.iter().copied())
+            .collect()
+    }
+
+    pub fn grid_min_f32(&self) -> Vec<f32> {
+        self.manifold.spatial_grid.min.to_vec()
+    }
+
+    pub fn grid_cell_size(&self) -> f32 {
+        self.manifold.spatial_grid.cell_size
+    }
+
+    pub fn grid_dim(&self) -> u32 {
+        self.manifold.spatial_grid.dim
+    }
+
+    pub fn grid_cell_start_u32(&self) -> Vec<u32> {
+        self.manifold.spatial_grid.cell_start.clone()
+    }
+
+    pub fn grid_cell_neurons_u32(&self) -> Vec<u32> {
+        self.manifold.spatial_grid.cell_neurons.clone()
+    }
+
+    pub fn faces_u32(&self) -> Vec<u32> {
+        self.manifold
+            .faces
+            .iter()
+            .flat_map(|f| f.iter().copied())
+            .collect()
+    }
+
+    pub fn segment_endpoints_f32(&self) -> Vec<f32> {
+        let mut out = Vec::with_capacity(self.morphology.segments.len() * 8);
+        for s in &self.morphology.segments {
+            out.extend_from_slice(&s.a);
+            out.push(s.radius_a);
+            out.extend_from_slice(&s.b);
+            out.push(s.radius_b);
+        }
+        out
+    }
+
+    pub fn segment_path_len_f32(&self) -> Vec<f32> {
+        self.morphology
+            .segments
+            .iter()
+            .map(|s| s.path_len)
+            .collect()
+    }
+
+    pub fn segment_neuron_ids_u32(&self) -> Vec<u32> {
+        self.morphology
+            .segments
+            .iter()
+            .map(|s| s.neuron_id)
+            .collect()
+    }
+
+    pub fn segment_kinds_u32(&self) -> Vec<u32> {
+        self.morphology.segments.iter().map(|s| s.kind).collect()
+    }
+
+    pub fn segment_target_ids_u32(&self) -> Vec<u32> {
+        self.morphology
+            .segments
+            .iter()
+            .map(|s| s.target_id)
+            .collect()
+    }
+
+    pub fn sphere_geometry_f32(&self) -> Vec<f32> {
+        let mut out = Vec::with_capacity(self.morphology.spheres.len() * 8);
+        for s in &self.morphology.spheres {
+            out.extend_from_slice(&s.center);
+            out.push(s.radius);
+            out.extend_from_slice(&s.root_dir);
+            out.push(s.root_pull);
+        }
+        out
+    }
+
+    pub fn sphere_neuron_ids_u32(&self) -> Vec<u32> {
+        self.morphology
+            .spheres
+            .iter()
+            .map(|s| s.neuron_id)
+            .collect()
+    }
+
+    pub fn sphere_kinds_u32(&self) -> Vec<u32> {
+        self.morphology.spheres.iter().map(|s| s.kind).collect()
+    }
+
+    pub fn stats_json(&self) -> String {
+        self.morphology.stats.to_json()
+    }
+
+    pub fn dropped_count(&self) -> usize {
+        self.morphology.dropped
+    }
+
+    pub fn params_json(&self) -> String {
+        self.morphology.params.to_json()
+    }
+}
+
+fn vec3s(name: &str, data: &[f32], count: usize) -> Result<Vec<[f32; 3]>, String> {
+    if data.len() != count * 3 {
+        return Err(format!(
+            "prepared payload {name} length {} != {}",
+            data.len(),
+            count * 3
+        ));
+    }
+    let mut out = Vec::with_capacity(count);
+    for chunk in data.chunks_exact(3) {
+        if !chunk.iter().all(|v| v.is_finite()) {
+            return Err(format!("prepared payload {name} contains non-finite value"));
+        }
+        out.push([chunk[0], chunk[1], chunk[2]]);
+    }
+    Ok(out)
+}
+
+fn region_from_code(code: u8) -> Result<crate::manifold::RegionKind, String> {
+    match code {
+        0 => Ok(crate::manifold::RegionKind::Input),
+        1 => Ok(crate::manifold::RegionKind::Association),
+        2 => Ok(crate::manifold::RegionKind::Output),
+        _ => Err(format!("prepared payload region code {code} invalid")),
+    }
+}
+
+fn region_code(region: crate::manifold::RegionKind) -> u8 {
+    match region {
+        crate::manifold::RegionKind::Input => 0,
+        crate::manifold::RegionKind::Association => 1,
+        crate::manifold::RegionKind::Output => 2,
+    }
 }
 
 // ─── V2 Phase A: metrics readback ─────────────────────────────────────────────
@@ -248,6 +686,26 @@ impl VisualSettings {
             self.max_reach_cells,
         )
     }
+}
+
+pub fn reach_from_visual_settings(visual: &VisualSettings) -> crate::connectivity::ReachParams {
+    let den = crate::connectivity::REACH_FRAC_DEN;
+    let frac = (visual.long_range_reach_frac * den as f32).round();
+    let long_range_frac = frac.clamp(0.0, den as f32) as u32;
+    let max_reach = (visual.max_reach_cells.round() as i64).max(1) as u32;
+    crate::connectivity::ReachParams {
+        long_range_frac,
+        max_reach,
+    }
+}
+
+pub fn morph_params_from_config_and_visual(
+    config: &crate::sim::morphology::MorphologyConfig,
+    visual: &VisualSettings,
+) -> crate::sim::morphology::MorphologyParams {
+    config
+        .to_params()
+        .with_curve_lift(visual.connection_curve_lift)
 }
 
 // ─── LOD transition thresholds ───────────────────────────────────────────────
@@ -544,9 +1002,7 @@ impl GpuBackend {
     /// Float32Array `connection_curve_lift` applied last (it owns the axon bow at
     /// generation time and is not part of the morph-config Float32Array contract).
     fn current_morph_params(&self) -> crate::sim::morphology::MorphologyParams {
-        self.morph_config
-            .to_params()
-            .with_curve_lift(self.visual.connection_curve_lift)
+        morph_params_from_config_and_visual(&self.morph_config, &self.visual)
     }
 
     /// Heavy-tailed reach knobs from the live VisualSettings, converted to the
@@ -555,14 +1011,7 @@ impl GpuBackend {
     /// the determinism path float-free. `frac` is rounded over `REACH_FRAC_DEN`
     /// and clamped `0..=REACH_FRAC_DEN`; `max_reach` is rounded and clamped `>= 1`.
     fn current_reach(&self) -> crate::connectivity::ReachParams {
-        let den = crate::connectivity::REACH_FRAC_DEN;
-        let frac = (self.visual.long_range_reach_frac * den as f32).round();
-        let long_range_frac = frac.clamp(0.0, den as f32) as u32;
-        let max_reach = (self.visual.max_reach_cells.round() as i64).max(1) as u32;
-        crate::connectivity::ReachParams {
-            long_range_frac,
-            max_reach,
-        }
+        reach_from_visual_settings(&self.visual)
     }
 
     /// Re-write the `connect_uniform` buffer with the live reach knobs so the
@@ -958,6 +1407,22 @@ impl GpuBackend {
         NetworkBuildState {
             config: config.clone(),
             manifold,
+            prepared_morphology: None,
+        }
+    }
+
+    /// Start a staged network upload from a worker-prepared, GPU-agnostic
+    /// payload. WebGPU allocation and upload still happen only in the normal
+    /// main-thread staged methods below.
+    pub fn begin_initialize_prepared(
+        &mut self,
+        prepared: PreparedNetworkBuild,
+    ) -> NetworkBuildState {
+        self.config = prepared.config.clone();
+        NetworkBuildState {
+            config: prepared.config,
+            manifold: prepared.manifold,
+            prepared_morphology: Some(prepared.morphology),
         }
     }
 
@@ -998,17 +1463,29 @@ impl GpuBackend {
 
     /// Generate and upload morphology buffers for a staged build.
     pub fn initialize_morph_resources(&mut self, state: &NetworkBuildState) {
-        let morph_params = self.current_morph_params();
-        let reach = self.current_reach();
-        self.resources.init_morph_resources(
-            &self.ctx.device,
-            &state.manifold.neuron_positions,
-            &state.manifold.spatial_grid,
-            &state.manifold.neuron_regions,
-            &state.config,
-            &morph_params,
-            reach,
-        );
+        if let Some(prepared) = state.prepared_morphology.as_ref() {
+            self.resources.init_morph_resources_from_prepared(
+                &self.ctx.device,
+                prepared.segments.clone(),
+                prepared.spheres.clone(),
+                prepared.params,
+                prepared.stats,
+                prepared.dropped,
+                state.config.n,
+            );
+        } else {
+            let morph_params = self.current_morph_params();
+            let reach = self.current_reach();
+            self.resources.init_morph_resources(
+                &self.ctx.device,
+                &state.manifold.neuron_positions,
+                &state.manifold.spatial_grid,
+                &state.manifold.neuron_regions,
+                &state.config,
+                &morph_params,
+                reach,
+            );
+        }
     }
 
     /// Finish staged initialization by refreshing bind groups and resetting
@@ -1038,6 +1515,24 @@ impl GpuBackend {
     /// Rare-path; allocates. Call once after `new` and on every tier change.
     pub fn initialize(&mut self, config: &SimConfig) {
         let state = self.begin_initialize(config);
+        self.initialize_neuron_buffers(&state);
+        self.initialize_render_resources(&state);
+        self.initialize_lod_edge_resources(&state);
+        self.initialize_morph_resources(&state);
+        self.finish_initialize();
+    }
+
+    pub fn initialize_prepared(
+        &mut self,
+        prepared: PreparedNetworkBuild,
+        visual: VisualSettings,
+        morph_config: crate::sim::morphology::MorphologyConfig,
+    ) {
+        self.set_i_ext(visual.i_ext);
+        self.set_synaptic_scale(visual.synaptic_scale);
+        self.visual = visual;
+        self.morph_config = morph_config;
+        let state = self.begin_initialize_prepared(prepared);
         self.initialize_neuron_buffers(&state);
         self.initialize_render_resources(&state);
         self.initialize_lod_edge_resources(&state);
@@ -2918,6 +3413,133 @@ mod tests {
         assert_eq!(settings.bloom_strength, 0.0);
         assert_eq!(settings.signal_source, 0);
         assert_eq!(settings.adaptive_scaler_enabled, 0);
+    }
+
+    #[test]
+    fn prepared_network_flat_payload_roundtrips_to_rust_types() {
+        let config = SimConfig {
+            n: 48,
+            k: 4,
+            seed: 123,
+            ..SimConfig::default()
+        };
+        let visual = VisualSettings::default();
+        let morph_config = crate::sim::morphology::MorphologyConfig::default();
+        let params = morph_params_from_config_and_visual(&morph_config, &visual);
+        let prepared = PreparedNetworkBuild::prepare(
+            config.clone(),
+            params,
+            reach_from_visual_settings(&visual),
+        );
+
+        let rebuilt = PreparedNetworkBuild::from_flat_payload(
+            config,
+            &prepared.positions_f32(),
+            &prepared.region_codes(),
+            &prepared.grid_min_f32(),
+            prepared.grid_cell_size(),
+            prepared.grid_dim(),
+            &prepared.grid_cell_start_u32(),
+            &prepared.grid_cell_neurons_u32(),
+            &prepared.vertices_f32(),
+            &prepared.faces_u32(),
+            &prepared.segment_endpoints_f32(),
+            &prepared.segment_path_len_f32(),
+            &prepared.segment_neuron_ids_u32(),
+            &prepared.segment_kinds_u32(),
+            &prepared.segment_target_ids_u32(),
+            &prepared.sphere_geometry_f32(),
+            &prepared.sphere_neuron_ids_u32(),
+            &prepared.sphere_kinds_u32(),
+            params,
+            prepared.morphology.stats,
+            prepared.dropped_count(),
+        )
+        .expect("prepared payload should validate");
+
+        assert_eq!(
+            rebuilt.manifold.neuron_positions,
+            prepared.manifold.neuron_positions
+        );
+        assert_eq!(
+            rebuilt.manifold.neuron_regions,
+            prepared.manifold.neuron_regions
+        );
+        assert_eq!(
+            rebuilt.manifold.spatial_grid.cell_start,
+            prepared.manifold.spatial_grid.cell_start
+        );
+        assert_eq!(
+            rebuilt.manifold.spatial_grid.cell_neurons,
+            prepared.manifold.spatial_grid.cell_neurons
+        );
+        assert_eq!(
+            rebuilt.morphology.segments.len(),
+            prepared.morphology.segments.len()
+        );
+        assert_eq!(
+            rebuilt.morphology.spheres.len(),
+            prepared.morphology.spheres.len()
+        );
+        assert_eq!(
+            bytemuck::cast_slice::<_, u8>(&rebuilt.morphology.segments),
+            bytemuck::cast_slice::<_, u8>(&prepared.morphology.segments)
+        );
+        assert_eq!(
+            bytemuck::cast_slice::<_, u8>(&rebuilt.morphology.spheres),
+            bytemuck::cast_slice::<_, u8>(&prepared.morphology.spheres)
+        );
+    }
+
+    #[test]
+    fn prepared_network_validation_rejects_bad_region_code() {
+        let config = SimConfig {
+            n: 8,
+            k: 2,
+            seed: 7,
+            ..SimConfig::default()
+        };
+        let visual = VisualSettings::default();
+        let params = morph_params_from_config_and_visual(
+            &crate::sim::morphology::MorphologyConfig::default(),
+            &visual,
+        );
+        let prepared = PreparedNetworkBuild::prepare(
+            config.clone(),
+            params,
+            reach_from_visual_settings(&visual),
+        );
+        let mut regions = prepared.region_codes();
+        regions[0] = 9;
+
+        let err = match PreparedNetworkBuild::from_flat_payload(
+            config,
+            &prepared.positions_f32(),
+            &regions,
+            &prepared.grid_min_f32(),
+            prepared.grid_cell_size(),
+            prepared.grid_dim(),
+            &prepared.grid_cell_start_u32(),
+            &prepared.grid_cell_neurons_u32(),
+            &prepared.vertices_f32(),
+            &prepared.faces_u32(),
+            &prepared.segment_endpoints_f32(),
+            &prepared.segment_path_len_f32(),
+            &prepared.segment_neuron_ids_u32(),
+            &prepared.segment_kinds_u32(),
+            &prepared.segment_target_ids_u32(),
+            &prepared.sphere_geometry_f32(),
+            &prepared.sphere_neuron_ids_u32(),
+            &prepared.sphere_kinds_u32(),
+            params,
+            prepared.morphology.stats,
+            prepared.dropped_count(),
+        ) {
+            Ok(_) => panic!("bad region code should be rejected"),
+            Err(err) => err,
+        };
+
+        assert!(err.contains("region code 9 invalid"));
     }
 
     #[test]

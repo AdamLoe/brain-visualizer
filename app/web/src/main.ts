@@ -22,6 +22,8 @@ import { CornerHud } from "./ui/hud";
 import { Profiler } from "./render/profiler";
 import { Renderer } from "./render/renderer";
 import { RebuildCoordinator } from "./rebuild/rebuild-coordinator";
+import { NetworkBuildClient } from "./gpu-build/network-build-client";
+import type { PreparedNetworkPayload } from "./gpu-build/prepared-network";
 import {
   ZERO_STATS,
   clampNeuronCount,
@@ -41,6 +43,35 @@ import { DevPanel } from "./ui/dev-panel"; // V2 Phase A / Phase B
 // TODO(v0.3.1): drop this shim once the regenerated pkg exports the method.
 interface MorphCapableBackend {
   set_morphology_config(json: string): void;
+}
+
+interface PreparedNetworkCapableBackend {
+  apply_prepared_network(
+    version: number,
+    n: number,
+    k: number,
+    seed: number,
+    visualSettings: Float32Array,
+    morphConfigJson: string,
+    positions: Float32Array,
+    regionCodes: Uint8Array,
+    gridMin: Float32Array,
+    gridCellSize: number,
+    gridDim: number,
+    gridCellStart: Uint32Array,
+    gridCellNeurons: Uint32Array,
+    vertices: Float32Array,
+    faces: Uint32Array,
+    segmentEndpoints: Float32Array,
+    segmentPathLen: Float32Array,
+    segmentNeuronIds: Uint32Array,
+    segmentKinds: Uint32Array,
+    segmentTargetIds: Uint32Array,
+    sphereGeometry: Float32Array,
+    sphereNeuronIds: Uint32Array,
+    sphereKinds: Uint32Array,
+    droppedCount: number,
+  ): void;
 }
 
 // Cursor stimulation constants (BV10 / phase-3 spec).
@@ -328,6 +359,9 @@ async function boot(): Promise<void> {
   // pending UI, but the flag is harmless and keeps the flush path intact).
   let pendingBrainReset = false;
   const rebuildCoordinator = new RebuildCoordinator();
+  const networkBuildClient = new NetworkBuildClient();
+  let nextNetworkBuildSequence = 1;
+  let lastReportedNetworkBuildFailure = 0;
   rebuildCoordinator.requestSettingsPush();
   rebuildCoordinator.requestMorphConfig(morphConfigToJson(loadMorphConfig()));
 
@@ -606,11 +640,16 @@ async function boot(): Promise<void> {
           config.k    = p.k;
           config.seed = p.seed >>> 0;
           saveConfig(config); // 0.1.1: persist user-chosen N/K so it survives reload
-          rebuildCoordinator.requestNetwork({
+          const sequence = nextNetworkBuildSequence++;
+          networkBuildClient.request({
+            sequence,
             n: config.n,
             k: config.k,
             seed: config.seed >>> 0,
+            visualSettings: toFloat32Array(getSettings()),
+            morphConfigJson: morphConfigToJson(loadMorphConfig()),
           });
+          console.log(`[main] network prepare requested: seq=${sequence} n=${config.n} k=${config.k} seed=0x${(config.seed >>> 0).toString(16)}`);
         },
         onConfigReset(defaultConfig: AppConfig): void {
           config.n = defaultConfig.n;
@@ -767,6 +806,42 @@ async function boot(): Promise<void> {
     rafHandle = requestAnimationFrame(rafLoop);
   }
 
+  function applyPreparedNetworkPayload(payload: PreparedNetworkPayload): void {
+    if (!gpuBackend) return;
+    (gpuBackend as unknown as PreparedNetworkCapableBackend).apply_prepared_network(
+      payload.version,
+      payload.n,
+      payload.k,
+      payload.seed >>> 0,
+      payload.visualSettings,
+      payload.morphConfigJson,
+      payload.positions,
+      payload.regionCodes,
+      payload.gridMin,
+      payload.gridCellSize,
+      payload.gridDim,
+      payload.gridCellStart,
+      payload.gridCellNeurons,
+      payload.vertices,
+      payload.faces,
+      payload.segmentEndpoints,
+      payload.segmentPathLen,
+      payload.segmentNeuronIds,
+      payload.segmentKinds,
+      payload.segmentTargetIds,
+      payload.sphereGeometry,
+      payload.sphereNeuronIds,
+      payload.sphereKinds,
+      payload.droppedCount,
+    );
+    rebuildCoordinator.requestSettingsPush();
+    rebuildCoordinator.requestMorphConfig(morphConfigToJson(loadMorphConfig()));
+    profiler.setConfig(config.backend, config.tier, payload.n, payload.k);
+    console.log(
+      `[main] prepared network applied: seq=${payload.sequence} n=${payload.n} k=${payload.k} seed=0x${payload.seed.toString(16)} segments=${payload.segmentPathLen.length}`,
+    );
+  }
+
   // UX round 2: time-based ticks/sec scheduling (replaces frame-count multiplier).
   // targetTicksPerSec: declared earlier (near devPanel) so closures can reference it.
   // tickAccumulator: fractional carry-over between frames for sub-integer rates.
@@ -795,6 +870,27 @@ async function boot(): Promise<void> {
     if (pendingBrainReset && gpuBackend) {
       pendingBrainReset = false;
       // No-op: brain-reset pending UI removed; network rebuilds go via the coordinator.
+    }
+    if (gpuBackend) {
+      const preparedPayload = networkBuildClient.consumeReady();
+      if (preparedPayload !== null) {
+        try {
+          applyPreparedNetworkPayload(preparedPayload);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.error("[main] prepared network apply failed:", error);
+          showToast(`Network rebuild failed: ${message}`);
+        }
+      }
+    }
+    const networkBuildStatus = networkBuildClient.currentStatus();
+    if (
+      networkBuildStatus.kind === "failed"
+      && networkBuildStatus.sequence !== lastReportedNetworkBuildFailure
+    ) {
+      lastReportedNetworkBuildFailure = networkBuildStatus.sequence;
+      console.error(`[main] network prepare failed: seq=${networkBuildStatus.sequence}: ${networkBuildStatus.message}`);
+      showToast(`Network prepare failed: ${networkBuildStatus.message}`);
     }
     if (gpuBackend && rebuildCoordinator.hasPendingWork()) {
       const rebuildStep = rebuildCoordinator.applyNext({

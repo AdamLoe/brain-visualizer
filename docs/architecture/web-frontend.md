@@ -14,9 +14,13 @@ avoid wasm-bindgen reentrancy panics.
 ## What it owns
 
 - `web/src/main.ts` — boot sequence, startup overlay state, rAF loop (`rafLoop`), pending resize/stim
-  plumbing, `RebuildCoordinator` wiring for network/settings/morphology rebuild
-  mutations, `CpuCoordinator`, `startGpuBackend`,
+  plumbing, worker-prepared network rebuild wiring, `RebuildCoordinator` wiring
+  for settings/morphology rebuild mutations, `CpuCoordinator`, `startGpuBackend`,
   `restartWithBackend`, `computeStimulation`, `raySphereIntersect`
+- `web/src/gpu-build/network-build-client.ts → NetworkBuildClient` and
+  `web/src/gpu-build/network-build-worker.ts` — latest-wins worker preparation
+  for network rebuild payloads; the worker owns a worker-local WASM instance and
+  never requests WebGPU
 - `web/index.html` — the immediate DOM/CSS startup overlay and full-viewport
   canvas shell
 - `web/src/render/camera.ts → Camera` — orbit/zoom/pan state machine; produces MVP matrix,
@@ -57,20 +61,29 @@ directly — they queue work for the next frame. At the **top** of every rAF tur
 before any backend call, pending DOM work is flushed in order:
 
 1. `pendingResize` → `gpuBackend.resize()`
-2. `RebuildCoordinator.applyNext()` → at most one rebuild-related mutation:
-   `gpuBackend.reinitialize()`, `gpuBackend.update_settings()`, or
-   `set_morphology_config(json)`
-3. `pendingStim` → `gpuBackend.stimulate()`
+2. `NetworkBuildClient.consumeReady()` → if a worker-prepared network payload is
+   ready, `gpuBackend.apply_prepared_network(...)`
+3. `RebuildCoordinator.applyNext()` → at most one settings/morphology mutation:
+   `gpuBackend.update_settings()` or `set_morphology_config(json)`
+4. `pendingStim` → `gpuBackend.stimulate()`
 
-`web/src/rebuild/rebuild-coordinator.ts → RebuildCoordinator` owns the
-latest-wins queue for N/K/seed network rebuilds, settings pushes, and morphology
-config pushes. Network rebuild requests coalesce to the newest snapshot; after a
-network rebuild, settings and morphology are re-pushed on later rAF turns so the
-fresh backend receives the current visual and generator state without piling all
-rebuild work into one mutation flush. The current implementation still calls the
-existing wasm `reinitialize()` and `set_morphology_config()` methods on the main
-thread; worker-side CPU preparation and prepared-network upload are not part of
-the live frontend contract.
+Network N/K/seed changes no longer call `gpuBackend.reinitialize()` from rAF.
+`main.ts` snapshots the current `VisualSettings` Float32Array and morphology
+JSON, assigns a monotonic sequence, and sends the request to
+`NetworkBuildClient`. The worker returns a flat `PreparedNetworkPayload`:
+positions, region codes, surface vertices/faces, spatial-grid CSR arrays,
+morphology segment field arrays, soma field arrays, and stats/config metadata.
+The client accepts only the latest requested sequence; stale ready/failure
+messages are ignored before they can reach the backend. rAF remains the only
+backend mutator: when the latest payload is ready it calls
+`WasmGpuBackend::apply_prepared_network`, then queues a settings and morphology
+re-push so any newer UI state is restored after the structural rebuild.
+
+`web/src/rebuild/rebuild-coordinator.ts → RebuildCoordinator` still owns
+latest-wins settings pushes and morphology config pushes. Morphology generator
+changes that are not part of a full network rebuild still go through
+`set_morphology_config(json)` on the main thread; moving that CPU generation to
+the worker is a remaining responsiveness follow-up.
 
 After flushing, the loop calls `gpuBackend.tick(ticks, excitability)` then
 `gpuBackend.render_frame(mvp, right, up, eye, dist)`. Violating this ordering
@@ -124,6 +137,7 @@ Three categories of backend call, each with a different cost profile:
 | `gpuBackend.tick(ticks, excitability)` | Every frame (time-based accumulator) | Submits compute passes; returns spike count |
 | `gpuBackend.update_settings(Float32Array)` | On settings change | Pushes `VisualSettings` uniform; one per change event |
 | `gpuBackend.set_morphology_config(json)` | On morphology config apply | Separate JSON path for the dev-panel morphology config; the backend diffs and runs the narrowest update. Distinct from the Float32Array — see below |
+| `gpuBackend.apply_prepared_network(flat payload...)` | On worker-prepared N/K/seed rebuild | Validates the versioned flat typed-array payload, reconstructs Rust manifold/grid/morphology structs, then performs main-thread WebGPU upload/resource creation |
 | `gpuBackend.startup_*()` | Startup only | Staged network/resource creation. JS yields between calls and records timings; the instance is not assigned to the rAF-owned `gpuBackend` until complete. |
 
 `render_frame` receives the MVP matrix and billboard axes from `Camera`; it does

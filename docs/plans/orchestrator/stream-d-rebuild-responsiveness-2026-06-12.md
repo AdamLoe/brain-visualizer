@@ -112,9 +112,26 @@ contract remains independent. High-conflict files: `web/src/main.ts`, `lib.rs`,
   `web/src/rebuild/rebuild-coordinator.test.ts` for latest-wins coalescing,
   staged post-rebuild pushes, and newer-network preemption of queued follow-up
   work.
+- Wave 2 payload/upload checkpoint is landed. `PreparedNetworkBuild` defines a
+  versioned GPU-agnostic flat payload for manifold, placement, spatial-grid CSR,
+  morphology segments, soma instances, and metadata; host tests validate
+  round-trip reconstruction and bad region-code rejection. `GpuResources` now
+  has `init_morph_resources_from_prepared`, so worker-prepared morphology enters
+  the same main-thread chunked upload/resource path as direct generation.
+- `web/src/gpu-build/network-build-worker.ts` owns a worker-local WASM instance
+  and prepares N/K/seed network rebuild payloads without requesting WebGPU.
+  `NetworkBuildClient` rejects stale ready/failure messages by sequence, and
+  `main.ts` applies only the latest ready payload from rAF via
+  `WasmGpuBackend::apply_prepared_network`.
+- Remaining D2 work: startup still uses main-thread staged `startup_build_manifold`
+  / `startup_upload_morphology`, and standalone morphology generator rebuilds
+  still call `set_morphology_config(json)` on the main thread. A dedicated
+  frame-counter/high-N worker responsiveness smoke is still deferred.
 
 ## Migration Notes
 
-At ship time, migrate current-state facts into `architecture/web-frontend.md`,
+Wave 2 current-state facts were migrated into `architecture/web-frontend.md`,
 `architecture/gpu-backend.md`, `architecture/manifold.md`, and
-`architecture/build-and-deploy.md` as applicable.
+`architecture/build-and-deploy.md`. Keep the plan active until startup and
+standalone morphology rebuild preparation are moved off the main thread or
+explicitly deferred by the owner.

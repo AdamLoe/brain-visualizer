@@ -110,8 +110,10 @@ degrades (single-threaded) rather than crashing. `crates/brain-visualizer/src/li
 log_cross_origin_isolation` logs the isolation state at boot for debugging.
 
 The ES-module worker format (`web/vite.config.ts → worker: { format: "es" }`) is
-required for code-splitting inside the CPU coordinator worker and for
-`crossOriginIsolated` to propagate into the worker context.
+required for code-splitting inside both WASM-loading workers: the parked CPU
+coordinator worker and the network-build worker
+(`web/src/gpu-build/network-build-worker.ts`). It also lets
+`crossOriginIsolated` propagate into worker context.
 
 ## Offline verification surface (the examples)
 
@@ -166,8 +168,9 @@ under `CI`) to make the same adapter/device failure hard-fail the test process.
 **`cargo run -p brain-visualizer --example morph_view`** — native review-artifact/defaults gate for the accepted-default morphology views and stats ledger.
 
 **`npm test` (vitest)** — pure-logic TypeScript unit tests (`web/**/*.test.ts`).
-Runs in Node without a browser. Covers `scalerDecide`, `tickExcitability`, and
-other pure functions.
+Runs in Node without a browser. Covers `scalerDecide`, `tickExcitability`,
+prepared-network payload validation, worker-client latest-wins stale rejection,
+and other pure functions.
 
 **`npm run build`** — production bundle gate (`wasm-pack` + `tsc --noEmit` + `vite build`). This is required for any change that can affect shipped WASM imports, bundle wiring, or first-load behavior.
 

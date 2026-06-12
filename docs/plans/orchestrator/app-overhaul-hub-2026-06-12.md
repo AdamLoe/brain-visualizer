@@ -58,7 +58,7 @@ stages.
 | Intake/bootstrap | Done | Manifest, docs router, overview, global orchestration rules, plan lifecycle, and pasted critique read. | Dispatch planning agents. |
 | Planning | Done | Eight child draft plan docs persisted under `docs/plans/orchestrator/` after splitting Stream C. | Activate first implementation wave. |
 | Plan review | Done | High-level review recommended staging A, splitting C, serializing B1/B2, and clarifying D1/D2. | Apply plan review edits and activate first wave. |
-| Implementation | In progress | First wave landed: Stream A A0/A1, B1, and D2 wave 1. | Commit wave 1 and continue later waves separately. |
+| Implementation | In progress | D2 worker-prepared network payload/upload checkpoint landed after D1 chunking; plan remains active for startup and standalone morphology prep. | Commit D2 checkpoint and continue remaining active waves separately. |
 | Work review | Done for wave 1 | Review-work pass found one smoke artifact gap and fixed it; no remaining blocking findings. | Commit wave 1. |
 | Closeout | In progress | Consolidated gates passed except real-adapter smoke remains environment-dependent. | Commit wave 1 and report next waves. |
 
@@ -72,7 +72,7 @@ stages.
 | C1 | CPU backend retirement/feature gate | Drafted | Split from original Stream C after plan review. | Await user decision before destructive deletion; feature-gate/archive path can proceed after activation. | Delete-vs-feature-gate decision. |
 | C2 | Legacy render/dead-code amnesty | Drafted | Split from original Stream C after plan review. | Wait until D1 and B1 are no longer touching render/settings surfaces. | Conflicts with D1/B1. |
 | D1 | Morphology segment scaling | Shipped | Chunked morphology resources, per-chunk compaction/draw, docs migration, cargo test, and render_check landed in `593b7d3`. | Use as the settled upload boundary for D2 worker payload integration. | Real high-N browser/GPU smoke remains environment-dependent. |
-| D2 | Rebuild responsiveness | Partially implemented | Wave 1 coordinator groundwork landed; web typecheck/tests passed; plan remains active for worker/payload phases. | Include in first-wave commit. | Prepared payload should stay GPU-agnostic and follow D1 upload boundary later. |
+| D2 | Rebuild responsiveness | Partially implemented | Worker-prepared N/K/seed payload integration landed: flat GPU-agnostic payload, Rust validation/round-trip tests, worker latest-wins stale rejection, and main-thread prepared upload through D1 chunking boundary. | Continue startup worker prep, standalone morphology generator worker prep, and high-N/frame-counter smoke. | Browser high-N responsiveness evidence remains deferred. |
 | E | Visual outcome and region coherence | Drafted | `stream-e-visual-outcome-polish-hud-truthfulness-2026-06-12.md` persisted. | Plan review. | Prototype can ship opt-in; default promotion needs review. |
 
 ## Activation Plan
@@ -98,8 +98,8 @@ stages.
 - After plan review, first implementation wave should avoid production
   telemetry enablement, CPU deletion, and default region promotion.
 - Stream B1 and B2 must not edit `sim/gpu/mod.rs` concurrently.
-- D2 worker-prepared payloads should remain GPU-agnostic; chunking is a
-  main-thread WebGPU upload policy unless implementation proves otherwise.
+- D2 worker-prepared payloads remain GPU-agnostic; chunking is a main-thread
+  WebGPU upload policy in `GpuResources::init_morph_resources_from_prepared`.
 
 ## Open Questions
 

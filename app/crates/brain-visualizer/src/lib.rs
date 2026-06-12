@@ -196,8 +196,143 @@ mod wasm_entry {
     // Created via: `const app = await WasmGpuBackend.create(canvas, n, k, seed, i_ext, syn)`
     // Returns a JS Promise<WasmGpuBackend>.
 
-    use crate::sim::gpu::{GpuBackend, NetworkBuildState, VisualSettings};
+    use crate::sim::gpu::{
+        morph_params_from_config_and_visual, reach_from_visual_settings, GpuBackend,
+        NetworkBuildState, PreparedNetworkBuild, VisualSettings, PREPARED_NETWORK_VERSION,
+    };
     use wasm_bindgen_futures::future_to_promise;
+
+    #[wasm_bindgen]
+    pub struct WasmPreparedNetwork {
+        inner: PreparedNetworkBuild,
+    }
+
+    #[wasm_bindgen]
+    impl WasmPreparedNetwork {
+        pub fn version(&self) -> u32 {
+            PREPARED_NETWORK_VERSION
+        }
+
+        pub fn n(&self) -> usize {
+            self.inner.config().n
+        }
+
+        pub fn k(&self) -> usize {
+            self.inner.config().k
+        }
+
+        pub fn seed(&self) -> u32 {
+            self.inner.config().seed_lo()
+        }
+
+        pub fn grid_dim(&self) -> u32 {
+            self.inner.grid_dim()
+        }
+
+        pub fn grid_cell_size(&self) -> f32 {
+            self.inner.grid_cell_size()
+        }
+
+        pub fn dropped_count(&self) -> usize {
+            self.inner.dropped_count()
+        }
+
+        pub fn positions(&self) -> Vec<f32> {
+            self.inner.positions_f32()
+        }
+
+        pub fn region_codes(&self) -> Vec<u8> {
+            self.inner.region_codes()
+        }
+
+        pub fn vertices(&self) -> Vec<f32> {
+            self.inner.vertices_f32()
+        }
+
+        pub fn faces(&self) -> Vec<u32> {
+            self.inner.faces_u32()
+        }
+
+        pub fn grid_min(&self) -> Vec<f32> {
+            self.inner.grid_min_f32()
+        }
+
+        pub fn grid_cell_start(&self) -> Vec<u32> {
+            self.inner.grid_cell_start_u32()
+        }
+
+        pub fn grid_cell_neurons(&self) -> Vec<u32> {
+            self.inner.grid_cell_neurons_u32()
+        }
+
+        pub fn segment_endpoints(&self) -> Vec<f32> {
+            self.inner.segment_endpoints_f32()
+        }
+
+        pub fn segment_path_len(&self) -> Vec<f32> {
+            self.inner.segment_path_len_f32()
+        }
+
+        pub fn segment_neuron_ids(&self) -> Vec<u32> {
+            self.inner.segment_neuron_ids_u32()
+        }
+
+        pub fn segment_kinds(&self) -> Vec<u32> {
+            self.inner.segment_kinds_u32()
+        }
+
+        pub fn segment_target_ids(&self) -> Vec<u32> {
+            self.inner.segment_target_ids_u32()
+        }
+
+        pub fn sphere_geometry(&self) -> Vec<f32> {
+            self.inner.sphere_geometry_f32()
+        }
+
+        pub fn sphere_neuron_ids(&self) -> Vec<u32> {
+            self.inner.sphere_neuron_ids_u32()
+        }
+
+        pub fn sphere_kinds(&self) -> Vec<u32> {
+            self.inner.sphere_kinds_u32()
+        }
+
+        pub fn stats_json(&self) -> String {
+            self.inner.stats_json()
+        }
+
+        pub fn params_json(&self) -> String {
+            self.inner.params_json()
+        }
+    }
+
+    #[wasm_bindgen]
+    pub fn prepare_network_payload(
+        n: usize,
+        k: usize,
+        seed: u32,
+        visual_settings: &[f32],
+        morph_config_json: &str,
+    ) -> Result<WasmPreparedNetwork, JsValue> {
+        let n = clamp_neuron_count(n);
+        let visual = VisualSettings::from_slice(visual_settings);
+        let morph_config =
+            crate::sim::morphology::MorphologyConfig::from_json(morph_config_json)
+                .map_err(|e| JsValue::from_str(&format!("[gpu-build] bad morph config: {e}")))?;
+        let params = morph_params_from_config_and_visual(&morph_config, &visual);
+        let reach = reach_from_visual_settings(&visual);
+        let config = SimConfig {
+            n,
+            k,
+            seed: seed as u64,
+            i_ext: visual.i_ext,
+            backend: crate::sim::backend::BackendKind::Gpu,
+            ..SimConfig::default()
+        };
+        Ok(WasmPreparedNetwork {
+            inner: PreparedNetworkBuild::prepare(config, params, reach),
+        })
+    }
 
     /// Browser GPU backend. Own the wgpu surface; delegates all sim/render to
     /// the native-tested GpuBackend.  Created by the async `WasmGpuBackend.create()`.
@@ -558,6 +693,90 @@ mod wasm_entry {
             self.inner.initialize(&config);
             self.inner.build_render_pipelines(self.surface_format);
             self.inner.resize_render_targets(self.width, self.height);
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        pub fn apply_prepared_network(
+            &mut self,
+            version: u32,
+            n: usize,
+            k: usize,
+            seed: u32,
+            visual_settings: &[f32],
+            morph_config_json: &str,
+            positions: &[f32],
+            region_codes: &[u8],
+            grid_min: &[f32],
+            grid_cell_size: f32,
+            grid_dim: u32,
+            grid_cell_start: &[u32],
+            grid_cell_neurons: &[u32],
+            vertices: &[f32],
+            faces: &[u32],
+            segment_endpoints: &[f32],
+            segment_path_len: &[f32],
+            segment_neuron_ids: &[u32],
+            segment_kinds: &[u32],
+            segment_target_ids: &[u32],
+            sphere_geometry: &[f32],
+            sphere_neuron_ids: &[u32],
+            sphere_kinds: &[u32],
+            dropped_count: usize,
+        ) -> Result<(), JsValue> {
+            if version != PREPARED_NETWORK_VERSION {
+                return Err(JsValue::from_str(&format!(
+                    "[gpu] prepared network version {version} != {PREPARED_NETWORK_VERSION}"
+                )));
+            }
+            let n = clamp_neuron_count(n);
+            let visual = VisualSettings::from_slice(visual_settings);
+            let morph_config =
+                crate::sim::morphology::MorphologyConfig::from_json(morph_config_json)
+                    .map_err(|e| JsValue::from_str(&format!("[gpu] bad morph config: {e}")))?;
+            let params = morph_params_from_config_and_visual(&morph_config, &visual);
+            let config = SimConfig {
+                n,
+                k,
+                seed: seed as u64,
+                i_ext: visual.i_ext,
+                backend: crate::sim::backend::BackendKind::Gpu,
+                ..SimConfig::default()
+            };
+            let mut stats = crate::sim::morphology::MorphologyStats::default();
+            stats.neuron_count = n;
+            stats.fanout_k = k;
+            stats.segment_count = segment_path_len.len();
+            stats.dropped_count = dropped_count;
+            let prepared = PreparedNetworkBuild::from_flat_payload(
+                config,
+                positions,
+                region_codes,
+                grid_min,
+                grid_cell_size,
+                grid_dim,
+                grid_cell_start,
+                grid_cell_neurons,
+                vertices,
+                faces,
+                segment_endpoints,
+                segment_path_len,
+                segment_neuron_ids,
+                segment_kinds,
+                segment_target_ids,
+                sphere_geometry,
+                sphere_neuron_ids,
+                sphere_kinds,
+                params,
+                stats,
+                dropped_count,
+            )
+            .map_err(|e| JsValue::from_str(&format!("[gpu] bad prepared network: {e}")))?;
+
+            self.inner
+                .initialize_prepared(prepared, visual, morph_config);
+            self.inner.build_render_pipelines(self.surface_format);
+            self.inner.resize_render_targets(self.width, self.height);
+            Ok(())
         }
 
         /// Release all GPU resources (BV16 teardown before a backend/tier restart).
