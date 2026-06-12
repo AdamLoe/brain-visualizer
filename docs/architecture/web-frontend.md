@@ -13,16 +13,19 @@ avoid wasm-bindgen reentrancy panics.
 
 ## What it owns
 
-- `web/src/main.ts` — boot sequence, rAF loop (`rafLoop`), all pending-flag
+- `web/src/main.ts` — boot sequence, startup overlay state, rAF loop (`rafLoop`), all pending-flag
   plumbing (`pendingResize`, `pendingStim`, `pendingSettingsPush`,
   `pendingNetworkRebuild`), `CpuCoordinator`, `startGpuBackend`,
   `restartWithBackend`, `computeStimulation`, `raySphereIntersect`
+- `web/index.html` — the immediate DOM/CSS startup overlay and full-viewport
+  canvas shell
 - `web/src/render/camera.ts → Camera` — orbit/zoom/pan state machine; produces MVP matrix,
   billboard right/up vectors, and unprojection rays
 - `web/src/ui/controls.ts` — `BRAIN_STATES`, `tickExcitability`, `setExcitabilityTarget`,
   `TIER_PRESETS`, `scalerDecide`, `ticksThisFrame`, `isMobile`, `Controls`
-- `web/src/render/renderer.ts → Renderer` — WebGPU canvas context + device acquisition;
-  fallback clear path used only when `WasmGpuBackend` is not yet ready
+- `web/src/render/renderer.ts → Renderer` — passive startup renderer facade;
+  it deliberately does not claim WebGPU/WebGL/2D canvas contexts before
+  `WasmGpuBackend` owns the live WebGPU surface
 - `web/src/core/types.ts → AppConfig`, `DEFAULT_CONFIG`, `SpeedPreset`, `BackendKind`,
   `Tier`, `BrainState`, `TickStats`, plus `AppConfig` localStorage persistence
   (`loadConfig`, `saveConfig`)
@@ -62,10 +65,32 @@ After flushing, the loop calls `gpuBackend.tick(ticks, excitability)` then
 `gpuBackend.render_frame(mvp, right, up, eye, dist)`. Violating this ordering
 triggers the wasm-bindgen "recursive use of an object" panic at runtime.
 
-The JS `Renderer` wrapper (`web/src/render/renderer.ts`) is kept alive as a fallback
-clear-to-black path for the brief window between boot and the async
-`WasmGpuBackend.create()` completing. Once the backend is live, all rendering
-goes through it.
+The JS `Renderer` wrapper (`web/src/render/renderer.ts`) is kept alive only as a
+passive compatibility facade during GPU startup. It does not request a WebGPU
+adapter/device and does not acquire WebGL2 or 2D fallback contexts on the brain
+canvas, because any pre-backend canvas context can prevent `WasmGpuBackend` from
+claiming the WebGPU surface. The visible pre-backend state is the DOM startup
+overlay and CSS canvas background. Once the backend is live, all rendering goes
+through `WasmGpuBackend.render_frame()`.
+
+## Startup Feedback
+
+`web/index.html` includes a fixed `#startup-overlay` in the initial HTML, so the
+browser paints a loading surface before the TypeScript module and wasm init do
+any heavy work. `main.ts` updates `window.__bvStartup` and the overlay through
+coarse stages: wasm load, isolation/config, canvas/input wiring, animation-loop
+start, WebGPU preparation, backend creation, first frame, and failure. The
+overlay includes a progress bar and frame counter; on success it fades out after
+the first GPU frame, and on backend failure it remains visible with the error.
+
+`boot()` also starts a lightweight startup `requestAnimationFrame` loop before
+`init()` so tests and users can see `window.__bvFrameCounter` advance while wasm
+and backend work is pending. The real app `rafLoop` replaces that lightweight
+loop before `WasmGpuBackend.create()` is kicked off. Backend creation yields for
+one animation frame before entering the Rust/WASM async factory, which gives the
+overlay a paint opportunity without changing WebGPU ownership. The old
+pre-backend `init_manifold()` logging path was removed; the real manifold is now
+created only inside `WasmGpuBackend.create()` / backend initialization.
 
 ## Wasm call boundary
 
@@ -141,12 +166,12 @@ is available on mobile too.
 
 ## Renderer (canvas + device acquisition)
 
-`web/src/render/renderer.ts → Renderer.init()` acquires the WebGPU adapter and device and
-configures the canvas context. This is only used during the brief init window
-before `WasmGpuBackend.create()` completes. After that, the backend owns the
-surface and `Renderer.render()` is called only as a black-canvas fallback
-(clear-only). The HDR render target lives inside the wasm backend, not in the
-TS wrapper.
+`web/src/render/renderer.ts → Renderer.init()` is intentionally passive: it logs
+readiness but does not acquire the WebGPU adapter/device, configure the canvas,
+or create fallback WebGL2/2D contexts. `WasmGpuBackend.create()` is the only live
+startup path that acquires the browser WebGPU device and surface. `Renderer.render()`
+is a no-op before backend readiness; the startup overlay owns visible feedback.
+The HDR render target lives inside the wasm backend, not in the TS wrapper.
 
 ## Types and DEFAULT_CONFIG
 
@@ -194,12 +219,13 @@ Wiring:
 
 ## Natural start
 
-There is no intro code, no scripted seed spike, and no animation sequence in
-`main.ts` or anywhere in the frontend. The sim starts immediately at boot; the
-`boot()` function calls `startGpuBackend()` and `requestAnimationFrame(rafLoop)`
-without any deferral. The posterior→anterior propagation that serves as the
-visual "wake-up" emerges from the sim's ambient input-region drive — the sim
-owns that drive; the frontend's only role is to not suppress it. See
+There is no intro code, no scripted seed spike, and no simulation animation
+sequence in `main.ts` or anywhere in the frontend. Startup has a DOM loading
+overlay only; once the backend is ready, the sim starts from its natural silent
+state. The `boot()` function starts rAF before async GPU creation so the page
+keeps painting while the backend is pending. The posterior→anterior propagation
+that serves as the visual "wake-up" emerges from the sim's ambient input-region
+drive — the sim owns that drive; the frontend's only role is to not suppress it. See
 [`simulation.md`](simulation.md) for the `I_ext` wiring.
 
 ## Mobile profile

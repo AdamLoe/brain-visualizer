@@ -32,16 +32,33 @@
 - **Decision.** The sim starts immediately from a silent state. Input-region
   neurons receive constant ambient `I_ext` drive; activity propagates naturally
   posterior→anterior. There is no scripted seed spike, no timed animation
-  sequence, and no special intro code anywhere in the frontend.
+  sequence, and no special simulation intro code anywhere in the frontend. The
+  startup overlay is status UI only; it does not drive or fake neural activity.
 - **Why.** The natural ramp-up is free, repeatable, and more honest than
   scripted drama. A scripted intro would diverge from actual sim behavior and
   require maintenance.
 - **Applies to.** [`../architecture/web-frontend.md`](../architecture/web-frontend.md),
   [`../architecture/simulation.md`](../architecture/simulation.md).
-- **Code anchors.** `web/src/main.ts → boot` (no deferred rAF, no seed-spike call);
+- **Code anchors.** `web/src/main.ts → boot` (startup overlay + early rAF, no seed-spike call);
   sim-side drive in `crates/brain-visualizer/src/sim/gpu/shaders/integrate.wgsl`.
 - **Alternatives considered.** Scripted seed spike at t=0, timed fade-in — both
   rejected: brittle, disconnected from real dynamics.
+
+## Startup feedback is DOM-only until the backend owns WebGPU
+
+- **Decision.** The page shows an immediate loading/progress overlay from
+  `index.html`, starts a lightweight rAF frame counter before wasm/backend work,
+  and keeps visible failure state if WebGPU startup fails. The frontend fallback
+  renderer does not acquire WebGPU, WebGL2, or 2D canvas contexts during GPU
+  startup.
+- **Why.** Users should never see a blank or hung page while the heavy backend
+  initializes, but the wasm backend must remain the single WebGPU surface owner.
+  DOM/CSS feedback gives paintable progress without creating duplicate devices
+  or locking the canvas into the wrong context.
+- **Applies to.** [`../architecture/web-frontend.md`](../architecture/web-frontend.md).
+- **Code anchors.** `web/index.html → #startup-overlay`;
+  `web/src/main.ts → updateStartupOverlay, startGpuBackend`;
+  `web/src/render/renderer.ts → Renderer`.
 
 ## Discrete speed presets (not a continuous slider)
 

@@ -1,4 +1,4 @@
-// Entry point (Consolidation): WASM load, manifold generation, controls event
+// Entry point (Consolidation): WASM load, startup progress, controls event
 // wiring, rAF + tick loop with excitability lerp, LOD plumbing.
 // (0.1.1: runtime auto-scaling removed — N is fixed at startup / user-driven.)
 // Consolidation closes OD11: WasmGpuBackend wires the wgpu canvas surface so
@@ -6,7 +6,6 @@
 
 import init, {
   WasmGpuBackend,
-  init_manifold,
   log_cross_origin_isolation,
 } from "../../crates/brain-visualizer/pkg/brain_visualizer.js";
 import { Camera } from "./render/camera";
@@ -51,14 +50,98 @@ const STIM_CURRENT = 0.3;   // biological mV → fixed-point in backend
 // surface; add a margin for gyrification deformation).
 const MANIFOLD_SPHERE_RADIUS = 1.4;
 
+type StartupStatus = "loading" | "ready" | "failed";
+
+interface StartupState {
+  status: StartupStatus;
+  stage: string;
+  progress: number;
+  frames: number;
+  startedAtMs: number;
+  backendMs?: number;
+}
+
+const BOOT_STARTED_AT_MS = performance.now();
+let startupState: StartupState = {
+  status: "loading",
+  stage: "Starting renderer...",
+  progress: 0,
+  frames: 0,
+  startedAtMs: BOOT_STARTED_AT_MS,
+};
+
+function updateStartupOverlay(update: {
+  status?: StartupStatus;
+  stage?: string;
+  progress?: number;
+  frames?: number;
+  backendMs?: number;
+}): void {
+  startupState = {
+    ...startupState,
+    ...update,
+    progress: clampProgress(update.progress ?? startupState.progress),
+  };
+  const w = window as unknown as { __bvStartup: StartupState };
+  w.__bvStartup = { ...startupState };
+
+  const overlay = document.getElementById("startup-overlay");
+  const stage = document.getElementById("startup-stage");
+  const bar = document.getElementById("startup-progress-bar");
+  const percent = document.getElementById("startup-percent");
+  const frames = document.getElementById("startup-frames");
+  if (overlay) {
+    overlay.classList.toggle("ready", startupState.status === "ready");
+    overlay.classList.toggle("failed", startupState.status === "failed");
+  }
+  if (stage) stage.textContent = startupState.stage;
+  if (bar) bar.style.width = `${Math.round(startupState.progress)}%`;
+  if (percent) percent.textContent = startupState.status === "failed"
+    ? "failed"
+    : `${Math.round(startupState.progress)}%`;
+  if (frames) frames.textContent = String(startupState.frames);
+}
+
+function publishFrameCounter(frameCounter: number): void {
+  (window as unknown as { __bvFrameCounter: number }).__bvFrameCounter = frameCounter;
+  startupState = { ...startupState, frames: frameCounter };
+  (window as unknown as { __bvStartup: StartupState }).__bvStartup = { ...startupState };
+  if (startupState.status !== "ready") {
+    const frames = document.getElementById("startup-frames");
+    if (frames) frames.textContent = String(startupState.frames);
+  }
+}
+
+function clampProgress(progress: number): number {
+  return Math.max(0, Math.min(100, progress));
+}
+
+function nextAnimationFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+}
+
 async function boot(): Promise<void> {
+  updateStartupOverlay({ stage: "Loading WASM module...", progress: 8 });
+  let startupFrameCounter = 0;
+  let startupRafHandle = 0;
+  const startupRafLoop = (): void => {
+    startupFrameCounter++;
+    publishFrameCounter(startupFrameCounter);
+    startupRafHandle = requestAnimationFrame(startupRafLoop);
+  };
+  startupRafHandle = requestAnimationFrame(startupRafLoop);
+
   // 1. Load WASM.
   await init();
+  updateStartupOverlay({ stage: "Checking browser isolation...", progress: 20 });
 
   // 2. COOP/COEP check.
   const isolated = (globalThis as { crossOriginIsolated?: boolean })
     .crossOriginIsolated === true;
   log_cross_origin_isolation(isolated);
+  updateStartupOverlay({ stage: "Loading saved configuration...", progress: 28 });
 
   // 3. Mobile detection — apply full mobile profile (Phase 7 / BV spec):
   //    Low tier, GPU only, 0.75×DPR render res, no near-LOD, no stim.
@@ -77,19 +160,21 @@ async function boot(): Promise<void> {
     console.log("[main] mobile detected → Low tier (N=10k K=16, GPU only, 0.75×DPR)");
     saveConfig(config); // persist the mobile-forced profile so it survives reload
   }
+  updateStartupOverlay({
+    stage: `Preparing canvas for N=${config.n} K=${config.k}...`,
+    progress: 38,
+  });
 
-  // 4. Generate manifold.
-  const neuronCount = init_manifold(config.n, config.seed >>> 0);
-  console.log(`[main] manifold generated: ${neuronCount} neurons placed`);
-
-  // 5. Canvas + renderer.
+  // 4. Canvas + renderer. The wasm backend creates the only live WebGPU
+  // context; the JS Renderer is passive before backend readiness.
   const canvas = document.getElementById("brain-canvas") as HTMLCanvasElement;
   // Mobile: render at 0.75× DPR (Phase 7 mobile profile).
   resizeCanvas(canvas, mobile ? 0.75 : 1.0);
   const renderer = new Renderer(canvas);
   await renderer.init();
+  updateStartupOverlay({ stage: "Wiring interaction controls...", progress: 46 });
 
-  // 6. Camera + input.
+  // 5. Camera + input.
   const camera = new Camera();
   camera.setAspect(canvas.width / canvas.height);
 
@@ -393,11 +478,15 @@ async function boot(): Promise<void> {
 
   /**
    * Create (or recreate) the wasm GPU backend for the current config.
-   * The GpuBackend owns the wgpu canvas surface; the Renderer wrapper is no
-   * longer needed for the real GPU path but is kept for the 2D/WebGL2 fallback.
+   * The GpuBackend owns the wgpu canvas surface; the Renderer wrapper stays
+   * passive so startup never creates a duplicate canvas/device context.
    */
   async function startGpuBackend(): Promise<void> {
+    const backendStartedAt = performance.now();
     try {
+      updateStartupOverlay({ stage: "Preparing WebGPU backend...", progress: 58 });
+      await nextAnimationFrame();
+      updateStartupOverlay({ stage: "Creating WebGPU device and pipelines...", progress: 68 });
       // WasmGpuBackend.create() acquires the browser WebGPU device, creates a
       // wgpu surface from the canvas, configures it, builds all pipelines,
       // uploads the manifold, and returns a ready-to-use backend.
@@ -414,10 +503,22 @@ async function boot(): Promise<void> {
       // visual settings and morphology config cross by explicit backend calls.
       pendingSettingsPush = true;
       pendingMorphConfig = morphConfigToJson(loadMorphConfig());
-      console.log("[main] WasmGpuBackend created");
+      const backendMs = performance.now() - backendStartedAt;
+      updateStartupOverlay({
+        stage: "Backend ready. Rendering first frame...",
+        progress: 94,
+        backendMs,
+      });
+      console.log(`[main] WasmGpuBackend created in ${backendMs.toFixed(1)}ms`);
     } catch (e) {
       console.error("[main] GPU backend creation failed:", e);
       showToast("WebGPU init failed — check browser support");
+      const message = e instanceof Error ? e.message : String(e);
+      updateStartupOverlay({
+        status: "failed",
+        stage: `WebGPU startup failed: ${message}`,
+        progress: 100,
+      });
       gpuBackend = null;
     }
   }
@@ -425,9 +526,6 @@ async function boot(): Promise<void> {
   // V2 Phase 0: subscribe to settings changes.  Set a flag (never call the
   // backend directly from the callback — it may fire while rafLoop holds &mut).
   subscribe(() => { pendingSettingsPush = true; });
-
-  // Boot the GPU backend immediately (async, runs while rAF is starting).
-  void startGpuBackend();
 
   /**
    * BV16 restart sequence: cancel rAF, tear down the current backend, reinit the
@@ -481,9 +579,10 @@ async function boot(): Promise<void> {
   let maxTicksPerSec = 0;
 
   // 12. rAF + tick loop.
-  let frameCounter = 0;
+  let frameCounter = startupFrameCounter;
   let lastTimestamp = performance.now();
   let tickCount = 0;
+  let firstReadyFrameSeen = false;
 
   function rafLoop(timestamp: DOMHighResTimeStamp): void {
     // ── Flush deferred mutations BEFORE any backend call ────────────────────
@@ -598,8 +697,15 @@ async function boot(): Promise<void> {
           eye[0],   eye[1],   eye[2],
           dist,
         );
+        if (!firstReadyFrameSeen) {
+          firstReadyFrameSeen = true;
+          const totalMs = performance.now() - BOOT_STARTED_AT_MS;
+          updateStartupOverlay({ status: "ready", stage: "Ready", progress: 100 });
+          console.log(`[main] first GPU frame rendered after ${totalMs.toFixed(1)}ms`);
+        }
       } else {
-        // gpuBackend not yet ready (still initializing) — clear to black.
+        // gpuBackend not yet ready (still initializing); visible startup state is
+        // handled by the DOM overlay so this does not claim the canvas context.
         renderer.render(camera, tickCount);
       }
     }
@@ -650,14 +756,18 @@ async function boot(): Promise<void> {
     frameCounter++;
     // Expose frame counter on window for integration tests (E2E can poll this to
     // confirm the rAF loop is alive without relying on visual output).
-    (window as unknown as { __bvFrameCounter: number }).__bvFrameCounter = frameCounter;
+    publishFrameCounter(frameCounter);
     lastTimestamp = timestamp;
     rafHandle = requestAnimationFrame(rafLoop);
   }
 
+  updateStartupOverlay({ stage: "Starting animation loop...", progress: 52 });
+  cancelAnimationFrame(startupRafHandle);
+  frameCounter = startupFrameCounter;
   rafHandle = requestAnimationFrame(rafLoop);
+  void startGpuBackend();
 
-  console.log("[main] Consolidation ready — OD11 GPU bridge wired (WasmGpuBackend); GPU init is async, rAF started");
+  console.log("[main] Consolidation ready — OD11 GPU bridge wired (WasmGpuBackend); rAF started before async GPU init");
 }
 
 /**
@@ -814,4 +924,12 @@ function resizeCanvas(canvas: HTMLCanvasElement, dprScale = 1.0): void {
   canvas.height = Math.floor(canvas.clientHeight * dpr) || 600;
 }
 
-boot().catch((e) => console.error("[main] boot failed:", e));
+boot().catch((e) => {
+  console.error("[main] boot failed:", e);
+  const message = e instanceof Error ? e.message : String(e);
+  updateStartupOverlay({
+    status: "failed",
+    stage: `Startup failed: ${message}`,
+    progress: 100,
+  });
+});

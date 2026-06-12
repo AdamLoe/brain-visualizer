@@ -15,13 +15,91 @@
       body {
         margin: 0;
         height: 100%;
-        background: #000;
+        background: #050607;
         overflow: hidden;
+        color: #f6f2ea;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
       }
       #brain-canvas {
         display: block;
         width: 100vw;
         height: 100vh;
+        background:
+          radial-gradient(circle at 50% 44%, rgba(35, 48, 58, 0.42), transparent 34%),
+          #050607;
+      }
+      #startup-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 30;
+        display: grid;
+        place-items: center;
+        pointer-events: none;
+        background:
+          radial-gradient(circle at 50% 46%, rgba(37, 93, 102, 0.18), transparent 32%),
+          linear-gradient(180deg, rgba(5, 6, 7, 0.84), rgba(5, 6, 7, 0.68));
+        opacity: 1;
+        transition: opacity 320ms ease, visibility 320ms ease;
+      }
+      #startup-overlay.ready {
+        opacity: 0;
+        visibility: hidden;
+      }
+      #startup-panel {
+        width: min(420px, calc(100vw - 48px));
+        padding: 24px;
+        border: 1px solid rgba(246, 242, 234, 0.16);
+        border-radius: 8px;
+        background: rgba(8, 10, 11, 0.74);
+        box-shadow: 0 20px 80px rgba(0, 0, 0, 0.42);
+        backdrop-filter: blur(14px);
+      }
+      #startup-title {
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        line-height: 1.2;
+        margin: 0 0 10px;
+        text-transform: uppercase;
+      }
+      #startup-stage {
+        min-height: 24px;
+        margin: 0;
+        color: rgba(246, 242, 234, 0.78);
+        font-size: 15px;
+        line-height: 1.5;
+      }
+      #startup-progress-track {
+        height: 4px;
+        margin: 18px 0 12px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: rgba(246, 242, 234, 0.13);
+      }
+      #startup-progress-bar {
+        width: 8%;
+        height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, #4fd0c8, #e7c06a);
+        transition: width 180ms ease;
+      }
+      #startup-meta {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        color: rgba(246, 242, 234, 0.56);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+        line-height: 1.4;
+      }
+      #startup-overlay.failed {
+        pointer-events: auto;
+      }
+      #startup-overlay.failed #startup-progress-bar {
+        width: 100%;
+        background: #d85b57;
       }
     </style>
   </head>
@@ -46,6 +124,20 @@
 
     <!-- Full-bleed brain canvas — everything else overlaid via position:fixed -->
     <canvas id="brain-canvas"></canvas>
+
+    <div id="startup-overlay" role="status" aria-live="polite">
+      <div id="startup-panel">
+        <p id="startup-title">Brain Visualizer</p>
+        <p id="startup-stage">Starting renderer...</p>
+        <div id="startup-progress-track" aria-hidden="true">
+          <div id="startup-progress-bar"></div>
+        </div>
+        <div id="startup-meta">
+          <span id="startup-percent">0%</span>
+          <span>frames <span id="startup-frames">0</span></span>
+        </div>
+      </div>
+    </div>
 
     <!-- Toast notification (used by controls.ts showToast) -->
     <div id="toast"></div>
