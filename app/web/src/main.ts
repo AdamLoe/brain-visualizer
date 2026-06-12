@@ -22,7 +22,11 @@ import { CornerHud } from "./ui/hud";
 import { Profiler } from "./render/profiler";
 import { Renderer } from "./render/renderer";
 import { RebuildCoordinator } from "./rebuild/rebuild-coordinator";
-import { NetworkBuildClient } from "./gpu-build/network-build-client";
+import {
+  morphConfigRequiresPreparedNetwork,
+  settingsRequirePreparedNetwork,
+} from "./rebuild/rebuild-intent";
+import { NetworkBuildClient, type PreparedNetworkStatus } from "./gpu-build/network-build-client";
 import type { PreparedNetworkPayload } from "./gpu-build/prepared-network";
 import {
   ZERO_STATS,
@@ -46,6 +50,32 @@ interface MorphCapableBackend {
 }
 
 interface PreparedNetworkCapableBackend {
+  startup_begin_prepared_network(
+    version: number,
+    n: number,
+    k: number,
+    seed: number,
+    visualSettings: Float32Array,
+    morphConfigJson: string,
+    positions: Float32Array,
+    regionCodes: Uint8Array,
+    gridMin: Float32Array,
+    gridCellSize: number,
+    gridDim: number,
+    gridCellStart: Uint32Array,
+    gridCellNeurons: Uint32Array,
+    vertices: Float32Array,
+    faces: Uint32Array,
+    segmentEndpoints: Float32Array,
+    segmentPathLen: Float32Array,
+    segmentNeuronIds: Uint32Array,
+    segmentKinds: Uint32Array,
+    segmentTargetIds: Uint32Array,
+    sphereGeometry: Float32Array,
+    sphereNeuronIds: Uint32Array,
+    sphereKinds: Uint32Array,
+    droppedCount: number,
+  ): void;
   apply_prepared_network(
     version: number,
     n: number,
@@ -72,6 +102,17 @@ interface PreparedNetworkCapableBackend {
     sphereKinds: Uint32Array,
     droppedCount: number,
   ): void;
+}
+
+interface BrainVisualizerTestHooks {
+  __bvFrameCounter?: number;
+  __bvStartup?: StartupState;
+  __bvNetworkBuildStatus?: PreparedNetworkStatus;
+  __bvRequestPreparedNetworkSmoke?: (request: {
+    n?: number;
+    k?: number;
+    seed?: number;
+  }) => number;
 }
 
 // Cursor stimulation constants (BV10 / phase-3 spec).
@@ -362,8 +403,10 @@ async function boot(): Promise<void> {
   const networkBuildClient = new NetworkBuildClient();
   let nextNetworkBuildSequence = 1;
   let lastReportedNetworkBuildFailure = 0;
+  let appliedMorphConfigJson = morphConfigToJson(loadMorphConfig());
+  let lastSettingsSnapshot = getSettings();
   rebuildCoordinator.requestSettingsPush();
-  rebuildCoordinator.requestMorphConfig(morphConfigToJson(loadMorphConfig()));
+  rebuildCoordinator.requestMorphConfig(appliedMorphConfigJson);
 
   // Sim tuning constants (Phase 2 locked values, verified by SOC sweep).
   // Shared by both GPU and CPU backends so the two backends run identical dynamics.
@@ -381,6 +424,52 @@ async function boot(): Promise<void> {
   // WebGL2 CpuRenderer draws. Tuning matches examples/cpu_check.rs / sim_check.rs.
   const cpu = new CpuCoordinator(canvas, SIM_I_EXT, SIM_SYN_SCALE);
 
+  function publishNetworkBuildStatus(): void {
+    (window as unknown as BrainVisualizerTestHooks).__bvNetworkBuildStatus =
+      networkBuildClient.currentStatus();
+  }
+
+  function requestPreparedNetwork(
+    reason: string,
+    morphConfigJson = morphConfigToJson(loadMorphConfig()),
+    visualSettings = toFloat32Array(getSettings()),
+  ): number {
+    const sequence = nextNetworkBuildSequence++;
+    networkBuildClient.request({
+      sequence,
+      n: config.n,
+      k: config.k,
+      seed: config.seed >>> 0,
+      visualSettings,
+      morphConfigJson,
+    });
+    publishNetworkBuildStatus();
+    console.log(`[main] network prepare requested (${reason}): seq=${sequence} n=${config.n} k=${config.k} seed=0x${(config.seed >>> 0).toString(16)}`);
+    return sequence;
+  }
+
+  async function waitForPreparedNetwork(sequence: number): Promise<PreparedNetworkPayload> {
+    for (;;) {
+      const ready = networkBuildClient.consumeReady();
+      publishNetworkBuildStatus();
+      if (ready !== null && ready.sequence === sequence) {
+        return ready;
+      }
+      const status = networkBuildClient.currentStatus();
+      if (status.kind === "failed" && status.sequence === sequence) {
+        throw new Error(status.message);
+      }
+      await nextAnimationFrame();
+    }
+  }
+
+  (window as unknown as BrainVisualizerTestHooks).__bvRequestPreparedNetworkSmoke = (request) => {
+    config.n = clampNeuronCount(request.n ?? config.n);
+    config.k = request.k ?? config.k;
+    config.seed = (request.seed ?? config.seed) >>> 0;
+    return requestPreparedNetwork("smoke");
+  };
+
   /**
    * Create (or recreate) the wasm GPU backend for the current config.
    * Startup uses the staged WASM API so the loading overlay can advance from
@@ -394,6 +483,8 @@ async function boot(): Promise<void> {
     const progressEnd = 96;
     const ctor = WasmGpuBackend as unknown as StagedGpuBackendConstructor;
     let stagedBackend: StagedGpuBackend | null = null;
+    let startupPreparedPayload: PreparedNetworkPayload | null = null;
+    const startupPrepareSequence = requestPreparedNetwork("startup", appliedMorphConfigJson);
 
     type BackendStage = {
       name: string;
@@ -427,9 +518,46 @@ async function boot(): Promise<void> {
         },
       },
       {
-        name: "Build manifold",
-        detail: "folded surface, neuron placement, spatial grid",
-        run: () => stagedBackend?.startup_build_manifold(),
+        name: "Prepare network payload",
+        detail: "worker-local WASM: manifold, placement, spatial grid, morphology",
+        run: async () => {
+          startupPreparedPayload = await waitForPreparedNetwork(startupPrepareSequence);
+        },
+      },
+      {
+        name: "Stage prepared payload",
+        detail: "validate worker payload and retain it for staged WebGPU upload",
+        run: () => {
+          if (stagedBackend === null || startupPreparedPayload === null) return;
+          (stagedBackend as unknown as PreparedNetworkCapableBackend).startup_begin_prepared_network(
+            startupPreparedPayload.version,
+            startupPreparedPayload.n,
+            startupPreparedPayload.k,
+            startupPreparedPayload.seed >>> 0,
+            startupPreparedPayload.visualSettings,
+            startupPreparedPayload.morphConfigJson,
+            startupPreparedPayload.positions,
+            startupPreparedPayload.regionCodes,
+            startupPreparedPayload.gridMin,
+            startupPreparedPayload.gridCellSize,
+            startupPreparedPayload.gridDim,
+            startupPreparedPayload.gridCellStart,
+            startupPreparedPayload.gridCellNeurons,
+            startupPreparedPayload.vertices,
+            startupPreparedPayload.faces,
+            startupPreparedPayload.segmentEndpoints,
+            startupPreparedPayload.segmentPathLen,
+            startupPreparedPayload.segmentNeuronIds,
+            startupPreparedPayload.segmentKinds,
+            startupPreparedPayload.segmentTargetIds,
+            startupPreparedPayload.sphereGeometry,
+            startupPreparedPayload.sphereNeuronIds,
+            startupPreparedPayload.sphereKinds,
+            startupPreparedPayload.droppedCount,
+          );
+          appliedMorphConfigJson = startupPreparedPayload.morphConfigJson;
+          lastSettingsSnapshot = getSettings();
+        },
       },
       {
         name: "Upload neuron buffers",
@@ -641,16 +769,7 @@ async function boot(): Promise<void> {
           config.k    = p.k;
           config.seed = p.seed >>> 0;
           saveConfig(config); // 0.1.1: persist user-chosen N/K so it survives reload
-          const sequence = nextNetworkBuildSequence++;
-          networkBuildClient.request({
-            sequence,
-            n: config.n,
-            k: config.k,
-            seed: config.seed >>> 0,
-            visualSettings: toFloat32Array(getSettings()),
-            morphConfigJson: morphConfigToJson(loadMorphConfig()),
-          });
-          console.log(`[main] network prepare requested: seq=${sequence} n=${config.n} k=${config.k} seed=0x${(config.seed >>> 0).toString(16)}`);
+          requestPreparedNetwork("network controls");
         },
         onConfigReset(defaultConfig: AppConfig): void {
           config.n = defaultConfig.n;
@@ -682,7 +801,11 @@ async function boot(): Promise<void> {
           rebuildCoordinator.requestMorphConfig(json);
         },
         onMorphRebuild(json: string): void {
-          rebuildCoordinator.requestMorphConfig(json);
+          if (morphConfigRequiresPreparedNetwork(appliedMorphConfigJson, json)) {
+            requestPreparedNetwork("morphology generator", json);
+          } else {
+            rebuildCoordinator.requestMorphConfig(json);
+          }
         },
       });
     }
@@ -762,7 +885,19 @@ async function boot(): Promise<void> {
 
   // V2 Phase 0: subscribe to settings changes.  Set a flag (never call the
   // backend directly from the callback — it may fire while rafLoop holds &mut).
-  subscribe(() => { rebuildCoordinator.requestSettingsPush(); });
+  subscribe((settings) => {
+    if (settingsRequirePreparedNetwork(lastSettingsSnapshot, settings)) {
+      lastSettingsSnapshot = { ...settings };
+      requestPreparedNetwork(
+        "structural settings",
+        morphConfigToJson(loadMorphConfig()),
+        toFloat32Array(settings),
+      );
+      return;
+    }
+    lastSettingsSnapshot = { ...settings };
+    rebuildCoordinator.requestSettingsPush();
+  });
 
   /**
    * BV16 restart sequence: cancel rAF, tear down the current backend, reinit the
@@ -835,6 +970,11 @@ async function boot(): Promise<void> {
       payload.sphereKinds,
       payload.droppedCount,
     );
+    config.n = payload.n;
+    config.k = payload.k;
+    config.seed = payload.seed >>> 0;
+    appliedMorphConfigJson = payload.morphConfigJson;
+    lastSettingsSnapshot = getSettings();
     rebuildCoordinator.requestSettingsPush();
     rebuildCoordinator.requestMorphConfig(morphConfigToJson(loadMorphConfig()));
     profiler.setConfig(config.backend, config.tier, payload.n, payload.k);
@@ -877,6 +1017,7 @@ async function boot(): Promise<void> {
       if (preparedPayload !== null) {
         try {
           applyPreparedNetworkPayload(preparedPayload);
+          publishNetworkBuildStatus();
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           console.error("[main] prepared network apply failed:", error);
@@ -885,6 +1026,7 @@ async function boot(): Promise<void> {
       }
     }
     const networkBuildStatus = networkBuildClient.currentStatus();
+    publishNetworkBuildStatus();
     if (
       networkBuildStatus.kind === "failed"
       && networkBuildStatus.sequence !== lastReportedNetworkBuildFailure

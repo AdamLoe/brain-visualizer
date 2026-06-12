@@ -80,10 +80,12 @@ backend mutator: when the latest payload is ready it calls
 re-push so any newer UI state is restored after the structural rebuild.
 
 `web/src/rebuild/rebuild-coordinator.ts → RebuildCoordinator` still owns
-latest-wins settings pushes and morphology config pushes. Morphology generator
-changes that are not part of a full network rebuild still go through
-`set_morphology_config(json)` on the main thread; moving that CPU generation to
-the worker is a remaining responsiveness follow-up.
+latest-wins immediate settings pushes and non-generator morphology config
+pushes. `web/src/rebuild/rebuild-intent.ts` classifies structural UI changes:
+N/K/seed, connection-curve lift, reach knobs, and morphology generator config
+changes request a worker-prepared payload for the current network; uniform-only
+lighting and render-quality-only morphology changes can still flow through
+`set_morphology_config(json)` because they do not run the morphology generator.
 
 After flushing, the loop calls `gpuBackend.tick(ticks, excitability)` then
 `gpuBackend.render_frame(mvp, right, up, eye, dist)`. Violating this ordering
@@ -117,15 +119,18 @@ replaces the lightweight loop later, but it sees `gpuBackend === null` until the
 staged backend has completed every startup stage. This prevents the rAF loop
 from touching half-built GPU resources.
 
-The staged path is `WasmGpuBackend.create_staged()` followed by explicit
-`startup_*` calls: build manifold, upload neuron/grid buffers, upload render
-mesh, allocate LOD/edge buffers, generate/upload morphology, refresh bind
-groups/reset state, compile render pipelines, and create render targets. `main.ts`
-awaits one animation frame before each stage and records its wall-clock duration,
-so the progress bar advances from completed work instead of a single fake
-backend percentage. The legacy `WasmGpuBackend.create()` monolith remains as a
+The staged path starts a network-build worker request before device acquisition,
+then uses `WasmGpuBackend.create_staged()` followed by explicit `startup_*`
+calls: wait for the prepared payload, validate/stage it with
+`startup_begin_prepared_network`, upload neuron/grid buffers, upload render mesh,
+allocate LOD/edge buffers, upload prepared morphology, refresh bind groups/reset
+state, compile render pipelines, and create render targets. `main.ts` awaits one
+animation frame before each stage and records its wall-clock duration, so the
+progress bar advances from completed work instead of a single fake backend
+percentage. The legacy `WasmGpuBackend.create()` monolith remains as a
 compatibility fallback. The old pre-backend `init_manifold()` logging path was
-removed; the real manifold is now created only inside the backend startup path.
+removed; the real startup manifold/morphology CPU payload is now prepared by the
+same worker path used by structural rebuilds.
 
 ## Wasm call boundary
 
@@ -138,6 +143,7 @@ Three categories of backend call, each with a different cost profile:
 | `gpuBackend.update_settings(Float32Array)` | On settings change | Pushes `VisualSettings` uniform; one per change event |
 | `gpuBackend.set_morphology_config(json)` | On morphology config apply | Separate JSON path for the dev-panel morphology config; the backend diffs and runs the narrowest update. Distinct from the Float32Array — see below |
 | `gpuBackend.apply_prepared_network(flat payload...)` | On worker-prepared N/K/seed rebuild | Validates the versioned flat typed-array payload, reconstructs Rust manifold/grid/morphology structs, then performs main-thread WebGPU upload/resource creation |
+| `gpuBackend.startup_begin_prepared_network(flat payload...)` | Startup only | Validates the worker payload and stores it as staged startup state; later `startup_*` calls own WebGPU upload |
 | `gpuBackend.startup_*()` | Startup only | Staged network/resource creation. JS yields between calls and records timings; the instance is not assigned to the rAF-owned `gpuBackend` until complete. |
 
 `render_frame` receives the MVP matrix and billboard axes from `Camera`; it does
@@ -153,12 +159,13 @@ The morphology config travels a **separate** channel from the Float32Array:
 `crates/brain-visualizer/src/lib.rs → WasmGpuBackend::set_morphology_config` takes
 a JSON string (the `MorphologyConfig` from `web/src/core/morph-config.ts`,
 persisted under its own `bv2_morph_v2` key) rather than a packed float array, and
-the backend chooses the narrowest update path. The dev-panel apply is queued like
-the other backend calls through `RebuildCoordinator`. Boot also queues
-`morphConfigToJson(loadMorphConfig())` before backend creation and refreshes that
-queued JSON immediately after `WasmGpuBackend.create()`, so
-persisted morphology settings are applied to the Rust backend on the first
-available frame even when the user never touches a morphology slider.
+the backend chooses the narrowest immediate update path. The dev-panel apply is
+queued like the other backend calls through `RebuildCoordinator` only when the
+change is uniform-only or render-quality-only; generator changes request a
+worker-prepared payload instead. Boot passes `morphConfigToJson(loadMorphConfig())`
+into the startup worker request, so persisted generator settings are already
+present in the prepared startup payload even when the user never touches a
+morphology slider.
 Why a separate key + entry point rather than extending the frozen Float32Array:
 see [`../decisions/dev-tooling.md`](../decisions/dev-tooling.md).
 

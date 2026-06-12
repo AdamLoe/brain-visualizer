@@ -1,8 +1,8 @@
 ---
-status:        active
+status:        shipped
 owner:         unassigned
 last_updated:  2026-06-12
-okay_to_delete: false
+okay_to_delete: true
 long_lived:    false
 owning_docs:
   - architecture/build-and-deploy.md
@@ -123,15 +123,28 @@ contract remains independent. High-conflict files: `web/src/main.ts`, `lib.rs`,
   `NetworkBuildClient` rejects stale ready/failure messages by sequence, and
   `main.ts` applies only the latest ready payload from rAF via
   `WasmGpuBackend::apply_prepared_network`.
-- Remaining D2 work: startup still uses main-thread staged `startup_build_manifold`
-  / `startup_upload_morphology`, and standalone morphology generator rebuilds
-  still call `set_morphology_config(json)` on the main thread. A dedicated
-  frame-counter/high-N worker responsiveness smoke is still deferred.
+- D2 completion landed startup and standalone structural rebuild routing on the
+  same worker-prepared payload path. Startup requests the worker payload before
+  WebGPU upload and stages it through `startup_begin_prepared_network`; N/K/seed,
+  curve/reach settings, and morphology generator config changes request
+  latest-wins worker prep. Uniform-only lighting and render-quality-only
+  morphology changes stay on immediate `set_morphology_config(json)` because
+  they do not run the morphology generator.
+- `web/e2e/rebuild_responsiveness.spec.ts` proves the browser frame counter
+  advances while a high-N worker prepare is in flight. This is browser
+  responsiveness evidence, not real-hardware WebGPU throughput evidence.
 
 ## Migration Notes
 
-Wave 2 current-state facts were migrated into `architecture/web-frontend.md`,
-`architecture/gpu-backend.md`, `architecture/manifold.md`, and
-`architecture/build-and-deploy.md`. Keep the plan active until startup and
-standalone morphology rebuild preparation are moved off the main thread or
-explicitly deferred by the owner.
+Current-state facts were migrated into:
+
+- `architecture/web-frontend.md` — rAF mutation ordering, structural intent
+  classification, startup prepared-payload staging, and morph-config routing.
+- `architecture/gpu-backend.md` — staged prepared startup API and
+  worker-prepared upload boundary.
+- `architecture/manifold.md` — worker-prepared startup/rebuild payload scope.
+- `architecture/build-and-deploy.md` — focused responsiveness Playwright smoke.
+
+No new decision entry was needed: the already-recorded boundary still holds
+that workers prepare GPU-agnostic CPU payloads while WebGPU ownership and upload
+stay on the main thread.

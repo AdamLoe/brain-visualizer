@@ -58,7 +58,7 @@ stages.
 | Intake/bootstrap | Done | Manifest, docs router, overview, global orchestration rules, plan lifecycle, and pasted critique read. | Dispatch planning agents. |
 | Planning | Done | Eight child draft plan docs persisted under `docs/plans/orchestrator/` after splitting Stream C. | Activate first implementation wave. |
 | Plan review | Done | High-level review recommended staging A, splitting C, serializing B1/B2, and clarifying D1/D2. | Apply plan review edits and activate first wave. |
-| Implementation | In progress | D2 worker-prepared network payload/upload checkpoint landed after D1 chunking; plan remains active for startup and standalone morphology prep. | Commit D2 checkpoint and continue remaining active waves separately. |
+| Implementation | In progress | D2 remaining responsiveness work is implemented and gated: startup and structural rebuild prep use the worker payload path, with high-N/frame-counter smoke evidence. | Continue only decision-gated or separately active waves. |
 | Work review | Done for wave 1 | Review-work pass found one smoke artifact gap and fixed it; no remaining blocking findings. | Commit wave 1. |
 | Closeout | In progress | Consolidated gates passed except real-adapter smoke remains environment-dependent. | Commit wave 1 and report next waves. |
 
@@ -72,7 +72,7 @@ stages.
 | C1 | CPU backend retirement/feature gate | Drafted | Split from original Stream C after plan review. | Await user decision before destructive deletion; feature-gate/archive path can proceed after activation. | Delete-vs-feature-gate decision. |
 | C2 | Legacy render/dead-code amnesty | Drafted | Split from original Stream C after plan review. | Wait until D1 and B1 are no longer touching render/settings surfaces. | Conflicts with D1/B1. |
 | D1 | Morphology segment scaling | Shipped | Chunked morphology resources, per-chunk compaction/draw, docs migration, cargo test, and render_check landed in `593b7d3`. | Use as the settled upload boundary for D2 worker payload integration. | Real high-N browser/GPU smoke remains environment-dependent. |
-| D2 | Rebuild responsiveness | Partially implemented | Worker-prepared N/K/seed payload integration landed: flat GPU-agnostic payload, Rust validation/round-trip tests, worker latest-wins stale rejection, and main-thread prepared upload through D1 chunking boundary. | Continue startup worker prep, standalone morphology generator worker prep, and high-N/frame-counter smoke. | Browser high-N responsiveness evidence remains deferred. |
+| D2 | Rebuild responsiveness | Shipped | Startup worker prep, structural settings/generator routing, staged prepared upload, and high-N/frame-counter Playwright smoke passed; real-hardware throughput remains environment-dependent. | None for non-decision-gated D2. | Real hardware performance evidence still needs a real adapter lane. |
 | E | Visual outcome and region coherence | Shipped | Internal opt-in anterior/posterior prototype landed in `b7fbc66`; default hash-random assignment remains unchanged; cargo test passed. | Manual visual/dynamics review before any default promotion. | No screenshot/clip captured because the prototype is internal-only. |
 
 ## Activation Plan
@@ -82,7 +82,7 @@ stages.
 | 1 | Ready | A0 real-hardware smoke from Stream A; B1 settings/metrics contracts; D2 wave 1 rebuild coordinator groundwork | Low-regret foundations that do not require production telemetry, CPU deletion, or region-default decisions. |
 | 2 | Pending | B2 simulation correctness gates | Valuable but overlaps `sim/gpu/mod.rs`; run after B1 or with strict file-region ownership. |
 | 3 | Done | D1 morphology segment scaling | Shipped in `593b7d3`; chunking remains a main-thread GPU upload/resource policy. |
-| 4 | Ready | D2 worker upload integration | D1 settled the upload/chunking boundary; worker payloads must remain flat and GPU-agnostic. |
+| 4 | Done | D2 remaining responsiveness work | Startup worker prep, standalone morphology generator prep, and high-N/frame-counter smoke shipped. |
 | 5 | Done | Stream E spatial-region prototype | Shipped as an internal opt-in mode; promotion to default requires visual/dynamics review. |
 | Decision-gated | Pending | A2 production telemetry enablement, C1 CPU deletion, C2 legacy render amnesty | Requires owner decision or dependency clearance. |
 
@@ -100,6 +100,9 @@ stages.
 - Stream B1 and B2 must not edit `sim/gpu/mod.rs` concurrently.
 - D2 worker-prepared payloads remain GPU-agnostic; chunking is a main-thread
   WebGPU upload policy in `GpuResources::init_morph_resources_from_prepared`.
+- D2 browser responsiveness smoke proves frame-counter/event-loop progress
+  during high-N worker preparation; it does not claim real-hardware WebGPU
+  throughput on this llvmpipe/no-adapter development environment.
 
 ## Open Questions
 
@@ -131,6 +134,8 @@ stages.
 - `cd app/web && npm test` passed.
 - `cd app/web && npm run build` passed outside the sandbox after the sandbox
   blocked `wasm-pack` temp install files.
+- `cd app/web && USE_WEBSERVER=1 npm run test:e2e:responsiveness` passed outside
+  the sandbox after the sandbox blocked the `wasm-pack` dev build.
 - `cd app/web && USE_WEBSERVER=1 npm run test:e2e:smoke` passed outside the
   sandbox after the sandbox blocked Chromium startup.
 - Real-adapter smoke remains outstanding: this environment can produce a

@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-04
+last_updated:  2026-06-12
 ---
 
 # Build and Deploy
@@ -184,6 +184,13 @@ automatically. The port is hard-coded: Vite falls back to 5174+ when 5173 is
 already held by a stale `npm run dev`, and a manual e2e run would then point at
 the wrong server. Stop the process on 5173 before starting (see
 [`../agent-context/dev-loop.md`](../agent-context/dev-loop.md) → "Run the app").
+
+**`npm run test:e2e:responsiveness`** — focused Playwright smoke for rebuild
+responsiveness. It boots the browser, requests a high-N worker-prepared network
+payload through the test hook in `web/src/main.ts`, and asserts the published
+frame counter advances while `NetworkBuildClient` reports the prepare is still
+in flight. This proves browser event-loop/rAF responsiveness around worker CPU
+prep; it is not real-hardware WebGPU performance evidence.
 
 When the task is specifically about shipping/defaults/build behavior, also run
 `npm run preview` against the built `dist/` and confirm the isolation headers.

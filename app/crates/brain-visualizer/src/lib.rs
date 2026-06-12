@@ -473,6 +473,92 @@ mod wasm_entry {
             self.pending_network = Some(self.inner.begin_initialize(&config));
         }
 
+        /// Staged startup: accept a worker-prepared pure-CPU network payload and
+        /// retain it for the normal main-thread WebGPU upload stages.
+        #[allow(clippy::too_many_arguments)]
+        pub fn startup_begin_prepared_network(
+            &mut self,
+            version: u32,
+            n: usize,
+            k: usize,
+            seed: u32,
+            visual_settings: &[f32],
+            morph_config_json: &str,
+            positions: &[f32],
+            region_codes: &[u8],
+            grid_min: &[f32],
+            grid_cell_size: f32,
+            grid_dim: u32,
+            grid_cell_start: &[u32],
+            grid_cell_neurons: &[u32],
+            vertices: &[f32],
+            faces: &[u32],
+            segment_endpoints: &[f32],
+            segment_path_len: &[f32],
+            segment_neuron_ids: &[u32],
+            segment_kinds: &[u32],
+            segment_target_ids: &[u32],
+            sphere_geometry: &[f32],
+            sphere_neuron_ids: &[u32],
+            sphere_kinds: &[u32],
+            dropped_count: usize,
+        ) -> Result<(), JsValue> {
+            if version != PREPARED_NETWORK_VERSION {
+                return Err(JsValue::from_str(&format!(
+                    "[gpu] prepared network version {version} != {PREPARED_NETWORK_VERSION}"
+                )));
+            }
+            let n = clamp_neuron_count(n);
+            let visual = VisualSettings::from_slice(visual_settings);
+            let morph_config =
+                crate::sim::morphology::MorphologyConfig::from_json(morph_config_json)
+                    .map_err(|e| JsValue::from_str(&format!("[gpu] bad morph config: {e}")))?;
+            let params = morph_params_from_config_and_visual(&morph_config, &visual);
+            let config = SimConfig {
+                n,
+                k,
+                seed: seed as u64,
+                i_ext: visual.i_ext,
+                backend: crate::sim::backend::BackendKind::Gpu,
+                ..SimConfig::default()
+            };
+            let mut stats = crate::sim::morphology::MorphologyStats::default();
+            stats.neuron_count = n;
+            stats.fanout_k = k;
+            stats.segment_count = segment_path_len.len();
+            stats.dropped_count = dropped_count;
+            let prepared = PreparedNetworkBuild::from_flat_payload(
+                config,
+                positions,
+                region_codes,
+                grid_min,
+                grid_cell_size,
+                grid_dim,
+                grid_cell_start,
+                grid_cell_neurons,
+                vertices,
+                faces,
+                segment_endpoints,
+                segment_path_len,
+                segment_neuron_ids,
+                segment_kinds,
+                segment_target_ids,
+                sphere_geometry,
+                sphere_neuron_ids,
+                sphere_kinds,
+                params,
+                stats,
+                dropped_count,
+            )
+            .map_err(|e| JsValue::from_str(&format!("[gpu] bad prepared network: {e}")))?;
+
+            self.pending_network = Some(
+                self.inner
+                    .begin_initialize_prepared_with_settings(prepared, visual, morph_config),
+            );
+            Ok(())
+        }
+
         /// Staged startup: upload neuron, grid, and sim scratch buffers.
         pub fn startup_upload_neuron_buffers(&mut self) -> Result<(), JsValue> {
             let state = self.pending_network.as_ref().ok_or_else(|| {

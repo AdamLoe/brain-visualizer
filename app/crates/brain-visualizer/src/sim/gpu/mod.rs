@@ -1426,6 +1426,19 @@ impl GpuBackend {
         }
     }
 
+    pub fn begin_initialize_prepared_with_settings(
+        &mut self,
+        prepared: PreparedNetworkBuild,
+        visual: VisualSettings,
+        morph_config: crate::sim::morphology::MorphologyConfig,
+    ) -> NetworkBuildState {
+        self.set_i_ext(visual.i_ext);
+        self.set_synaptic_scale(visual.synaptic_scale);
+        self.visual = visual;
+        self.morph_config = morph_config;
+        self.begin_initialize_prepared(prepared)
+    }
+
     /// Upload neuron/grid/sim buffers for a staged network build.
     pub fn initialize_neuron_buffers(&mut self, state: &NetworkBuildState) {
         self.resources.resize_neurons(
@@ -1528,11 +1541,7 @@ impl GpuBackend {
         visual: VisualSettings,
         morph_config: crate::sim::morphology::MorphologyConfig,
     ) {
-        self.set_i_ext(visual.i_ext);
-        self.set_synaptic_scale(visual.synaptic_scale);
-        self.visual = visual;
-        self.morph_config = morph_config;
-        let state = self.begin_initialize_prepared(prepared);
+        let state = self.begin_initialize_prepared_with_settings(prepared, visual, morph_config);
         self.initialize_neuron_buffers(&state);
         self.initialize_render_resources(&state);
         self.initialize_lod_edge_resources(&state);

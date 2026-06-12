@@ -10,10 +10,11 @@ Procedural generation of a brain-shaped surface, placement of neurons in a
 cortical-shell-biased brain volume, assignment of cortical region class to each
 neuron, and the
 host-side morphology geometry that gives each neuron a visible soma + dendrite
-tree + axon arbor. All of this runs on the CPU at `initialize()` time; the
-resulting buffers are uploaded once to the GPU and remain static for the
-life of the network. Browser N/K/seed rebuilds can prepare this CPU payload in a
-dedicated module worker; WebGPU upload still happens on the main thread.
+tree + axon arbor. All of this is pure CPU preparation; browser startup and
+structural rebuilds prepare the payload in a dedicated module worker where
+feasible, while WebGPU upload still happens on the main thread. The resulting
+buffers are uploaded once to the GPU and remain static for the life of the
+network.
 
 ## What it owns
 
@@ -105,7 +106,7 @@ The six-step pipeline runs synchronously in `crates/brain-visualizer/src/manifol
    cursor stimulation. The current folded-placement verification recorded
    `occupied_cells = 1409` and `max_cell_occupancy = 43`.
 
-For worker-prepared browser rebuilds, the same generated facts cross the
+For worker-prepared browser startup/rebuilds, the same generated facts cross the
 JS/WASM boundary as explicit flat arrays: positions, region codes, surface
 vertices/faces, and the spatial-grid CSR (`min`, `cell_size`, `dim`,
 `cell_start`, `cell_neurons`). `PreparedNetworkBuild::from_flat_payload`
