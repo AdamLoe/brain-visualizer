@@ -21,6 +21,7 @@ import { CpuRenderer } from "./cpu/cpu-renderer";
 import { CornerHud } from "./ui/hud";
 import { Profiler } from "./render/profiler";
 import { Renderer } from "./render/renderer";
+import { RebuildCoordinator } from "./rebuild/rebuild-coordinator";
 import {
   ZERO_STATS,
   clampNeuronCount,
@@ -323,19 +324,12 @@ async function boot(): Promise<void> {
   // mutations must flow through it.
   let pendingResize: { w: number; h: number } | null = null;
   let pendingStim: { x: number; y: number; z: number; radius: number; current: number } | null = null;
-  // V2 Phase 0: settings push flag.  Set by the subscribe callback; flushed at
-  // the top of rafLoop alongside pendingResize to avoid &mut reentrancy.
-  let pendingSettingsPush = true; // push once immediately after backend ready
   // V2 Phase B: brain-reset flag.  Kept as no-op stub (UX round 2 removed the
   // pending UI, but the flag is harmless and keeps the flush path intact).
   let pendingBrainReset = false;
-  // UX round 2: network rebuild flag — set by onNetwork handler, flushed at top
-  // of rafLoop (same &mut discipline as pendingResize / pendingBrainReset).
-  let pendingNetworkRebuild = false;
-  // v0.3.1: morphology-config JSON to push, set by the dev-panel morph handlers
-  // (live uniform edits AND the explicit Rebuild). Flushed via set_morphology_config
-  // in the rafLoop &mut-discipline block. Latest-wins (a single JSON snapshot).
-  let pendingMorphConfig: string | null = morphConfigToJson(loadMorphConfig());
+  const rebuildCoordinator = new RebuildCoordinator();
+  rebuildCoordinator.requestSettingsPush();
+  rebuildCoordinator.requestMorphConfig(morphConfigToJson(loadMorphConfig()));
 
   // Sim tuning constants (Phase 2 locked values, verified by SOC sweep).
   // Shared by both GPU and CPU backends so the two backends run identical dynamics.
@@ -488,8 +482,8 @@ async function boot(): Promise<void> {
         gpuBackend = stagedBackend;
       }
 
-      pendingSettingsPush = true;
-      pendingMorphConfig = morphConfigToJson(loadMorphConfig());
+      rebuildCoordinator.requestSettingsPush();
+      rebuildCoordinator.requestMorphConfig(morphConfigToJson(loadMorphConfig()));
       const backendMs = performance.now() - backendStartedAt;
       updateStartupOverlay({
         stage: "Backend ready. Rendering first frame...",
@@ -584,8 +578,8 @@ async function boot(): Promise<void> {
     // UX round 2: wire sim handlers (excitability, speed-tps, network rebuild).
     // onExcitability: delegates to setExcitabilityTarget; existing lerp smoothly approaches.
     // onSpeed: sets targetTicksPerSec (1–60); time-based accumulator uses it next frame.
-    // onNetwork: deferred rebuild — sets pendingNetworkRebuild flag flushed at rafLoop top
-    //   (same &mut discipline as all other backend mutations).
+    // onNetwork: deferred rebuild — queues a latest-wins coordinator request
+    // flushed from rafLoop under the same &mut discipline as all other backend mutations.
     if (typeof (devPanel as unknown as { setSimHandlers: unknown }).setSimHandlers === "function") {
       (devPanel as unknown as {
         setSimHandlers(h: {
@@ -612,8 +606,11 @@ async function boot(): Promise<void> {
           config.k    = p.k;
           config.seed = p.seed >>> 0;
           saveConfig(config); // 0.1.1: persist user-chosen N/K so it survives reload
-          pendingNetworkRebuild = true;
-          pendingSettingsPush   = true;
+          rebuildCoordinator.requestNetwork({
+            n: config.n,
+            k: config.k,
+            seed: config.seed >>> 0,
+          });
         },
         onConfigReset(defaultConfig: AppConfig): void {
           config.n = defaultConfig.n;
@@ -630,8 +627,8 @@ async function boot(): Promise<void> {
       });
     }
 
-    // v0.3.1: wire morphology-config apply handlers. Both paths stash the JSON in
-    // pendingMorphConfig (latest-wins); the rafLoop flushes it via
+    // v0.3.1: wire morphology-config apply handlers. Both paths queue JSON in
+    // the rebuild coordinator (latest-wins); the rafLoop flushes it via
     // set_morphology_config under the same &mut discipline. The Rust side diffs
     // the config and runs the narrowest update (uniform / regenerate / pipeline).
     if (typeof (devPanel as unknown as { setMorphHandlers: unknown }).setMorphHandlers === "function") {
@@ -642,10 +639,10 @@ async function boot(): Promise<void> {
         }): void;
       }).setMorphHandlers({
         onMorphLive(json: string): void {
-          pendingMorphConfig = json;
+          rebuildCoordinator.requestMorphConfig(json);
         },
         onMorphRebuild(json: string): void {
-          pendingMorphConfig = json;
+          rebuildCoordinator.requestMorphConfig(json);
         },
       });
     }
@@ -725,7 +722,7 @@ async function boot(): Promise<void> {
 
   // V2 Phase 0: subscribe to settings changes.  Set a flag (never call the
   // backend directly from the callback — it may fire while rafLoop holds &mut).
-  subscribe(() => { pendingSettingsPush = true; });
+  subscribe(() => { rebuildCoordinator.requestSettingsPush(); });
 
   /**
    * BV16 restart sequence: cancel rAF, tear down the current backend, reinit the
@@ -797,38 +794,34 @@ async function boot(): Promise<void> {
     // V2 Phase B: brain reset — now a no-op stub (UX round 2 removed the UI).
     if (pendingBrainReset && gpuBackend) {
       pendingBrainReset = false;
-      // No-op: brain-reset pending UI removed; network rebuilds go via pendingNetworkRebuild.
+      // No-op: brain-reset pending UI removed; network rebuilds go via the coordinator.
     }
-    // UX round 2: deferred network rebuild (N/K/seed change from Network tab).
-    // Never call reinitialize directly from the onNetwork handler — use this
-    // deferred flag to avoid &mut reentrancy on WasmGpuBackend.
-    if (pendingNetworkRebuild && gpuBackend) {
-      pendingNetworkRebuild = false;
-      gpuBackend.reinitialize(
-        config.n,
-        config.k,
-        config.seed >>> 0,
-        getSettings().iExt,
-        getSettings().synapticScale,
-      );
-      // Re-push all settings so visual knobs apply to the fresh network.
-      pendingSettingsPush = true;
-      pendingMorphConfig = morphConfigToJson(loadMorphConfig());
-      console.log(`[main] network rebuild: n=${config.n} k=${config.k} seed=0x${config.seed.toString(16)}`);
-    }
-    // V2 Phase 0: push settings to the backend when changed (or on first frame
-    // after backend creation).
-    if (pendingSettingsPush && gpuBackend) {
-      gpuBackend.update_settings(toFloat32Array(getSettings()));
-      pendingSettingsPush = false;
-    }
-    // v0.3.1: flush morphology-config JSON to the backend. The Rust side diffs
-    // current-vs-new and chooses uniform-only / regenerate / pipeline-rebuild.
-    // TODO(v0.3.1): set_morphology_config exists after the parallel wasm rebuild;
-    // the method is declared on MorphCapableBackend below so typecheck passes now.
-    if (pendingMorphConfig !== null && gpuBackend) {
-      (gpuBackend as unknown as MorphCapableBackend).set_morphology_config(pendingMorphConfig);
-      pendingMorphConfig = null;
+    if (gpuBackend && rebuildCoordinator.hasPendingWork()) {
+      const rebuildStep = rebuildCoordinator.applyNext({
+        reinitialize(n, k, seed, iExt, synapticScale): void {
+          gpuBackend!.reinitialize(n, k, seed, iExt, synapticScale);
+        },
+        updateSettings(settings): void {
+          gpuBackend!.update_settings(settings);
+        },
+        applyMorphConfig(json): void {
+          (gpuBackend! as unknown as MorphCapableBackend).set_morphology_config(json);
+        },
+      }, {
+        visualSettings: () => toFloat32Array(getSettings()),
+        simulationSettings: () => {
+          const settings = getSettings();
+          return {
+            iExt: settings.iExt,
+            synapticScale: settings.synapticScale,
+          };
+        },
+        morphConfigJson: () => morphConfigToJson(loadMorphConfig()),
+      });
+      if (rebuildStep.kind === "network") {
+        const request = rebuildStep.request;
+        console.log(`[main] network rebuild: n=${request.n} k=${request.k} seed=0x${request.seed.toString(16)}`);
+      }
     }
     if (pendingStim !== null) {
       const { x, y, z, radius, current } = pendingStim;

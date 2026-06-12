@@ -127,7 +127,9 @@ Three things cross:
   fall back to defaults, so the contract can grow without breaking old callers.
   Indices are the canonical order; the JS source of truth is
   `web/src/core/settings.ts`. Removed settings keep reserved/default-written
-  slots instead of shifting the array.
+  slots instead of shifting the array. Contract tests lock the full default
+  TypeScript array, Rust index mapping, tombstoned zero slots, and the
+  quarantined default-written slots.
 - **Out, stats/metrics:** `tick()` returns `TickStats` (a coarse per-batch
   throughput summary — note `spikes` is approximated as `last_tick_count * ticks`,
   see the no-readback policy in [`gpu-backend.md`](gpu-backend.md)); the rich

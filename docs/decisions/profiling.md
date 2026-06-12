@@ -37,8 +37,9 @@
 
 - **Decision.** The per-tick GPU scatter loop accumulates no per-synapse
   counters. `synapticEventsPerSec` is derived CPU-side as
-  `spikes_per_sec × K` (`crates/brain-visualizer/src/sim/gpu/mod.rs`, `synaptic_events_per_sec =
-  spikes_per_sec * self.config.k`).
+  `spikes_per_sec × K` (`crates/brain-visualizer/src/sim/gpu/mod.rs →
+  build_metrics_snapshot`) and is labelled as estimated in the HUD and dev
+  panel.
 - **Why.** The scatter pass iterates over every active synapse — O(spikes × K)
   per tick, potentially hundreds of millions of atomic adds per second at high
   N. Counting there would dominate the sim budget. For a homogeneous random

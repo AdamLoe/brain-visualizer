@@ -37,14 +37,16 @@ not live per-frame metrics.
 
 `synapticEventsPerSec` is derived as `spikes_per_sec × K` — not by
 instrumenting individual synapse activations in the scatter loop
-(`crates/brain-visualizer/src/sim/gpu/mod.rs`, line ~1623: `synaptic_events_per_sec = spikes_per_sec *
-self.config.k`). The scatter pass is on the GPU hot path; per-synapse counters
+(`crates/brain-visualizer/src/sim/gpu/mod.rs → build_metrics_snapshot`). The
+scatter pass is on the GPU hot path; per-synapse counters
 would require atomic adds for every edge traversal at O(spikes × K) per tick.
 Multiplying the already-counted spike total by K gives the same result for a
 homogeneous random network at near-zero extra cost.
 
 The hot loop accumulates only: `spike_count` (GPU-written into the indirect
 dispatch buffer, read back via the stats staging path) and nothing else.
+User-visible labels reflect that estimate: the HUD uses `syn/s est`, and the
+dev panel uses `Syn. events/sec (est.)`.
 
 ## crates/brain-visualizer/src/profiler.rs ring + per-second dump
 
@@ -126,8 +128,9 @@ waiting for GPU-to-CPU copy to complete. The state is `MetricsReadState` in
 0–16, 16 histogram bins at indices 17–32) returned by the WASM `metrics()`
 method into the typed `Metrics` interface. The authoritative index order is
 `web/src/core/settings.ts → METRICS_LAYOUT`. `METRICS_SCALAR_COUNT = 17` and
-`METRICS_LENGTH = 33` are exported constants that must stay in sync with the
-Rust backend's layout.
+`METRICS_LENGTH = 33` are exported constants that are guarded by TypeScript and
+Rust tests against the Rust backend's layout, scalar order, and histogram
+offset.
 
 ## Branching ratio
 

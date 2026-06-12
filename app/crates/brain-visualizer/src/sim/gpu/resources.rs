@@ -934,19 +934,18 @@ impl GpuLayouts {
             });
         // Active/recent compaction compute layout (binding slots match
         // compact_morph_segments.wgsl group 0).
-        let compact_morph_bgl =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("compact-morph-bgl"),
-                entries: &[
-                    storage(0, true),  // segments (read)
-                    storage(1, true),  // last_spike (read)
-                    uniform(2),        // CompactUniforms
-                    storage(3, false), // active_segment_indices (rw)
-                    storage(4, false), // active_segment_count (atomic rw)
-                    storage(5, false), // active_draw_args (rw)
-                    storage(6, false), // selected_count (atomic rw, profiler)
-                ],
-            });
+        let compact_morph_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("compact-morph-bgl"),
+            entries: &[
+                storage(0, true),  // segments (read)
+                storage(1, true),  // last_spike (read)
+                uniform(2),        // CompactUniforms
+                storage(3, false), // active_segment_indices (rw)
+                storage(4, false), // active_segment_count (atomic rw)
+                storage(5, false), // active_draw_args (rw)
+                storage(6, false), // selected_count (atomic rw, profiler)
+            ],
+        });
         // Soma sphere render layout (Wave 2). Uses binding slots 3/4/5 to avoid
         // a WGSL name clash with the tube bindings (0/1/2) in the same shader
         // module. vs_sphere/fs_sphere only touch 3/4/5; vs_main/fs_main only
@@ -2513,8 +2512,10 @@ mod tests {
 
     #[test]
     fn uniform_sizes_aligned() {
-        assert_eq!(std::mem::size_of::<IntegrateUniforms>() % 16, 0);
-        assert_eq!(std::mem::size_of::<ConnectUniforms>() % 16, 0);
+        assert_eq!(std::mem::size_of::<IntegrateUniforms>(), 64);
+        assert_eq!(std::mem::size_of::<ConnectUniforms>(), 32);
+        assert_eq!(std::mem::size_of::<MetricsUniforms>(), 32);
+        assert_eq!(METRICS_SLOT_COUNT, 32);
     }
 
     #[test]

@@ -13,9 +13,9 @@ avoid wasm-bindgen reentrancy panics.
 
 ## What it owns
 
-- `web/src/main.ts` — boot sequence, startup overlay state, rAF loop (`rafLoop`), all pending-flag
-  plumbing (`pendingResize`, `pendingStim`, `pendingSettingsPush`,
-  `pendingNetworkRebuild`), `CpuCoordinator`, `startGpuBackend`,
+- `web/src/main.ts` — boot sequence, startup overlay state, rAF loop (`rafLoop`), pending resize/stim
+  plumbing, `RebuildCoordinator` wiring for network/settings/morphology rebuild
+  mutations, `CpuCoordinator`, `startGpuBackend`,
   `restartWithBackend`, `computeStimulation`, `raySphereIntersect`
 - `web/index.html` — the immediate DOM/CSS startup overlay and full-viewport
   canvas shell
@@ -53,13 +53,24 @@ avoid wasm-bindgen reentrancy panics.
 
 `web/src/main.ts → rafLoop` is the single owner of `WasmGpuBackend`. The browser
 event handlers (pointermove, resize, devPanel callbacks) never call the backend
-directly — they set one of the pending flags. At the **top** of every rAF turn,
-before any backend call, all pending flags are flushed in order:
+directly — they queue work for the next frame. At the **top** of every rAF turn,
+before any backend call, pending DOM work is flushed in order:
 
 1. `pendingResize` → `gpuBackend.resize()`
-2. `pendingNetworkRebuild` → `gpuBackend.reinitialize()`
-3. `pendingSettingsPush` → `gpuBackend.update_settings()`
-4. `pendingStim` → `gpuBackend.stimulate()`
+2. `RebuildCoordinator.applyNext()` → at most one rebuild-related mutation:
+   `gpuBackend.reinitialize()`, `gpuBackend.update_settings()`, or
+   `set_morphology_config(json)`
+3. `pendingStim` → `gpuBackend.stimulate()`
+
+`web/src/rebuild/rebuild-coordinator.ts → RebuildCoordinator` owns the
+latest-wins queue for N/K/seed network rebuilds, settings pushes, and morphology
+config pushes. Network rebuild requests coalesce to the newest snapshot; after a
+network rebuild, settings and morphology are re-pushed on later rAF turns so the
+fresh backend receives the current visual and generator state without piling all
+rebuild work into one mutation flush. The current implementation still calls the
+existing wasm `reinitialize()` and `set_morphology_config()` methods on the main
+thread; worker-side CPU preparation and prepared-network upload are not part of
+the live frontend contract.
 
 After flushing, the loop calls `gpuBackend.tick(ticks, excitability)` then
 `gpuBackend.render_frame(mvp, right, up, eye, dist)`. Violating this ordering
@@ -129,9 +140,9 @@ The morphology config travels a **separate** channel from the Float32Array:
 a JSON string (the `MorphologyConfig` from `web/src/core/morph-config.ts`,
 persisted under its own `bv2_morph_v2` key) rather than a packed float array, and
 the backend chooses the narrowest update path. The dev-panel apply is queued like
-the other backend calls (a `pendingMorphConfig` flag flushed in the rAF loop).
-Boot also queues `morphConfigToJson(loadMorphConfig())` before backend creation
-and refreshes that queued JSON immediately after `WasmGpuBackend.create()`, so
+the other backend calls through `RebuildCoordinator`. Boot also queues
+`morphConfigToJson(loadMorphConfig())` before backend creation and refreshes that
+queued JSON immediately after `WasmGpuBackend.create()`, so
 persisted morphology settings are applied to the Rust backend on the first
 available frame even when the user never touches a morphology slider.
 Why a separate key + entry point rather than extending the frozen Float32Array:

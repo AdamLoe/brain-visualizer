@@ -1,33 +1,11 @@
-// web/settings.ts — V2 Phase 0
-//
 // Canonical settings store for Brain Visualizer V2.
 // Shared contract with Rust: the Float32Array layout produced by toFloat32Array
 // MUST match the VisualSettings struct in src/sim/gpu/mod.rs index-for-index.
 //
 // Persistence: versioned localStorage key "bv2_settings_v2".
 // Schema: { version:5, public:{…}, dev:{…} }
-// (version bumped 1→2: morphology controls changed defaults/semantics — width is
-//  now a 1.0 multiplier, index 15 repurposed to morphRestingOpacity,
-//  connectionLayer default 1, bloom default 0.5; old v1 data is ignored.)
-// (version bumped 2→3: connections redesign — indices 8/9 repurposed from
-//  connectionLifetime/connectionPulseSpeed (the retired traveling-pulse model)
-//  to the two whole-connection lighting toggles connectionLightNext (downstream,
-//  default 1) and connectionLightPast (upstream, default 0). Old v2 data is
-//  discarded — no migration; defaults are applied.)
-// (version bumped 3→4: morphology readability tuning — defaults for connection
-//  width, bloom, and resting opacity were narrowed to reduce lattice clutter;
-//  old v3 data is ignored and defaults are applied.)
-// (version bumped 4→5: connectionLightPast removed — index 9 tombstoned as
-//  reserved_zero; upstream lighting on shared arbors was misleading and is
-//  deferred until whole-path semantics are redesigned. Old v4 data is discarded.)
-// (2026-06-09: signalSource index 16 and adaptiveScalerEnabled index 23 are
-//  tombstoned as reserved_zero. Runtime fields remain for the frozen TS/Rust
-//  layout and setting metadata, but UI/persistence no longer read or write them.)
-// (2026-06-11: pointRadius, surfaceOpacity, and surface are no longer exposed
-//  or persisted. Runtime fields remain default-written for the frozen 26-slot
-//  TS/Rust layout; old saved values are ignored.)
-// (2026-06-12: bloomStrength is no longer exposed or persisted. Index 10 is
-//  tombstoned as reserved_zero; old saved values are ignored.)
+// Removed settings keep their existing indices and are either zero-written
+// tombstones or default-written quarantine slots; do not renumber the array.
 // On version mismatch → ignore saved data, use defaults (no migration for now).
 // Never persist runtime counters (there are none in this struct).
 
@@ -35,8 +13,8 @@
 export const SETTINGS_LENGTH = 26;
 
 // ─── VisualizerSettings (runtime flat type) ───────────────────────────────────
-// One field per contract index.  Mode fields typed as number (integer) for now;
-// Phase B will introduce typed enums for the subset that has a dev-panel selector.
+// One field per contract index. Mode fields are carried as numbers because the
+// Rust boundary is a positional Float32Array.
 
 export interface VisualizerSettings {
   // ── index 0–11: visual continuous knobs ──

@@ -42,6 +42,8 @@ const METRICS_VOLT_LO: f32 = -0.5;
 const METRICS_VOLT_HI: f32 = 1.5;
 const METRICS_VOLT_SCALE: f32 = 1024.0;
 const METRICS_HISTO_BINS: u32 = 16;
+const METRICS_SCALAR_COUNT: usize = 17;
+const METRICS_OUTPUT_LEN: usize = METRICS_SCALAR_COUNT + METRICS_HISTO_BINS as usize;
 
 /// Issue a new reduction + readback roughly once per this many ticks. The
 /// reduce pass itself is a cheap O(n) read-only dispatch, but the COPY+MAP
@@ -61,8 +63,6 @@ enum MetricsReadState {
     Pending,
 }
 
-// ─── V2 Phase 0: Visual/Sim settings struct ──────────────────────────────────
-//
 // Canonical flat-array contract (shared with TypeScript via Float32Array).
 // Indices 0..=25 match web/settings.ts `toFloat32Array` output exactly.
 // Length-tolerant parsing: new indices added later won't break old callers.
@@ -102,7 +102,7 @@ pub struct VisualSettings {
     pub bloom_strength: f32,
     /// index 11 — manifold surface opacity (default 1.0)
     pub surface_opacity: f32,
-    /// index 12 — ambient drive current (sim tuning; default 0.055)
+    /// index 12 — ambient drive current (sim tuning; default 0.014)
     pub i_ext: f32,
     /// index 13 — recurrent coupling scale (sim tuning; default 0.03)
     pub synaptic_scale: f32,
@@ -110,11 +110,11 @@ pub struct VisualSettings {
     pub heterogeneity: f32,
     // ── index 15 (repurposed) ──────────────────────────────────────────────
     /// index 15 — Morphology controls: resting opacity of non-active structure
-    /// (0..1; default 0.25). 0 → only live signal pulses are visible. (Replaces
+    /// (0..1; default 0.0). 0 → only live signal pulses are visible. (Replaces
     /// the retired max_active_visual_edges budget.)
     pub morph_resting_opacity: f32,
     // ── mode enums (stored as integer cast to f32) ─────────────────────────
-    /// index 16 — signal_source mode (default 0)
+    /// index 16 — reserved_zero (signalSource removed)
     pub signal_source: u32,
     /// index 17 — connection_layer mode: 0=Off, 1=Active/recent only (default), 2=Resting debug
     pub connection_layer: u32,
@@ -128,7 +128,7 @@ pub struct VisualSettings {
     pub weight_normalization: u32,
     /// index 22 — input_mode: 0=constant, ... (default 0)
     pub input_mode: u32,
-    /// index 23 — adaptive scaler enabled: 0=off (default 0)
+    /// index 23 — reserved_zero (adaptiveScalerEnabled removed)
     pub adaptive_scaler_enabled: u32,
     /// index 24 — heavy-tailed reach: long-range fraction 0..1 (default 0.0 =
     /// local only, bit-identical to pre-heavy-tail). Converted to the integer
@@ -179,9 +179,9 @@ impl Default for VisualSettings {
 }
 
 impl VisualSettings {
-    /// Parse from the canonical flat Float32Array.  Length-tolerant: indices
+    /// Parse from the canonical flat Float32Array. Length-tolerant: indices
     /// beyond the array length fall back to `Default` values so the contract
-    /// can grow without breaking existing callers.  V2 Phase 0.
+    /// can grow without breaking existing callers.
     pub fn from_slice(data: &[f32]) -> Self {
         let d = Self::default();
         let f = |i: usize, def: f32| -> f32 { data.get(i).copied().unwrap_or(def) };
@@ -204,14 +204,14 @@ impl VisualSettings {
             synaptic_scale: f(13, d.synaptic_scale),
             heterogeneity: f(14, d.heterogeneity),
             morph_resting_opacity: f(15, d.morph_resting_opacity),
-            signal_source: u(16, d.signal_source),
+            signal_source: 0, // index 16: reserved_zero (signalSource removed)
             connection_layer: u(17, d.connection_layer),
             color_by: u(18, d.color_by),
             neuron_visibility: u(19, d.neuron_visibility),
             surface: u(20, d.surface),
             weight_normalization: u(21, d.weight_normalization),
             input_mode: u(22, d.input_mode),
-            adaptive_scaler_enabled: u(23, d.adaptive_scaler_enabled),
+            adaptive_scaler_enabled: 0, // index 23: reserved_zero (adaptiveScalerEnabled removed)
             long_range_reach_frac: f(24, d.long_range_reach_frac),
             max_reach_cells: f(25, d.max_reach_cells),
         }
@@ -2279,86 +2279,80 @@ impl GpuBackend {
         let _ = self.ctx.device.poll(wgpu::PollType::Poll);
     }
 
-    /// Build the length-33 metrics layout (web/settings.ts METRICS_LAYOUT) from
-    /// the last reduction snapshot + CPU-derived history fields. V2 Phase A.
-    pub fn metrics_snapshot(&self) -> [f32; 33] {
-        let m = &self.metrics_cpu;
-        let n = self.config.n.max(1) as f32;
-
-        let spikes_this_tick = m[0] as f32;
-        // Approximate per-second throughput at ~60fps (documented assumption).
-        let spikes_per_sec = spikes_this_tick * 60.0;
-        // Mean firing rate: neurons fired within the last ~1s window (≤60 ticks).
-        // We track 100ms/500ms/2s windows; reuse the 500ms (≤30) count scaled, or
-        // approximate from spikes_this_tick. Use pct_fired over n × 60 as in spec.
-        let mean_firing_rate_hz = (spikes_this_tick / n) * 60.0;
-        let synaptic_events_per_sec = spikes_per_sec * self.config.k as f32;
-
-        // Recombine the 64-bit fixed-point voltage sum, then mean (undo offset).
-        let volt_sum = (m[10] as f64) * 4_294_967_296.0 + (m[9] as f64);
-        let mean_v = ((volt_sum / METRICS_VOLT_SCALE as f64) / n as f64) as f32 + METRICS_VOLT_LO;
-
-        let input_spikes = m[1] as f32;
-        let assoc_spikes = m[2] as f32;
-        let output_spikes = m[3] as f32;
-        let e_spikes = m[4] as f32;
-        let i_spikes = m[5] as f32;
-
-        let pct_100 = m[6] as f32 / n;
-        let pct_500 = m[7] as f32 / n;
-        let pct_2s = m[8] as f32 / n;
-
-        // Branching ratio: mean of consecutive spikes_this_tick ratios over the
-        // history ring (σ ≈ 1 ⇒ critical). Skips zero-denominator steps.
-        let branching_ratio = {
-            let mut sum = 0.0f64;
-            let mut count = 0u32;
-            let mut prev: Option<u32> = None;
-            for &s in self.metrics_history.iter() {
-                if let Some(p) = prev {
-                    if p > 0 {
-                        sum += s as f64 / p as f64;
-                        count += 1;
-                    }
-                }
-                prev = Some(s);
-            }
-            if count > 0 {
-                (sum / count as f64) as f32
-            } else {
-                0.0
-            }
-        };
-        // Cascade age is counted in readbacks; scale to ticks via the interval.
-        let time_since_last_large_cascade = (self.last_cascade_age * METRICS_ISSUE_INTERVAL) as f32;
-
-        let refractory_blocked_attempts = m[11] as f32; // unused this phase (0)
-        let current_accumulator_high_water = self.max_abs_current_hw as f32;
-
-        let mut out = [0.0f32; 33];
-        out[0] = spikes_this_tick;
-        out[1] = spikes_per_sec;
-        out[2] = mean_firing_rate_hz;
-        out[3] = synaptic_events_per_sec;
-        out[4] = mean_v;
-        out[5] = input_spikes;
-        out[6] = assoc_spikes;
-        out[7] = output_spikes;
-        out[8] = e_spikes;
-        out[9] = i_spikes;
-        out[10] = pct_100;
-        out[11] = pct_500;
-        out[12] = pct_2s;
-        out[13] = branching_ratio;
-        out[14] = time_since_last_large_cascade;
-        out[15] = refractory_blocked_attempts;
-        out[16] = current_accumulator_high_water;
-        // Voltage histogram → fraction of neurons per bin (slots 16..=31).
-        for b in 0..16usize {
-            out[17 + b] = m[16 + b] as f32 / n;
-        }
-        out
+    /// Build the metrics layout consumed by web/settings.ts METRICS_LAYOUT from
+    /// the last reduction snapshot plus CPU-derived history fields.
+    pub fn metrics_snapshot(&self) -> [f32; METRICS_OUTPUT_LEN] {
+        build_metrics_snapshot(
+            self.config.n,
+            self.config.k,
+            &self.metrics_cpu,
+            &self.metrics_history,
+            self.last_cascade_age,
+            self.max_abs_current_hw,
+        )
     }
+}
+
+fn build_metrics_snapshot(
+    n: usize,
+    k: usize,
+    m: &[u32; METRICS_SLOT_COUNT],
+    metrics_history: &std::collections::VecDeque<u32>,
+    last_cascade_age: u32,
+    max_abs_current_hw: u32,
+) -> [f32; METRICS_OUTPUT_LEN] {
+    let n = n.max(1) as f32;
+
+    let spikes_this_tick = m[0] as f32;
+    let spikes_per_sec = spikes_this_tick * 60.0;
+    let mean_firing_rate_hz = (spikes_this_tick / n) * 60.0;
+    let synaptic_events_per_sec = spikes_per_sec * k as f32;
+
+    let volt_sum = (m[10] as f64) * 4_294_967_296.0 + (m[9] as f64);
+    let mean_v = ((volt_sum / METRICS_VOLT_SCALE as f64) / n as f64) as f32 + METRICS_VOLT_LO;
+
+    let branching_ratio = {
+        let mut sum = 0.0f64;
+        let mut count = 0u32;
+        let mut prev: Option<u32> = None;
+        for &s in metrics_history.iter() {
+            if let Some(p) = prev {
+                if p > 0 {
+                    sum += s as f64 / p as f64;
+                    count += 1;
+                }
+            }
+            prev = Some(s);
+        }
+        if count > 0 {
+            (sum / count as f64) as f32
+        } else {
+            0.0
+        }
+    };
+
+    let mut out = [0.0f32; METRICS_OUTPUT_LEN];
+    out[0] = spikes_this_tick;
+    out[1] = spikes_per_sec;
+    out[2] = mean_firing_rate_hz;
+    out[3] = synaptic_events_per_sec;
+    out[4] = mean_v;
+    out[5] = m[1] as f32;
+    out[6] = m[2] as f32;
+    out[7] = m[3] as f32;
+    out[8] = m[4] as f32;
+    out[9] = m[5] as f32;
+    out[10] = m[6] as f32 / n;
+    out[11] = m[7] as f32 / n;
+    out[12] = m[8] as f32 / n;
+    out[13] = branching_ratio;
+    out[14] = (last_cascade_age * METRICS_ISSUE_INTERVAL) as f32;
+    out[15] = m[11] as f32;
+    out[16] = max_abs_current_hw as f32;
+    for b in 0..METRICS_HISTO_BINS as usize {
+        out[METRICS_SCALAR_COUNT + b] = m[16 + b] as f32 / n;
+    }
+    out
 }
 
 impl SimBackend for GpuBackend {
@@ -2807,6 +2801,14 @@ fn readback<T: bytemuck::Pod>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
+
+    fn assert_close(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() < 0.000_001,
+            "actual={actual} expected={expected}"
+        );
+    }
 
     #[test]
     fn lif_constants_match_spec() {
@@ -2846,5 +2848,99 @@ mod tests {
         data[10] = 1.5;
         let settings = VisualSettings::from_slice(&data);
         assert_eq!(settings.bloom_strength, 0.0);
+    }
+
+    #[test]
+    fn visual_settings_from_slice_maps_locked_indices() {
+        let data: Vec<f32> = (1..=26).map(|v| v as f32).collect();
+        let settings = VisualSettings::from_slice(&data);
+
+        assert_eq!(settings.glow_tau, 1.0);
+        assert_eq!(settings.point_radius, 2.0);
+        assert_eq!(settings.neuron_visual_radius, 3.0);
+        assert_eq!(settings.active_neuron_radius_boost, 4.0);
+        assert_eq!(settings.inactive_neuron_opacity, 5.0);
+        assert_eq!(settings.voltage_glow_strength, 6.0);
+        assert_eq!(settings.connection_visual_width, 7.0);
+        assert_eq!(settings.connection_curve_lift, 8.0);
+        assert_eq!(settings.connection_light_next, 9);
+        assert_eq!(settings.connection_light_past, 0);
+        assert_eq!(settings.bloom_strength, 0.0);
+        assert_eq!(settings.surface_opacity, 12.0);
+        assert_eq!(settings.i_ext, 13.0);
+        assert_eq!(settings.synaptic_scale, 14.0);
+        assert_eq!(settings.heterogeneity, 15.0);
+        assert_eq!(settings.morph_resting_opacity, 16.0);
+        assert_eq!(settings.signal_source, 0);
+        assert_eq!(settings.connection_layer, 18);
+        assert_eq!(settings.color_by, 19);
+        assert_eq!(settings.neuron_visibility, 20);
+        assert_eq!(settings.surface, 21);
+        assert_eq!(settings.weight_normalization, 22);
+        assert_eq!(settings.input_mode, 23);
+        assert_eq!(settings.adaptive_scaler_enabled, 0);
+        assert_eq!(settings.long_range_reach_frac, 25.0);
+        assert_eq!(settings.max_reach_cells, 26.0);
+    }
+
+    #[test]
+    fn visual_settings_tombstoned_slots_ignore_nonzero_input() {
+        let mut data = vec![0.0; 26];
+        data[9] = 9.0;
+        data[10] = 10.0;
+        data[16] = 16.0;
+        data[23] = 23.0;
+
+        let settings = VisualSettings::from_slice(&data);
+
+        assert_eq!(settings.connection_light_past, 0);
+        assert_eq!(settings.bloom_strength, 0.0);
+        assert_eq!(settings.signal_source, 0);
+        assert_eq!(settings.adaptive_scaler_enabled, 0);
+    }
+
+    #[test]
+    fn metrics_snapshot_layout_and_histogram_offset_are_locked() {
+        let mut raw = [0u32; METRICS_SLOT_COUNT];
+        raw[0] = 2;
+        raw[1] = 3;
+        raw[2] = 4;
+        raw[3] = 5;
+        raw[4] = 6;
+        raw[5] = 7;
+        raw[6] = 1;
+        raw[7] = 2;
+        raw[8] = 3;
+        raw[9] = 1024;
+        raw[10] = 0;
+        raw[11] = 8;
+        for b in 0..METRICS_HISTO_BINS as usize {
+            raw[16 + b] = b as u32;
+        }
+        let history = VecDeque::from([2, 4, 8]);
+
+        let out = build_metrics_snapshot(4, 7, &raw, &history, 3, 99);
+
+        assert_eq!(out.len(), 33);
+        assert_close(out[0], 2.0);
+        assert_close(out[1], 120.0);
+        assert_close(out[2], 30.0);
+        assert_close(out[3], 840.0);
+        assert_close(out[4], -0.25);
+        assert_close(out[5], 3.0);
+        assert_close(out[6], 4.0);
+        assert_close(out[7], 5.0);
+        assert_close(out[8], 6.0);
+        assert_close(out[9], 7.0);
+        assert_close(out[10], 0.25);
+        assert_close(out[11], 0.5);
+        assert_close(out[12], 0.75);
+        assert_close(out[13], 2.0);
+        assert_close(out[14], 45.0);
+        assert_close(out[15], 8.0);
+        assert_close(out[16], 99.0);
+        for b in 0..METRICS_HISTO_BINS as usize {
+            assert_close(out[METRICS_SCALAR_COUNT + b], b as f32 / 4.0);
+        }
     }
 }

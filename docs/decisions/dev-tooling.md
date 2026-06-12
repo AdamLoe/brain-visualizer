@@ -208,8 +208,9 @@
   `web/src/core/settings.ts → toFloat32Array` and consumed by
   `crates/brain-visualizer/src/sim/gpu/mod.rs → VisualSettings::from_slice` is the sole settings
   boundary between the JS and Rust worlds. Index assignment is the contract;
-  both files carry authoritative inline comments. Removed settings reserve their
-  existing indices and are zero/default-written rather than shifting later slots.
+  both files carry authoritative inline comments and executable contract tests.
+  Removed settings reserve their existing indices and are zero/default-written
+  rather than shifting later slots.
 - **Why.** WASM passes a raw byte slice — there is no named-field protocol.
   Using a flat array with documented indices is simpler than building a
   serialisation layer, and the `from_slice` implementation is length-tolerant
@@ -218,9 +219,10 @@
   [`../architecture/gpu-backend.md`](../architecture/gpu-backend.md).
 - **Code anchors.** `web/src/core/settings.ts → toFloat32Array`;
   `crates/brain-visualizer/src/sim/gpu/mod.rs → VisualSettings::from_slice`.
-- **Tradeoffs.** Silent corruption if one side reorders fields without updating
-  the other — the authoring brief names this as a corruption risk. A CI
-  alignment test would close this gap.
+- **Tradeoffs.** The flat array is still less self-describing than JSON, so
+  changes require synchronized Rust and TypeScript edits. The guardrail is
+  duplicated explicit golden tests instead of shared generated schema plumbing,
+  which keeps the current contract small and reviewable.
 
 ## See also
 

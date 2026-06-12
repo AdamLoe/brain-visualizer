@@ -407,7 +407,7 @@ mod wasm_entry {
 
         /// Push a full settings snapshot from JS.  Called once after backend
         /// creation and again whenever the settings store changes.  The
-        /// Float32Array layout matches the canonical 24-element contract in
+        /// Float32Array layout matches the canonical 26-element contract in
         /// web/settings.ts `toFloat32Array`.
         pub fn update_settings(&mut self, data: &[f32]) {
             let v = VisualSettings::from_slice(data);

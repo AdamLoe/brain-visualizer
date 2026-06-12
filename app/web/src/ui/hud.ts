@@ -6,7 +6,7 @@
 //
 // Layout:
 //   fps: 58  |  N: 50k  |  GPU
-//   syn/s: 1.2B
+//   syn/s est: 1.2B
 //
 // Optional debug fields (off by default, behind SHOW_DEBUG_HUD flag):
 //   res: 0.75×  |  near: 321i  |  gpu_ms: 4.2  |  scale: shrink_n
@@ -50,7 +50,7 @@ export class CornerHud {
 
     let text =
       `fps: ${stats.fps.toFixed(0).padStart(3)}  |  N: ${nLabel}  |  ${backendLabel}\n` +
-      `syn/s: ${synLabel}`;
+      `syn/s est: ${synLabel}`;
 
     if (this.debugEnabled) {
       const parts: string[] = [];

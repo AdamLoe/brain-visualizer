@@ -13,6 +13,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:e2e": "playwright test",
+    "test:e2e:smoke": "playwright test e2e/real_hardware_smoke.spec.ts",
     "test:e2e:server": "USE_WEBSERVER=1 playwright test"
   },
   "devDependencies": {

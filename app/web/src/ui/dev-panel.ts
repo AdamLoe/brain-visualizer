@@ -210,6 +210,11 @@ const OVERACTIVE_BRANCHING_RATIO  = 1.5;   // branchingRatio above this → OVER
 const BRANCH_SUBCRITICAL  = 0.9;  // σ < 0.9 → subcritical (fading)
 const BRANCH_SUPERCRITICAL = 1.1; // σ > 1.1 → supercritical (runaway)
 
+export const ESTIMATED_METRIC_LABELS = {
+  synapticEventsPerSec: "Syn. events/sec (est.)",
+  cascadeSizeNow: "Cascade size now (approx)",
+} as const;
+
 function classify(m: Metrics): NetworkState {
   if (m.pctFired500ms < SILENT_THRESHOLD_PCT500MS) return "SILENT";
   if (m.pctFired100ms > OVERACTIVE_THRESHOLD_PCT100 || m.branchingRatio > OVERACTIVE_BRANCHING_RATIO) {
@@ -860,7 +865,7 @@ export class DevPanel {
       "Total spikes emitted per second across the whole network.");
     const meanFiringRate  = this._row(root, "Mean rate",
       "Average per-neuron firing rate in Hz (spikes per neuron per second).");
-    const synEventsPerSec = this._row(root, "Syn. events/sec",
+    const synEventsPerSec = this._row(root, ESTIMATED_METRIC_LABELS.synapticEventsPerSec,
       "Synaptic transmission events per second (≈ spikes/sec × fan-out K).");
 
     root.appendChild(this._sep("Recent Firing %"));
@@ -1023,7 +1028,7 @@ export class DevPanel {
     // ── Cascade / Avalanche Size ──────────────────────────────────────────────
     root.appendChild(this._sep("Cascade / Avalanche (approx)"));
 
-    const cascadeSize = this._row(root, "Cascade size now",
+    const cascadeSize = this._row(root, ESTIMATED_METRIC_LABELS.cascadeSizeNow,
       "Spikes on the current tick used as an approximation of the active avalanche size.");
 
     root.appendChild(this._sep("Spread over time (% neurons fired)"));

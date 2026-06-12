@@ -87,6 +87,12 @@ remain for compatibility and are written from defaults (`pointRadius` index 1,
 still exists and Brain mode can tint it pink when it is explicitly on, but the
 current product settings UI keeps surface controls quarantined and default-off.
 
+The settings boundary is guarded by executable contract tests on both sides:
+TypeScript locks the full `toFloat32Array(DEFAULT_SETTINGS)` layout and the
+reserved/default-written slots, while Rust locks `VisualSettings::from_slice`
+index mapping and tombstone behavior. This protects the 26-slot positional
+contract without replacing it with a named-field protocol.
+
 The Morphology tab renders the **morphology config** controls: a separate
 surface (see the Morphology config controls section below) that does **not**
 touch the Float32Array. These expose the generator and render-quality
@@ -105,6 +111,9 @@ as constants in `web/src/ui/dev-panel.ts → classify`:
 `pctFired*` values arrive from the GPU as fractions in [0, 1]; the panel
 multiplies by 100 for display. The branching-ratio critical-band thresholds
 (0.9 / 1.1) used in the Dynamics tab are separate constants in the same file.
+Derived readouts are labelled in-place: synaptic events/sec is shown as an
+estimate (`spikes/sec × K`), and the current cascade size row remains explicitly
+approximate.
 
 ## Instant tooltips
 
