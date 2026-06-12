@@ -133,19 +133,19 @@
 - **Applies to.** [`../architecture/manifold.md`](../architecture/manifold.md)
 - **Code anchors.** `crates/brain-visualizer/src/sim/morphology.rs → generate` (`SEGS`, `BOW_GAIN`).
 
-## Bloom ships on by default; the direct path remains the validated fallback
+## Bloom is retained internally, not exposed as a user setting
 
-- **Decision.** `bloom_strength > 0` enables the HDR offscreen render +
-  bright-pass + separable blur + composite path, and the current shipped web
-  default keeps bloom on at `0.4`. `bloom_strength == 0` still routes the scene
-  directly to the surface `target_view` with no offscreen indirection. Both
-  paths share all scene render passes unchanged.
-- **Why.** The direct path remains the validated fallback and zero-overhead
-  baseline, but the cohesive-defaults pass deliberately ships with moderate
-  bloom enabled so the default first-load morphology glow reads as the accepted
-  product look rather than a dev-only tuned state.
+- **Decision.** The bloom pipeline remains in the renderer and
+  `bloom_strength > 0` still enables the HDR offscreen render + bright-pass +
+  separable blur + composite path, but the user-facing `VisualSettings` index is
+  tombstoned and zero-written. Normal app settings therefore use the direct
+  `target_view` path; internal examples/tests can still call
+  `GpuBackend::set_bloom_strength` to validate the retained pipeline.
+- **Why.** Bloom strength was not needed as a user control. Keeping the pipeline
+  avoids a broad render-resource deletion while removing the settings and
+  persistence surface.
 - **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md)
-- **Code anchors.** `crates/brain-visualizer/src/sim/gpu/mod.rs → bloom_on` guard; `crates/brain-visualizer/src/sim/gpu/shaders/bloom.wgsl → fs_bright / fs_blur / fs_composite`
+- **Code anchors.** `crates/brain-visualizer/src/sim/gpu/mod.rs → bloom_on guard, VisualSettings::from_slice, set_bloom_strength`; `crates/brain-visualizer/src/sim/gpu/shaders/bloom.wgsl → fs_bright / fs_blur / fs_composite`; `web/src/core/settings.ts → toFloat32Array`.
 
 ## Morphology as shader-generated 3D tubes + soma spheres, additive/no-depth
 
@@ -210,11 +210,12 @@
 - **Decision.** The compaction predicate selects only the segments under the
   traveling impulse **packet band** (a `HEAD_HEADROOM` lead plus a `TAIL_REACH`
   tail around `front = age * speed` along `path_len`), mirroring the render
-  shader's per-segment activity exactly — not a fired neuron's entire arbor for
-  the whole glow lifetime.
+  shader's per-segment activity exactly. `glow_tau` is not a packet lifetime or
+  culling input; it controls soma/legacy afterglow only.
 - **Why.** Selecting the whole arbor for the full glow lifetime would keep
-  nearly all segments and defeat the scaling goal; it would also re-expose the
-  resting structure that is deliberately hidden by default.
+  nearly all segments and defeat the scaling goal, while tying packet survival
+  to `glow_tau` would make low afterglow settings truncate long-range packets
+  before they reach their leaves.
 - **Tradeoffs.** A deliberate visual trade-off: there is no bounded whole-arbor
   afterglow today. Adding one (a capped afterglow window) is a possible future
   addition, not a bug.

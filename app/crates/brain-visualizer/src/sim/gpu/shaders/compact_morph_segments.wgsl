@@ -3,7 +3,7 @@
 // Replaces the all-segment morphology tube draw with a GPU compaction stage:
 // a compute pass scans every MorphSegment, derives the segment's ACTIVITY OWNER
 // using the EXACT SAME rule as render_morphology.wgsl::vs_main, reads
-// last_spike[owner], and — mirroring the shader's glow/impulse decode — appends
+// last_spike[owner], and — mirroring the shader's impulse decode — appends
 // the segment's index to `active_segment_indices` ONLY when the segment is
 // currently lit, recently lit, or ABOUT to be lit (a headroom window so a
 // long-range packet is submitted slightly before it arrives). A second
@@ -12,7 +12,7 @@
 //
 // Discipline: this is intentionally CONSERVATIVE — it is correct to select a few
 // extra segments, wrong to drop a segment the shader would light. The owner rule
-// + glow decay + impulse travel constants below MUST stay in lockstep with
+// + impulse travel constants below MUST stay in lockstep with
 // render_morphology.wgsl (the authoritative source of truth).
 //
 // MorphSegment field order + size (48 B) MUST match render_morphology.wgsl /
@@ -69,10 +69,6 @@ const LONG_RANGE_IMPULSE_WIDTH: f32 = 0.060;
 // match render_morphology.wgsl::LONG_RANGE_PATH and its `seg.path_len >= …` test.
 const LONG_RANGE_PATH: f32 = 0.18;
 
-// Glow cutoff: the shader fades activity by glow = exp(-age/tau). Below this the
-// additive packet contribution is sub-perceptual. Conservative (small) so we
-// never drop a segment the shader would still light.
-const GLOW_EPS: f32 = 0.0025;
 // Window factors expressed in MULTIPLES of the (per-segment) packet width, so the
 // selection window scales automatically with the wider long-range packet:
 //   • PACKET head reach AHEAD of the front the shader still lights: width*3 (the
@@ -123,13 +119,9 @@ fn compact(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // ── Glow recency mirror: glow = exp(-age/tau); cut at GLOW_EPS. ────────────
+    // ── Spike age for packet travel. Glow tau intentionally does NOT cull packet
+    // travel; it only controls soma/legacy afterglow in render_morphology.wgsl.
     let age = f32(tick_diff(u.tick, packed & TICK_MASK));
-    let tau = max(u.glow_tau, 1.0);
-    let glow = exp(-age / tau);
-    if glow <= GLOW_EPS {
-        return;
-    }
 
     // ── Packet-localized travel window (mirror of impulse_segment_activity) ───
     // The packet front travels travel = age*speed along the cumulative path. The

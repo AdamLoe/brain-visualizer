@@ -26,6 +26,8 @@
 // (2026-06-11: pointRadius, surfaceOpacity, and surface are no longer exposed
 //  or persisted. Runtime fields remain default-written for the frozen 26-slot
 //  TS/Rust layout; old saved values are ignored.)
+// (2026-06-12: bloomStrength is no longer exposed or persisted. Index 10 is
+//  tombstoned as reserved_zero; old saved values are ignored.)
 // On version mismatch → ignore saved data, use defaults (no migration for now).
 // Never persist runtime counters (there are none in this struct).
 
@@ -48,7 +50,7 @@ export interface VisualizerSettings {
   connectionCurveLift:      number;   // 7  Morphology: axon branch curl (rebuilds geometry)
   connectionLightNext:      number;   // 8  Morphology: light a firing neuron's downstream (outgoing) connections (0/1)
   // index 9: reserved_zero (connectionLightPast removed)
-  bloomStrength:            number;   // 10 bloom post-process intensity (0=off)
+  bloomStrength:            number;   // 10 RESERVED/INERT — bloom strength removed; index kept for the Rust↔TS contract
   surfaceOpacity:           number;   // 11 manifold surface opacity
   // ── index 12–14: sim knobs ───────────────
   iExt:                     number;   // 12 ambient drive current
@@ -82,7 +84,7 @@ export const DEFAULT_SETTINGS: VisualizerSettings = {
   connectionVisualWidth:    0.80,  // Morphology: width multiplier (1.0 = raw radii)
   connectionCurveLift:      0.15,
   connectionLightNext:      1,     // Morphology: downstream lighting on by default
-  bloomStrength:            0.40,  // Morphology: bloom on by default so glow blooms
+  bloomStrength:            0.0,   // RESERVED/INERT — index 10 is zero-written
   surfaceOpacity:           1.0,
   iExt:                     0.014,
   synapticScale:            0.03,
@@ -109,7 +111,6 @@ export const DEFAULT_SETTINGS: VisualizerSettings = {
 /** User-facing settings persisted in localStorage (beauty knobs). */
 interface SavedPublic {
   glowTau:               number;
-  bloomStrength:         number;
   connectionLayer:       number;   // off / active_only / active+fade
   colorBy:               number;
   neuronVisibility:      number;
@@ -152,7 +153,6 @@ function settingsToSaved(s: VisualizerSettings): SavedVisualizerSettings {
     version: 5,
     public: {
       glowTau:           s.glowTau,
-      bloomStrength:     s.bloomStrength,
       connectionLayer:   s.connectionLayer,
       colorBy:           s.colorBy,
       neuronVisibility:  s.neuronVisibility,
@@ -186,7 +186,6 @@ function mergeOver(base: VisualizerSettings, saved: SavedVisualizerSettings): Vi
     ...base,
     // public
     glowTau:              p.glowTau              ?? base.glowTau,
-    bloomStrength:        p.bloomStrength         ?? base.bloomStrength,
     connectionLayer:      p.connectionLayer       ?? base.connectionLayer,
     colorBy:              p.colorBy               ?? base.colorBy,
     neuronVisibility:     p.neuronVisibility      ?? base.neuronVisibility,
@@ -294,7 +293,7 @@ export function toFloat32Array(s: VisualizerSettings): Float32Array {
   a[7]  = s.connectionCurveLift;
   a[8]  = s.connectionLightNext;
   a[9]  = 0; // index 9: reserved_zero (connectionLightPast removed)
-  a[10] = s.bloomStrength;
+  a[10] = 0; // index 10: reserved_zero (bloomStrength removed)
   a[11] = DEFAULT_SETTINGS.surfaceOpacity; // index 11: hidden surface path retired; default-written
   a[12] = s.iExt;
   a[13] = s.synapticScale;

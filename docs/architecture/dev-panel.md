@@ -49,7 +49,7 @@ Seven tabs are defined in the `TABS` constant in `web/src/ui/dev-panel.ts`:
 | Monitor | Live spike/voltage/E-I metrics + network-state classifier |
 | Dynamics | E/I balance bar, branching-ratio band, per-region rates, interpretive summary |
 | Network | Rebuild controls (N/K/seed) + live Drive and Structure knobs |
-| Appearance | Color, neuron glow/body, morphology visibility, reach, bloom knobs, and morphology lighting |
+| Appearance | Color, neuron glow/body, morphology visibility, reach, and morphology lighting |
 | Morphology | Descriptor-driven generator and render-quality knobs |
 | Debug | Read-only string labels for current visual-mode settings |
 | Storage | Reset-to-defaults button + hidden review presets + localStorage key/size readout |
@@ -59,9 +59,10 @@ The Appearance tab groups the live render knobs that live in the
 `neuronVisualRadius`, `activeNeuronRadiusBoost`, `inactiveNeuronOpacity`,
 `voltageGlowStrength`, `connectionLayer`, `connectionLightNext`,
 `morphRestingOpacity`, `connectionVisualWidth`, `connectionCurveLift`,
-`longRangeReachFrac`, `maxReachCells`, and `bloomStrength`.
-`connectionLightPast` was removed; Float32Array index 9 is tombstoned as
-`reserved_zero`.
+`longRangeReachFrac`, and `maxReachCells`. `connectionLightPast` was removed;
+Float32Array index 9 is tombstoned as `reserved_zero`. `bloomStrength` was also
+removed from the panel and persistence surface; Float32Array index 10 is
+tombstoned as `reserved_zero`.
 
 `connectionLayer` (index 17, default 1) is a 3-mode enum surfaced as a
 labeled "Connections" dropdown in the "Morphology Visibility" section:
@@ -245,10 +246,12 @@ controls and dendrite decoration controls:
 The three decoration controls (`dendriteBranchletCount`, `dendriteTwigCount`,
 `dendriteDecorGroupMax`) are runtime-clamped to the compile-time buffer maxes;
 the `hero-review` preset maximizes them for close-up screenshots but they are
-NOT the product defaults. Buffer-sized knobs (subdivision lengths,
-`edgeSubsegments`, waypoint counts) remain locked in the descriptor — changing
-them at runtime without resizing the pre-allocated GPU buffer would drop
-segments silently.
+NOT the product defaults. The generator also exposes bounded straight
+subdivision controls (`maxSegmentLength`, `longRangeMaxSegmentLength`,
+`curvatureSubsegmentBoost`, `edgeSubsegmentsMax`, `minSubsegments`). These tune
+how many straight `MorphSegment`s approximate each local/long branch and are
+clamped to the existing `EDGE_SUBSEGMENTS_MAX` cap; they do not add curved shader
+geometry. Waypoint counts and allocation budgets remain protected.
 
 The older dead `dendritePrimaryMin` / `dendritePrimarySpan` fields and duplicate
 `generator.axonCurveLift` descriptor are removed from the exposed descriptor
@@ -265,15 +268,16 @@ knobs. The split is defined by the `SavedPublic` and `SavedDev` interfaces in
 `web/src/core/settings.ts`. Current clean defaults include `colorBy = 6`
 (`Brain`), `glowTau = 10`, `heterogeneity = 0.50`, `iExt = 0.014`,
 `morphRestingOpacity = 0.0`, `longRangeReachFrac = 0.14`, and
-`maxReachCells = 14`.
+`maxReachCells = 14`. Removed visual fields such as `bloomStrength` are omitted
+from both `SavedPublic` and `SavedDev`.
 
 **Version sentinel:** any saved settings object whose `version` field is not `5`
 is silently discarded and defaults are used. No migration is attempted. The
 high-scale default changes bumped `bv2_settings_v1` → `bv2_settings_v2` so
 old high-excitability/high-`iExt` saved values are discarded rather than
 masking the new low-firing defaults. Removed fields (`pointRadius`,
-`surfaceOpacity`, `surface`) are ignored and fall back to defaults because
-they are no longer in the saved schema.
+`surfaceOpacity`, `surface`, `bloomStrength`) are ignored and fall back to
+defaults because they are no longer in the saved schema.
 
 **Merge-over-defaults:** on load, each saved key is merged over
 `DEFAULT_SETTINGS` with `?? base_value` guards (`web/src/core/settings.ts → mergeOver`).
@@ -330,9 +334,9 @@ assignment is the **shared contract** with `crates/brain-visualizer/src/sim/gpu/
 updating the other silently corrupts all downstream visual settings.** The
 authoritative index list is in the inline comments of `web/src/core/settings.ts →
 VisualizerSettings` and `crates/brain-visualizer/src/sim/gpu/mod.rs → VisualSettings`.
-Index 9 (`connectionLightPast`), index 16 (`signalSource`), and index 23
-(`adaptiveScalerEnabled`) are zero-written tombstones. Index 1 (`pointRadius`),
-index 11 (`surfaceOpacity`), and index 20 (`surface`) are default-written
+Index 9 (`connectionLightPast`), index 10 (`bloomStrength`), index 16
+(`signalSource`), and index 23 (`adaptiveScalerEnabled`) are zero-written
+tombstones. Index 1 (`pointRadius`), index 11 (`surfaceOpacity`), and index 20 (`surface`) are default-written
 quarantined slots: TypeScript keeps runtime fields where needed for the frozen
 type/metadata surface, but persistence and the panel omit the removed settings.
 

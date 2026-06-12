@@ -307,7 +307,10 @@ splits into two classes:
 - **Exposed (tunable):** the generator shape fields — branch counts, reach,
   socket placement, radius/taper fractions, the tree-grammar knobs
   (`tree_score_curvature/density/degree`, `relax_lerp/repel/window`,
-  the legacy floor `edge_subsegments`), and three bushy-decoration controls
+  the legacy floor `edge_subsegments`), bounded straight-subdivision controls
+  (`maxSegmentLength`, `longRangeMaxSegmentLength`,
+  `curvatureSubsegmentBoost`, `edgeSubsegmentsMax`, `minSubsegments`), and
+  three bushy-decoration controls
   (`dendriteBranchletCount`, `dendriteTwigCount`, `dendriteDecorGroupMax`,
   runtime-clamped to their compile-time maxes). These are surfaced to the hidden dev
   panel as a `MorphologyConfig` (see [`dev-panel.md`](dev-panel.md)) and reach
@@ -320,7 +323,7 @@ splits into two classes:
   Float32Array; see [`../decisions/manifold.md`](../decisions/manifold.md).
 - **Protected (never exposed):** the four allocation/safety budgets
   (`dendrite_budget`, `trunk_cluster_budget`, `terminal_twig_budget`,
-  `cap_slack`) and the `salt::*` hash constants. These are re-locked by
+  `cap_slack`), waypoint counts/routing thresholds, and the `salt::*` hash constants. These are re-locked by
   `GeneratorConfig::apply_to` even when a config is applied, so the buffer cap
   and determinism namespace cannot be moved from the UI. Exposing them risks
   silent truncation/OOM or breaking seed reproducibility, with no visual upside.
@@ -335,6 +338,13 @@ dendrite generator's effective placement controls are `socketCount*`,
 removed fields are accepted and normalized away by the web loader/Rust JSON
 deserializer. The duplicate `generator.axonCurveLift` descriptor is also not
 exposed; `connectionCurveLift` is the user-facing curve control.
+
+Long-range axon leaves use deterministic waypoint routing when the leaf chord
+exceeds the locked distance threshold. Waypoints are clamped to the same
+generation-time inner brain bounds before the emitted straight subsegments are
+sampled, and the route endpoints/control points are clamped for those routed
+leaves. This keeps long projection polylines inside the brain volume without
+shrinking rendered radii or adding curved shader geometry.
 
 ## Rendering
 
@@ -353,6 +363,8 @@ vertices per instance. Both sub-passes read `last_spike`, but they now use it
 in different ways: the soma sphere shares the far-body soma pulse timing
 (`glow` + short `flash` + white-core lift), while the tube pass turns
 `path_len + local_segment_t * length(b-a)` into a moving source-owned packet.
+The packet's travel lifetime is independent of `glow_tau`; glow decay affects
+soma/legacy afterglow only.
 Axons carry the full outward packet; dendrites get only a weak near-soma echo so
 the renderer does not imply false outgoing dendrite signaling. A simple ambient + diffuse + rim
 lighting model is applied via `MorphUniforms` (192 B, shared by both

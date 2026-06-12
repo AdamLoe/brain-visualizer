@@ -150,25 +150,23 @@
   `web/src/core/morph-config.ts → MORPH_CONFIG_LS_KEY`;
   `web/src/core/types.ts → CONFIG_LS_KEY`.
 
-## Expose only bounded runtime-safe morphology knobs; lock buffer-sized ones
+## Expose only bounded runtime-safe morphology knobs
 
 - **Decision.** The dev panel exposes only a small, bounded set of new
-  morphology generator knobs at runtime (currently the three dendrite decoration
-  controls: `dendriteBranchletCount`, `dendriteTwigCount`,
-  `dendriteDecorGroupMax`). Buffer-sized knobs — subdivision lengths,
-  `edgeSubsegments`, waypoint counts — remain locked in the descriptor table
-  (max=current default, or simply omitted) and cannot be changed via the UI.
+  morphology generator knobs at runtime. Decoration controls are capped by
+  their compile-time maxima, and straight-subdivision controls are clamped to
+  the already-budgeted `EDGE_SUBSEGMENTS_MAX`. Allocation budgets, salts, and
+  waypoint counts remain protected.
 - **Why.** The GPU morphology buffers are pre-allocated to fixed maxes at
   pipeline build time. Changing a buffer-sized parameter without resizing the
-  buffer silently drops segments or overruns memory. The decoration controls are
-  safe to vary because they add detail within the existing buffer headroom.
-  Exposing a knob that appears interactive but corrupts data is worse than not
-  exposing it at all.
+  buffer silently drops segments or overruns memory. The exposed subdivision
+  knobs only vary how much of the existing per-hop cap is used, so they can make
+  turns smoother/coarser without changing buffer sizing.
 - **Applies to.** [`../architecture/dev-panel.md`](../architecture/dev-panel.md),
   [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md).
-- **Code anchors.** `web/src/core/morph-config.ts → MORPH_DESCRIPTORS`
-  (dendriteBranchletCount, dendriteTwigCount, dendriteDecorGroupMax entries);
-  `crates/brain-visualizer/src/sim/morphology.rs → MorphologyParams::locked_default`.
+- **Code anchors.** `web/src/core/morph-config.ts → MORPH_DESCRIPTORS`;
+  `crates/brain-visualizer/src/sim/morphology.rs → GeneratorConfig::apply_to,
+  MorphologyParams::locked_default`.
 - **Revisit when.** The pipeline rebuild path accepts dynamic buffer sizes, or a
   separate "needs-rebuild" flow is added for buffer-sized changes.
 
@@ -210,7 +208,8 @@
   `web/src/core/settings.ts → toFloat32Array` and consumed by
   `crates/brain-visualizer/src/sim/gpu/mod.rs → VisualSettings::from_slice` is the sole settings
   boundary between the JS and Rust worlds. Index assignment is the contract;
-  both files carry authoritative inline comments.
+  both files carry authoritative inline comments. Removed settings reserve their
+  existing indices and are zero/default-written rather than shifting later slots.
 - **Why.** WASM passes a raw byte slice — there is no named-field protocol.
   Using a flat array with documented indices is simpler than building a
   serialisation layer, and the `from_slice` implementation is length-tolerant

@@ -378,8 +378,8 @@ fn impulse_travel(age: f32, kind: u32, long_range: bool) -> f32 {
     return age * impulse_speed(kind, long_range);
 }
 
-fn impulse_packet(path_pos: f32, age: f32, glow: f32, kind: u32, long_range: bool) -> f32 {
-    if glow <= 0.0 {
+fn impulse_packet(path_pos: f32, age: f32, packet_gate: f32, kind: u32, long_range: bool) -> f32 {
+    if packet_gate <= 0.0 {
         return 0.0;
     }
     let travel = impulse_travel(age, kind, long_range);
@@ -388,15 +388,15 @@ fn impulse_packet(path_pos: f32, age: f32, glow: f32, kind: u32, long_range: boo
     let head = exp(-(delta * delta) / max(width * width, 1e-4));
     let behind = max(travel - path_pos, 0.0);
     let tail = exp(-behind / max(width * 2.6, 1e-4)) * select(0.0, 1.0, path_pos <= travel);
-    var packet = (head + tail * IMPULSE_TAIL_STRENGTH) * glow;
+    var packet = (head + tail * IMPULSE_TAIL_STRENGTH) * packet_gate;
     if kind == 0u {
         packet = packet * DENDRITE_ECHO_STRENGTH * exp(-path_pos / DENDRITE_ECHO_RANGE);
     }
     return packet;
 }
 
-fn impulse_segment_activity(seg_start: f32, seg_end: f32, age: f32, glow: f32, kind: u32, long_range: bool) -> f32 {
-    if glow <= 0.0 {
+fn impulse_segment_activity(seg_start: f32, seg_end: f32, age: f32, packet_gate: f32, kind: u32, long_range: bool) -> f32 {
+    if packet_gate <= 0.0 {
         return 0.0;
     }
     let travel = impulse_travel(age, kind, long_range);
@@ -406,7 +406,7 @@ fn impulse_segment_activity(seg_start: f32, seg_end: f32, age: f32, glow: f32, k
     let inside = travel >= a && travel <= b;
     let distance_to_segment = select(min(abs(travel - a), abs(travel - b)), 0.0, inside);
     let proximity = 1.0 - smoothstep(width, width * 3.0, distance_to_segment);
-    return clamp(proximity * glow, 0.0, 1.0);
+    return clamp(proximity * packet_gate, 0.0, 1.0);
 }
 
 fn active_opacity_ceiling(active_opacity: f32, inactive_floor: f32) -> f32 {
@@ -429,6 +429,7 @@ struct TubeVertOut {
     @location(9) @interpolate(flat) segment_start: f32,
     @location(10) @interpolate(flat) segment_end: f32,
     @location(11) @interpolate(flat) long_range: u32,
+    @location(12) packet_gate: f32,
 }
 
 struct SphereVertOut {
@@ -541,8 +542,9 @@ fn vs_main(
     let ei = ty & 1u;
     let region = (ty >> 2u) & 0x3u;
     let light_enabled = u.light_next == 1u || (presynaptic_dendrite && u.light_past == 1u);
-    let glow = select(0.0, spike_glow(u.tick, activity_packed, u.glow_tau), u.connection_layer >= 1u && light_enabled);
-    let age = select(0.0, spike_age(u.tick, activity_packed), glow > 0.0);
+    let spike_enabled = u.connection_layer >= 1u && light_enabled && has_spiked(activity_packed);
+    let glow = select(0.0, spike_glow(u.tick, activity_packed, u.glow_tau), spike_enabled);
+    let age = select(0.0, spike_age(u.tick, activity_packed), spike_enabled);
     let color = branch_base_color(seg.kind, region, ei, u.color_by, seg.neuron_id);
 
     var out: TubeVertOut;
@@ -564,6 +566,7 @@ fn vs_main(
     // keep the local echo regardless, but the flag is set uniformly here and the
     // axon-only gate lives in impulse_speed/impulse_width.
     out.long_range = select(0u, 1u, seg.path_len >= LONG_RANGE_PATH);
+    out.packet_gate = select(0.0, 1.0, spike_enabled);
     return out;
 }
 
@@ -577,7 +580,7 @@ fn fs_main(in: TubeVertOut) -> @location(0) vec4<f32> {
     let L = normalize(u.light_dir); // pre-normalised in CPU but normalize again for safety
 
     let long_range = in.long_range == 1u;
-    let packet = impulse_packet(in.path_pos, in.spike_age, in.glow, in.kind, long_range);
+    let packet = impulse_packet(in.path_pos, in.spike_age, in.packet_gate, in.kind, long_range);
     let legacy = in.glow * select(0.04, LEGACY_WHOLE_GLOW, in.kind == 1u);
     let activity = legacy + packet;
     let material = tube_material(in.base_color, N, in.world_pos, in.path_pos, in.neuron_id, in.kind);
@@ -611,7 +614,7 @@ fn fs_main_active(in: TubeVertOut) -> @location(0) vec4<f32> {
     let L = normalize(u.light_dir);
 
     let long_range = in.long_range == 1u;
-    let packet = impulse_packet(in.path_pos, in.spike_age, in.glow, in.kind, long_range);
+    let packet = impulse_packet(in.path_pos, in.spike_age, in.packet_gate, in.kind, long_range);
     let legacy = in.glow * select(0.04, LEGACY_WHOLE_GLOW, in.kind == 1u);
     let activity = legacy + packet;
     let material = tube_material(in.base_color, N, in.world_pos, in.path_pos, in.neuron_id, in.kind);
@@ -632,7 +635,7 @@ fn fs_main_active(in: TubeVertOut) -> @location(0) vec4<f32> {
         in.segment_start,
         in.segment_end,
         in.spike_age,
-        in.glow,
+        in.packet_gate,
         in.kind,
         long_range,
     );

@@ -88,7 +88,7 @@ pub struct VisualSettings {
     /// index 9  — reserved_zero (connectionLightPast removed; upstream lighting
     /// deferred until whole-path shared-arbor semantics are redesigned)
     pub connection_light_past: u32,
-    /// index 10 — bloom post-process intensity (default 0.0 = off)
+    /// index 10 — reserved_zero (bloomStrength removed from user settings)
     pub bloom_strength: f32,
     /// index 11 — manifold surface opacity (default 1.0)
     pub surface_opacity: f32,
@@ -143,8 +143,8 @@ impl Default for VisualSettings {
             connection_curve_lift: 0.15,
             connection_light_next: 1,
             connection_light_past: 0,
-            // Morphology controls: bloom on by default so the glow blooms.
-            bloom_strength: 0.40,
+            // index 10 reserved_zero (bloomStrength removed from user settings).
+            bloom_strength: 0.0,
             surface_opacity: 1.0,
             i_ext: 0.014,
             synaptic_scale: 0.03,
@@ -188,7 +188,7 @@ impl VisualSettings {
             connection_curve_lift: f(7, d.connection_curve_lift),
             connection_light_next: u(8, d.connection_light_next),
             connection_light_past: 0, // index 9: reserved_zero (upstream lighting removed)
-            bloom_strength: f(10, d.bloom_strength),
+            bloom_strength: 0.0,      // index 10: reserved_zero (bloomStrength removed)
             surface_opacity: f(11, d.surface_opacity),
             i_ext: f(12, d.i_ext),
             synaptic_scale: f(13, d.synaptic_scale),
@@ -2789,6 +2789,7 @@ mod tests {
     fn visual_settings_default_matches_product_defaults() {
         let settings = VisualSettings::default();
         assert_eq!(settings.glow_tau, 10.0);
+        assert_eq!(settings.bloom_strength, 0.0);
         assert_eq!(settings.heterogeneity, 0.50);
     }
 
@@ -2796,6 +2797,15 @@ mod tests {
     fn visual_settings_from_short_slice_uses_product_defaults() {
         let settings = VisualSettings::from_slice(&[]);
         assert_eq!(settings.glow_tau, 10.0);
+        assert_eq!(settings.bloom_strength, 0.0);
         assert_eq!(settings.heterogeneity, 0.50);
+    }
+
+    #[test]
+    fn visual_settings_ignores_tombstoned_bloom_slot() {
+        let mut data = vec![0.0; 26];
+        data[10] = 1.5;
+        let settings = VisualSettings::from_slice(&data);
+        assert_eq!(settings.bloom_strength, 0.0);
     }
 }

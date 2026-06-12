@@ -139,7 +139,6 @@ function buildHiddenReviewPresets(): Record<HiddenReviewPresetId, HiddenReviewPr
   const performanceVisual = cloneVisualSettings(DEFAULT_SETTINGS);
   performanceVisual.glowTau = 50.0;
   performanceVisual.connectionVisualWidth = 0.65;
-  performanceVisual.bloomStrength = 0.20;
   performanceVisual.morphRestingOpacity = 0.14;
 
   const performanceMorph = cloneMorphologyConfig(DEFAULT_MORPH_CONFIG);
@@ -156,7 +155,6 @@ function buildHiddenReviewPresets(): Record<HiddenReviewPresetId, HiddenReviewPr
   const heroVisual = cloneVisualSettings(DEFAULT_SETTINGS);
   heroVisual.glowTau = 72.0;
   heroVisual.connectionVisualWidth = 0.95;
-  heroVisual.bloomStrength = 0.65;
   heroVisual.morphRestingOpacity = 0.24;
 
   const heroMorph = cloneMorphologyConfig(DEFAULT_MORPH_CONFIG);
@@ -183,7 +181,7 @@ function buildHiddenReviewPresets(): Record<HiddenReviewPresetId, HiddenReviewPr
       appConfig: cloneAppConfig(DEFAULT_CONFIG),
       visualSettings: performanceVisual,
       morphologyConfig: performanceMorph,
-      notes: "Lower-cost comparison preset. Keeps the default network config but reduces bloom and morphology tessellation.",
+      notes: "Lower-cost comparison preset. Keeps the default network config but reduces morphology tessellation.",
       payloadSource: "DEFAULT_* baseline with explicit lower-cost visual + renderQuality overrides",
     },
     "hero-review": {
@@ -192,7 +190,7 @@ function buildHiddenReviewPresets(): Record<HiddenReviewPresetId, HiddenReviewPr
       visualSettings: heroVisual,
       morphologyConfig: heroMorph,
       notes: "Screenshot-oriented review preset. Keeps the default network config, raises tessellation, uses the active-bright morphology-lighting split, and maximises dendrite decoration (branchlets=1, twigs=2, decorGroupMax=16) for close-up shots.",
-      payloadSource: "DEFAULT_* baseline + hero bloom/quality overrides + /tmp/morph_view_active_bright_stats.json lighting split + Stream F max dendrite decoration",
+      payloadSource: "DEFAULT_* baseline + hero quality overrides + /tmp/morph_view_active_bright_stats.json lighting split + Stream F max dendrite decoration",
     },
   };
 }
@@ -1514,16 +1512,6 @@ export class DevPanel {
       changeOnly: true,
     }, s.connectionCurveLift, "renderer-rebuild");
 
-    // ── Post (bloom on by default; morphology glow blooms out of the box) ──────
-    root.appendChild(this._sep("Post"));
-
-    this._sliderRow(root, {
-      key: "bloomStrength",
-      label: "Bloom strength",
-      tooltip: "Intensity of the post-process bloom glow around bright structure (0 = off).",
-      min: 0, max: 2, step: 0.05,
-      decimals: 2,
-    }, s.bloomStrength, "live");
     // Surface controls (surfaceOpacity slider + surface select) removed: the
     // morphology replaces the brain-mesh context. The settings fields remain
     // (default off) but are no longer exposed in the panel.

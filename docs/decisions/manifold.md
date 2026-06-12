@@ -99,6 +99,32 @@
   generator is also ~5× slower to initialize than the old fan (see the known
   limitation below).
 
+## Branch smoothness uses bounded straight subdivision, not curved shader geometry
+
+- **Decision.** Branch and long-range path smoothness is controlled by bounded
+  subdivision knobs that change how many straight `MorphSegment` subsegments are
+  emitted per generated hop. The shader still draws straight tapered tubes; no
+  curved geometry segment type is added.
+- **Why.** More polyline samples make turns progress gradually while preserving
+  the existing 48-byte `MorphSegment` layout and render shader contract.
+- **Applies to.** [`../architecture/manifold.md`](../architecture/manifold.md),
+  [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md)
+- **Code anchors.** `crates/brain-visualizer/src/sim/morphology.rs →
+  adaptive_subsegments, GeneratorConfig::apply_to`; `web/src/core/morph-config.ts
+  → MORPH_DESCRIPTORS`.
+
+## Long-range waypoint routes stay inside the generated brain bounds
+
+- **Decision.** Long-range axon leaf routes clamp generated waypoints, route
+  endpoints, and route control points to a generation-time inner brain bounds
+  helper before emitting straight subsegments.
+- **Why.** Long projections should travel through the brain volume instead of
+  escaping the silhouette. Clamping generated geometry is the durable fix;
+  shrinking rendered tube radius would only hide the escape.
+- **Applies to.** [`../architecture/manifold.md`](../architecture/manifold.md)
+- **Code anchors.** `crates/brain-visualizer/src/sim/morphology.rs →
+  BrainBounds, long_range_waypoints, generate`.
+
 ## Incoming dendrites from real reverse sockets, not decorative local trees
 
 - **Decision.** Dendrites are generated from the target neuron's real incoming

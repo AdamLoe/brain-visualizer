@@ -69,9 +69,9 @@ mod salt {
     // a tree draw never collides with a target/weight or dendrite draw.
     pub const TREE_SPLIT: u32 = 0x00A0_0005; // mid-edge split-point jitter
     pub const TREE_BEND: u32 = 0x00A0_0006; // per-edge Bézier bow seed
-    // Local-branching grammar (Stream D — bushy dendrites). Decorrelated from the
-    // dendrite/tree salts above so a branchlet/twig draw never collides with a
-    // root/fork/leaf curve draw or a target/weight draw.
+                                            // Local-branching grammar (Stream D — bushy dendrites). Decorrelated from the
+                                            // dendrite/tree salts above so a branchlet/twig draw never collides with a
+                                            // root/fork/leaf curve draw or a target/weight draw.
     pub const DENDRITE_BRANCHLET: u32 = 0x00A0_0007; // secondary branchlet direction/length
     pub const DENDRITE_TWIG: u32 = 0x00A0_0008; // terminal twig direction/length
     pub const DENDRITE_TWIG_CURL: u32 = 0x00A0_0009; // per-twig curl variation
@@ -393,6 +393,11 @@ pub struct GeneratorConfig {
     pub relax_repel: f32,
     pub relax_window: usize,
     pub edge_subsegments: usize,
+    pub max_segment_length: f32,
+    pub long_range_max_segment_length: f32,
+    pub curvature_subsegment_boost: f32,
+    pub edge_subsegments_max: usize,
+    pub min_subsegments: usize,
     // ── Dendrite decoration controls (Stream F) ──────────────────────────────
     /// Decorative secondary branchlets per group (0 = none, 1 = one per group).
     /// Clamped to DENDRITE_BRANCHLET_MAX at generation time.
@@ -440,6 +445,11 @@ impl GeneratorConfig {
             relax_repel: p.relax_repel,
             relax_window: p.relax_window,
             edge_subsegments: p.edge_subsegments,
+            max_segment_length: p.max_segment_length,
+            long_range_max_segment_length: p.long_range_max_segment_length,
+            curvature_subsegment_boost: p.curvature_subsegment_boost,
+            edge_subsegments_max: p.edge_subsegments_max,
+            min_subsegments: p.min_subsegments,
             dendrite_branchlet_count: p.dendrite_branchlet_count,
             dendrite_twig_count: p.dendrite_twig_count,
             dendrite_decor_group_max: p.dendrite_decor_group_max,
@@ -450,6 +460,10 @@ impl GeneratorConfig {
     /// protected budget/slack fields (`dendrite_budget`, `trunk_cluster_budget`,
     /// `terminal_twig_budget`, `cap_slack`).
     pub fn apply_to(&self, base: &MorphologyParams) -> MorphologyParams {
+        let min_subsegments = self.min_subsegments.clamp(1, EDGE_SUBSEGMENTS_MAX);
+        let edge_subsegments_max = self
+            .edge_subsegments_max
+            .clamp(min_subsegments, EDGE_SUBSEGMENTS_MAX);
         MorphologyParams {
             base_radius: self.base_radius,
             axon_stop_fraction: self.axon_stop_fraction,
@@ -479,8 +493,9 @@ impl GeneratorConfig {
             // Dendrite decoration: web-exposed counts come from self (Stream F);
             // the sub-edge shape params (length/radius/curl fractions) stay locked
             // to the base preset — they are fine-tuned visual constants, not
-            // user-tunable knobs. Budgets/slack and adaptive/waypoint params
-            // likewise stay locked (buffer is sized against the MAX constants).
+            // user-tunable knobs. Budgets/slack and waypoint params stay locked;
+            // adaptive subdivision controls are clamped to the descriptor/constant
+            // maxima that the segment cap is sized against.
             dendrite_branchlet_count: self.dendrite_branchlet_count,
             dendrite_branchlet_length_fraction: base.dendrite_branchlet_length_fraction,
             dendrite_branchlet_radius_fraction: base.dendrite_branchlet_radius_fraction,
@@ -489,11 +504,11 @@ impl GeneratorConfig {
             dendrite_twig_radius_fraction: base.dendrite_twig_radius_fraction,
             dendrite_twig_curl: base.dendrite_twig_curl,
             dendrite_decor_group_max: self.dendrite_decor_group_max,
-            max_segment_length: base.max_segment_length,
-            long_range_max_segment_length: base.long_range_max_segment_length,
-            curvature_subsegment_boost: base.curvature_subsegment_boost,
-            edge_subsegments_max: base.edge_subsegments_max,
-            min_subsegments: base.min_subsegments,
+            max_segment_length: self.max_segment_length.clamp(0.018, 0.12),
+            long_range_max_segment_length: self.long_range_max_segment_length.clamp(0.012, 0.08),
+            curvature_subsegment_boost: self.curvature_subsegment_boost.clamp(0.0, 4.0),
+            edge_subsegments_max,
+            min_subsegments,
             long_range_chord_cells: base.long_range_chord_cells,
             long_range_max_waypoints: base.long_range_max_waypoints,
             long_range_waypoint_span: base.long_range_waypoint_span,
@@ -1068,8 +1083,70 @@ fn adaptive_subsegments(
     let length_samples = (edge_len / max_seg_len).ceil() as i64;
     let curvature_bonus = (curvature.max(0.0) * params.curvature_subsegment_boost).round() as i64;
     let lo = params.min_subsegments.max(1) as i64;
-    let hi = params.edge_subsegments_max.max(params.min_subsegments).max(1) as i64;
+    let hi = params
+        .edge_subsegments_max
+        .max(params.min_subsegments)
+        .max(1) as i64;
     (length_samples + curvature_bonus).clamp(lo, hi) as usize
+}
+
+#[derive(Clone, Copy, Debug)]
+struct BrainBounds {
+    center: [f32; 3],
+    axes: [f32; 3],
+}
+
+impl BrainBounds {
+    fn from_positions(positions: &[[f32; 3]], inside_margin: f32) -> Self {
+        if positions.is_empty() {
+            return Self {
+                center: [0.0; 3],
+                axes: [1.0; 3],
+            };
+        }
+
+        let mut min = [f32::INFINITY; 3];
+        let mut max = [f32::NEG_INFINITY; 3];
+        for p in positions {
+            for axis in 0..3 {
+                min[axis] = min[axis].min(p[axis]);
+                max[axis] = max[axis].max(p[axis]);
+            }
+        }
+
+        let center = [
+            (min[0] + max[0]) * 0.5,
+            (min[1] + max[1]) * 0.5,
+            (min[2] + max[2]) * 0.5,
+        ];
+        let mut axes = [1.0; 3];
+        for axis in 0..3 {
+            let half = ((max[axis] - min[axis]) * 0.5).max(1e-3);
+            let margin = inside_margin.max(0.0).min(half * 0.04);
+            axes[axis] = (half - margin).max(half * 0.92).max(1e-3);
+        }
+        Self { center, axes }
+    }
+
+    fn clamp_point(&self, p: [f32; 3]) -> [f32; 3] {
+        let v = sub(p, self.center);
+        let q = v[0] * v[0] / (self.axes[0] * self.axes[0])
+            + v[1] * v[1] / (self.axes[1] * self.axes[1])
+            + v[2] * v[2] / (self.axes[2] * self.axes[2]);
+        if q <= 1.0 {
+            return p;
+        }
+        add(self.center, scale(v, 1.0 / q.sqrt().max(1e-6)))
+    }
+
+    #[cfg(test)]
+    fn contains(&self, p: [f32; 3]) -> bool {
+        let v = sub(p, self.center);
+        let q = v[0] * v[0] / (self.axes[0] * self.axes[0])
+            + v[1] * v[1] / (self.axes[1] * self.axes[1])
+            + v[2] * v[2] / (self.axes[2] * self.axes[2]);
+        q <= 1.0 + 2e-5
+    }
 }
 
 fn emit_bezier_path(
@@ -1801,7 +1878,11 @@ fn emit_incoming_dendrites(
                         target_id ^ group.socket_idx ^ ((b as u32 + 1) << 8),
                         salt::DENDRITE_BRANCHLET,
                     );
-                    let sign = if unit(bseed ^ 0x9e37_79b9) < 0.5 { -1.0 } else { 1.0 };
+                    let sign = if unit(bseed ^ 0x9e37_79b9) < 0.5 {
+                        -1.0
+                    } else {
+                        1.0
+                    };
                     let bdir = norm(add(
                         scale(decor_basis, 0.6),
                         add(
@@ -1817,11 +1898,14 @@ fn emit_incoming_dendrites(
                         bseed ^ 0x27d4_eb2f,
                         blen * curve_tightness * twig_curl,
                     );
-                    let bp1 = add(add(group_fork, scale(bdir, blen * 0.36)), scale(bbend, 0.42));
+                    let bp1 = add(
+                        add(group_fork, scale(bdir, blen * 0.36)),
+                        scale(bbend, 0.42),
+                    );
                     let bp2 = add(add(btip, scale(bdir, -blen * 0.22)), scale(bbend, -0.20));
                     let bcurv = (len(bbend) / blen.max(1e-5)).min(2.0);
-                    let bsamples =
-                        adaptive_subsegments(blen, bcurv, false, params).min(DENDRITE_DECOR_SAMPLES_MAX);
+                    let bsamples = adaptive_subsegments(blen, bcurv, false, params)
+                        .min(DENDRITE_DECOR_SAMPLES_MAX);
                     let (_, _, _, bdrop) = emit_bezier_path(
                         segments,
                         cap,
@@ -1873,8 +1957,8 @@ fn emit_incoming_dendrites(
                     let wp1 = add(add(group_fork, scale(wdir, wlen * 0.34)), scale(wbend, 0.5));
                     let wp2 = add(add(wtip, scale(wdir, -wlen * 0.2)), scale(wbend, -0.24));
                     let wcurv = (len(wbend) / wlen.max(1e-5)).min(2.0);
-                    let wsamples =
-                        adaptive_subsegments(wlen, wcurv, false, params).min(DENDRITE_DECOR_SAMPLES_MAX);
+                    let wsamples = adaptive_subsegments(wlen, wcurv, false, params)
+                        .min(DENDRITE_DECOR_SAMPLES_MAX);
                     let (_, _, _, wdrop) = emit_bezier_path(
                         segments,
                         cap,
@@ -1972,6 +2056,7 @@ fn long_range_waypoints(
     brain_center: [f32; 3],
     cell_size: f32,
     params: &MorphologyParams,
+    brain_bounds: &BrainBounds,
 ) -> Vec<[f32; 3]> {
     let chord = dist(start, socket);
     let threshold = (params.long_range_chord_cells.max(0.0) * cell_size).max(1e-4);
@@ -2003,8 +2088,12 @@ fn long_range_waypoints(
         let outward = norm(sub(on_chord, brain_center));
         let around = scale(outward, offset_mag * bow);
         // Deterministic lateral detour (salt-seeded sign/magnitude per waypoint).
-        let s0 = unit(mix_key(seed_lo, source_id, target_id ^ (w as u32 + 1), salt::TREE_BEND))
-            * 2.0
+        let s0 = unit(mix_key(
+            seed_lo,
+            source_id,
+            target_id ^ (w as u32 + 1),
+            salt::TREE_BEND,
+        )) * 2.0
             - 1.0;
         let s1 = unit(mix_key(
             seed_lo,
@@ -2017,7 +2106,7 @@ fn long_range_waypoints(
             scale(lateral, s0 * offset_mag * bow),
             scale(lateral2, s1 * offset_mag * bow * 0.5),
         );
-        out.push(add(add(on_chord, around), detour));
+        out.push(brain_bounds.clamp_point(add(add(on_chord, around), detour)));
     }
     out
 }
@@ -2238,6 +2327,7 @@ pub fn generate(
         grid.min[1] + half_extent,
         grid.min[2] + half_extent,
     ];
+    let brain_bounds = BrainBounds::from_positions(positions, params.base_radius);
 
     let setup_ms = setup_start.elapsed_ms();
     let incoming_start = MorphTimer::start();
@@ -2574,15 +2664,24 @@ pub fn generate(
                     brain_center,
                     cell_size,
                     params,
+                    &brain_bounds,
                 )
             } else {
                 Vec::new()
             };
             let is_long_range = !waypoints.is_empty();
             let mut route: Vec<[f32; 3]> = Vec::with_capacity(waypoints.len() + 2);
-            route.push(p_start);
+            route.push(if is_long_range {
+                brain_bounds.clamp_point(p_start)
+            } else {
+                p_start
+            });
             route.extend_from_slice(&waypoints);
-            route.push(p_end);
+            route.push(if is_long_range {
+                brain_bounds.clamp_point(p_end)
+            } else {
+                p_end
+            });
 
             let r_parent = tree[parent].radius.max(r_floor);
             let r_child = tree[child].radius;
@@ -2619,6 +2718,16 @@ pub fn generate(
                 );
                 let p1 = add(add(h_start, scale(dir, edge_len * 0.33)), scale(bend, 0.30));
                 let p2 = add(add(h_end, scale(dir, -edge_len * 0.27)), scale(bend, -0.16));
+                let p1 = if is_long_range {
+                    brain_bounds.clamp_point(p1)
+                } else {
+                    p1
+                };
+                let p2 = if is_long_range {
+                    brain_bounds.clamp_point(p2)
+                } else {
+                    p2
+                };
                 // Adaptive (length + curvature aware) subsegment count, smaller
                 // max length on long-range hops for readable pulse motion.
                 let curvature = (len(bend) / edge_len).min(4.0);
@@ -2851,7 +2960,10 @@ mod tests {
         assert_eq!(p.dendrite_twig_curl, 1.6);
         assert_eq!(p.dendrite_decor_group_max, 12);
         assert_eq!(p.dendrite_budget, DENDRITE_MAX);
-        assert_eq!(DENDRITE_MAX, 160 + DENDRITE_DECOR_GROUP_MAX * DENDRITE_DECOR_PER_GROUP_MAX);
+        assert_eq!(
+            DENDRITE_MAX,
+            160 + DENDRITE_DECOR_GROUP_MAX * DENDRITE_DECOR_PER_GROUP_MAX
+        );
         assert_eq!(
             p.terminal_twig_budget,
             (LONG_RANGE_MAX_WAYPOINTS + 1) * EDGE_SUBSEGMENTS_MAX + EDGE_SUBSEGMENTS_MAX
@@ -3463,6 +3575,32 @@ mod tests {
     }
 
     #[test]
+    fn long_range_waypoints_stay_inside_brain_bounds() {
+        let (pos, g) = small_grid();
+        let params = MorphologyParams::locked_default();
+        let bounds = BrainBounds::from_positions(&pos, params.base_radius);
+        let waypoints = long_range_waypoints(
+            8675309,
+            0,
+            (pos.len() - 1) as u32,
+            pos[0],
+            pos[pos.len() - 1],
+            [0.375, 0.375, 0.375],
+            g.cell_size,
+            &params,
+            &bounds,
+        );
+
+        assert!(!waypoints.is_empty());
+        for waypoint in waypoints {
+            assert!(
+                bounds.contains(waypoint),
+                "waypoint escaped brain bounds: {waypoint:?}"
+            );
+        }
+    }
+
+    #[test]
     fn incoming_synapses_drive_target_owned_dendrites() {
         let (pos, g) = small_grid();
         let seed = 31337u32;
@@ -3628,7 +3766,10 @@ mod tests {
             &source_types,
             connectivity::ReachParams::LOCAL_ONLY,
         );
-        assert_eq!(m.dropped, 0, "bushy dendrites should fit the cap at this size");
+        assert_eq!(
+            m.dropped, 0,
+            "bushy dendrites should fit the cap at this size"
+        );
 
         // Every real presynaptic dendrite leaf still keeps kind==0 and a real,
         // distinct source as target_id (the activity owner the shaders read).
@@ -3690,7 +3831,10 @@ mod tests {
     fn decoration_budget_ramps_down_with_neuron_count() {
         let configured = DENDRITE_DECOR_GROUP_MAX;
         assert_eq!(effective_decor_group_max(1200, configured), configured);
-        assert_eq!(effective_decor_group_max(DECOR_FULL_N, configured), configured);
+        assert_eq!(
+            effective_decor_group_max(DECOR_FULL_N, configured),
+            configured
+        );
         assert_eq!(effective_decor_group_max(DECOR_ZERO_N, configured), 0);
         assert_eq!(effective_decor_group_max(12_000, configured), 0);
         // Monotone non-increasing across the ramp.
@@ -3974,6 +4118,36 @@ mod tests {
     #[test]
     fn lighting_config_default_matches_product_default() {
         assert_eq!(LightingConfig::default().resting_brightness, 0.0);
+    }
+
+    #[test]
+    fn generator_config_exposes_bounded_subdivision_controls() {
+        let base = MorphologyParams::locked_default();
+        let cfg = GeneratorConfig {
+            max_segment_length: 0.02,
+            long_range_max_segment_length: 0.014,
+            curvature_subsegment_boost: 3.5,
+            edge_subsegments_max: EDGE_SUBSEGMENTS_MAX,
+            min_subsegments: 2,
+            ..GeneratorConfig::from_params(&base)
+        };
+        let params = cfg.apply_to(&base);
+        assert_eq!(params.max_segment_length, 0.02);
+        assert_eq!(params.long_range_max_segment_length, 0.014);
+        assert_eq!(params.curvature_subsegment_boost, 3.5);
+        assert_eq!(params.edge_subsegments_max, EDGE_SUBSEGMENTS_MAX);
+        assert_eq!(params.min_subsegments, 2);
+
+        let too_high = GeneratorConfig {
+            edge_subsegments_max: EDGE_SUBSEGMENTS_MAX + 20,
+            min_subsegments: EDGE_SUBSEGMENTS_MAX + 20,
+            curvature_subsegment_boost: 9.0,
+            ..cfg
+        }
+        .apply_to(&base);
+        assert_eq!(too_high.edge_subsegments_max, EDGE_SUBSEGMENTS_MAX);
+        assert_eq!(too_high.min_subsegments, EDGE_SUBSEGMENTS_MAX);
+        assert_eq!(too_high.curvature_subsegment_boost, 4.0);
     }
 
     #[test]

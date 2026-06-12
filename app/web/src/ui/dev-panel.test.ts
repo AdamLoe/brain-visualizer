@@ -197,12 +197,14 @@ describe("settings descriptors", () => {
     const loaded = loadSettings();
 
     expect(loaded.glowTau).toBe(88);
+    expect(loaded.bloomStrength).toBe(DEFAULT_SETTINGS.bloomStrength);
     expect(loaded.pointRadius).toBe(DEFAULT_SETTINGS.pointRadius);
     expect(loaded.surfaceOpacity).toBe(DEFAULT_SETTINGS.surfaceOpacity);
     expect(loaded.surface).toBe(DEFAULT_SETTINGS.surface);
 
     saveSettings({
       ...loaded,
+      bloomStrength: 0.7,
       pointRadius: 0.02,
       surfaceOpacity: 0.25,
       surface: 2,
@@ -211,6 +213,7 @@ describe("settings descriptors", () => {
       public?: Record<string, unknown>;
       dev?: Record<string, unknown>;
     };
+    expect(saved.public).not.toHaveProperty("bloomStrength");
     expect(saved.public).not.toHaveProperty("surfaceOpacity");
     expect(saved.public).not.toHaveProperty("surface");
     expect(saved.dev).not.toHaveProperty("pointRadius");
@@ -221,6 +224,7 @@ describe("settings descriptors", () => {
       ...DEFAULT_SETTINGS,
       pointRadius: 0.02,
       surfaceOpacity: 0.25,
+      bloomStrength: 0.7,
       signalSource: 2,
       surface: 2,
       adaptiveScalerEnabled: 1,
@@ -229,10 +233,57 @@ describe("settings descriptors", () => {
 
     expect(values.length).toBe(26);
     expect(values[1]).toBeCloseTo(DEFAULT_SETTINGS.pointRadius);
+    expect(values[10]).toBe(0);
     expect(values[11]).toBe(DEFAULT_SETTINGS.surfaceOpacity);
     expect(values[16]).toBe(0);
     expect(values[20]).toBe(DEFAULT_SETTINGS.surface);
     expect(values[23]).toBe(0);
+  });
+});
+
+describe("morphology subdivision controls", () => {
+  const paths = [
+    "generator.maxSegmentLength",
+    "generator.longRangeMaxSegmentLength",
+    "generator.curvatureSubsegmentBoost",
+    "generator.edgeSubsegmentsMax",
+    "generator.minSubsegments",
+  ];
+
+  test("DEFAULT_MORPH_CONFIG exposes straight subsegment controls", () => {
+    expect(DEFAULT_MORPH_CONFIG.generator.maxSegmentLength).toBe(0.05);
+    expect(DEFAULT_MORPH_CONFIG.generator.longRangeMaxSegmentLength).toBe(0.025);
+    expect(DEFAULT_MORPH_CONFIG.generator.curvatureSubsegmentBoost).toBe(2.0);
+    expect(DEFAULT_MORPH_CONFIG.generator.edgeSubsegmentsMax).toBe(4);
+    expect(DEFAULT_MORPH_CONFIG.generator.minSubsegments).toBe(1);
+  });
+
+  test("subdivision descriptors match defaults and regenerate morphology", () => {
+    for (const path of paths) {
+      const descriptor = MORPH_DESCRIPTORS.find((d) => d.jsonPath === path);
+      expect(descriptor).toBeDefined();
+      expect(descriptor?.default).toBe(getMorphValue(DEFAULT_MORPH_CONFIG, path));
+      expect(descriptor?.group).toBe("generator");
+      expect(descriptor?.applyKind).toBe("regenerate");
+    }
+  });
+
+  test("morphConfigToJson persists subdivision controls", () => {
+    const modified = structuredClone(DEFAULT_MORPH_CONFIG);
+    modified.generator.maxSegmentLength = 0.03;
+    modified.generator.longRangeMaxSegmentLength = 0.018;
+    modified.generator.curvatureSubsegmentBoost = 3.1;
+    modified.generator.edgeSubsegmentsMax = 3;
+    modified.generator.minSubsegments = 2;
+
+    const parsed = JSON.parse(morphConfigToJson(modified)) as {
+      generator?: Record<string, unknown>;
+    };
+    expect(parsed.generator?.maxSegmentLength).toBe(0.03);
+    expect(parsed.generator?.longRangeMaxSegmentLength).toBe(0.018);
+    expect(parsed.generator?.curvatureSubsegmentBoost).toBe(3.1);
+    expect(parsed.generator?.edgeSubsegmentsMax).toBe(3);
+    expect(parsed.generator?.minSubsegments).toBe(2);
   });
 });
 
