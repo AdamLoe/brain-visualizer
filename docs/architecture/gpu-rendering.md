@@ -22,7 +22,7 @@ The rendering subsystem turns the live neuron state (positions, `last_spike` pac
 - HDR scene buffer + bloom post-process pass — `crates/brain-visualizer/src/sim/gpu/shaders/bloom.wgsl → fs_bright / fs_blur / fs_composite`
 - LOD thresholds — `crates/brain-visualizer/src/sim/gpu/mod.rs → LOD_FAR_ONLY_DIST / LOD_NEAR_ONLY_DIST`
 - Guards for disabled passes — `crates/brain-visualizer/src/sim/gpu/mod.rs → DRAW_LEGACY_CYLINDERS / DRAW_LEGACY_NEAR_SPHERES / DRAW_LEGACY_RIBBONS`
-- Legacy all-segment morphology draw guard (bypasses compaction, draws every generated segment) — `crates/brain-visualizer/src/sim/gpu/pipelines.rs → DRAW_LEGACY_ALL_SEGMENTS` (Rust const + matching WGSL `override` in both `compact_morph_segments.wgsl` and `render_morphology.wgsl`)
+- Legacy all-segment morphology draw guard (bypasses compaction, draws every generated segment) — `crates/brain-visualizer/src/sim/gpu/pipelines.rs → DRAW_LEGACY_ALL_SEGMENTS` (Rust const; the matching WGSL `override` lives in `render_morphology.wgsl`, while compaction is skipped Rust-side)
 - Visual mode enums consumed by the render shaders — `crates/brain-visualizer/src/sim/gpu/mod.rs → VisualSettings`
 - Render pass order + frame routing logic — `crates/brain-visualizer/src/sim/gpu/mod.rs → GpuBackend::render_full`
 

@@ -71,7 +71,7 @@ stages.
 | B2 | Simulation correctness gates | Implemented | Strict adapter helper, synchronized fixed-point overflow stress, Rust/WGSL tick-wrap gates, and docs migration landed; local strict run uses llvmpipe, so it cannot prove the no-adapter failure branch on this machine. | Include in work review/final commit. | Real no-adapter strict-path proof still needs an environment without llvmpipe. |
 | C1 | CPU backend retirement/feature gate | Drafted | Split from original Stream C after plan review. | Await user decision before destructive deletion; feature-gate/archive path can proceed after activation. | Delete-vs-feature-gate decision. |
 | C2 | Legacy render/dead-code amnesty | Drafted | Split from original Stream C after plan review. | Wait until D1 and B1 are no longer touching render/settings surfaces. | Conflicts with D1/B1. |
-| D1 | Morphology segment scaling | Drafted | `stream-d-morphology-segment-scaling-2026-06-12.md` persisted. | Plan review. | Serializes with D2 prepared payload shape. |
+| D1 | Morphology segment scaling | Shipped | Chunked morphology resources, per-chunk compaction/draw, docs migration, cargo test, and render_check landed in `593b7d3`. | Use as the settled upload boundary for D2 worker payload integration. | Real high-N browser/GPU smoke remains environment-dependent. |
 | D2 | Rebuild responsiveness | Partially implemented | Wave 1 coordinator groundwork landed; web typecheck/tests passed; plan remains active for worker/payload phases. | Include in first-wave commit. | Prepared payload should stay GPU-agnostic and follow D1 upload boundary later. |
 | E | Visual outcome and region coherence | Drafted | `stream-e-visual-outcome-polish-hud-truthfulness-2026-06-12.md` persisted. | Plan review. | Prototype can ship opt-in; default promotion needs review. |
 
@@ -81,8 +81,8 @@ stages.
 |---|---|---|---|
 | 1 | Ready | A0 real-hardware smoke from Stream A; B1 settings/metrics contracts; D2 wave 1 rebuild coordinator groundwork | Low-regret foundations that do not require production telemetry, CPU deletion, or region-default decisions. |
 | 2 | Pending | B2 simulation correctness gates | Valuable but overlaps `sim/gpu/mod.rs`; run after B1 or with strict file-region ownership. |
-| 3 | Pending | D1 morphology segment scaling | High-risk GPU resource work; run after D2 coordinator groundwork and not in parallel with legacy render amnesty. |
-| 4 | Pending | D2 worker upload integration | Depends on a settled GPU upload/chunking boundary from D1 unless payload remains flat and GPU-agnostic. |
+| 3 | Done | D1 morphology segment scaling | Shipped in `593b7d3`; chunking remains a main-thread GPU upload/resource policy. |
+| 4 | Ready | D2 worker upload integration | D1 settled the upload/chunking boundary; worker payloads must remain flat and GPU-agnostic. |
 | 5 | Pending | Stream E spatial-region prototype | Can run after correctness/contracts; promotion to default requires review. |
 | Decision-gated | Pending | A2 production telemetry enablement, C1 CPU deletion, C2 legacy render amnesty | Requires owner decision or dependency clearance. |
 
