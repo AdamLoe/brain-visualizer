@@ -54,7 +54,7 @@ enum MetricsReadState {
 // ─── V2 Phase 0: Visual/Sim settings struct ──────────────────────────────────
 //
 // Canonical flat-array contract (shared with TypeScript via Float32Array).
-// Indices 0..=23 match web/settings.ts `toFloat32Array` output exactly.
+// Indices 0..=25 match web/settings.ts `toFloat32Array` output exactly.
 // Length-tolerant parsing: new indices added later won't break old callers.
 //
 // Field naming: f32 for continuous knobs, u32 for mode enums.
