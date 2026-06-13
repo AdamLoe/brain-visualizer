@@ -139,14 +139,31 @@ heavy blocks.
 
 **Sub-stage progress weighting.** The `[54%, 96%]` band is no longer split into
 equal slices. Each stage carries a `weight`, and the band is divided by
-cumulative weight so the GPU-acquire and render-compile stages own the majority
-(acquire+core pipelines `0.45`, compile render pipelines `0.20`, create render
-targets `0.07`, the rest `0.02`–`0.05`). Within those two heavy, synchronous
-Rust calls the bar would otherwise freeze; a one-way Rust→WASM→TS sub-stage
-callback `(label, fraction)` reports intra-stage progress that `onSubStage` maps
-onto the current stage's band, so the label and bar advance continuously
-("Requesting GPU adapter… / device… / Configuring surface…",
-"Compiling render shaders…"). The callback is installed both as an optional
+cumulative weight so the GPU-acquire, render-compile, and network-payload stages
+own the majority (acquire+core pipelines `0.34`, prepare network payload `0.18`,
+compile render pipelines `0.16`, create render targets `0.07`, the rest
+`0.02`–`0.05`). Weights are normalized by their sum, so the table need not total
+exactly `1.0`. Within those heavy stages the bar would otherwise freeze; a
+one-way Rust→WASM→TS sub-stage callback `(label, fraction)` reports intra-stage
+progress that `onSubStage` maps onto the current stage's band, so the label and
+bar advance continuously ("Requesting GPU adapter… / device… / Configuring
+surface…", "Compiling render shaders…").
+
+**Within-stage percent in the label.** `onSubStage(label, fraction)` appends the
+within-stage percent (`Math.round(fraction * 100)`) to the stage label it writes
+to the bottom-right, so it reads e.g. `Prepare network payload 42%` and climbs to
+`100%` as that stage progresses — distinct from the overall bar percent on the
+bottom-left.
+
+**Prepare-network-payload progress is synthetic.** The worker builds the payload
+inside a single synchronous WASM `prepare_network_payload` call (manifold →
+placement → spatial grid → morphology → soma spheres) with no incremental seam
+back to the main thread, so this stage's within-stage percent is a time-based
+creep: a rAF-driven `0.95·(1 − e^(−t/τ))` ease (τ ≈ 700 ms) that animates the
+label while `waitForPreparedNetwork` awaits, then snaps to `100%` on completion.
+It is *not* a measured fraction. On a box with no real GPU the worker often
+finishes before the first creep tick (it overlaps the GPU handshake), so the
+label can jump straight to `100%`; real climb shows on GPU hardware. The callback is installed both as an optional
 `create_staged(...)` argument (acquire sub-stages) and via
 `backend.set_progress_callback(...)` (compile sub-stages); both are additive and
 optional, so a stale-vs-regenerated `.d.ts` can't break boot. The legacy

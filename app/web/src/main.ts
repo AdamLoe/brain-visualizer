@@ -458,11 +458,15 @@ async function boot(): Promise<void> {
     let stageBandEnd = progressStart;
 
     // Boot-load overhaul (B): sub-stage progress handler. Maps the in-stage
-    // fraction (0..1) reported by Rust onto the current stage's progress band.
+    // fraction (0..1) reported by Rust (or the synthetic creep below) onto the
+    // current stage's progress band, and appends the WITHIN-STAGE percent to the
+    // stage label (e.g. "Prepare network payload 42%") so the bottom-right label
+    // shows that stage's own progress, not just the overall bar.
     const onSubStage = (label: string, fraction: number): void => {
       const clamped = Math.max(0, Math.min(1, fraction));
+      const withinPercent = Math.round(clamped * 100);
       updateStartupOverlay({
-        stage: label,
+        stage: `${label} ${withinPercent}%`,
         progress: stageBandStart + clamped * (stageBandEnd - stageBandStart),
       });
     };
@@ -470,7 +474,7 @@ async function boot(): Promise<void> {
     const stages: BackendStage[] = [
       {
         name: "Acquire GPU + core pipelines",
-        weight: 0.45,
+        weight: 0.34,
         run: async () => {
           if (typeof ctor.create_staged !== "function") {
             gpuBackend = await ctor.create(
@@ -501,9 +505,36 @@ async function boot(): Promise<void> {
       },
       {
         name: "Prepare network payload",
-        weight: 0.05,
+        weight: 0.18,
         run: async () => {
-          startupPreparedPayload = await waitForPreparedNetwork(startupPrepareSequence);
+          // The worker generates the payload inside a single synchronous WASM
+          // call (manifold → placement → grid → morphology → soma spheres) with
+          // no incremental progress seam back to the main thread, so the
+          // within-stage percent is a SYNTHETIC time-based creep: it eases toward
+          // ~95% while we await the worker and snaps to 100% on completion. On
+          // this hardware the worker often finishes before the first creep tick
+          // (it overlaps the GPU handshake), so the label may jump straight to
+          // 100% — that is expected here; real duration shows on GPU hardware.
+          const creepLabel = "Prepare network payload";
+          const creepStart = performance.now();
+          // Time constant: fraction approaches 0.95 asymptotically; ~600ms to
+          // reach ~0.6, never reaching 1.0 until the real payload lands.
+          const CREEP_TAU_MS = 700;
+          onSubStage(creepLabel, 0);
+          let creepHandle = 0;
+          const creep = (): void => {
+            const elapsed = performance.now() - creepStart;
+            const fraction = 0.95 * (1 - Math.exp(-elapsed / CREEP_TAU_MS));
+            onSubStage(creepLabel, fraction);
+            creepHandle = requestAnimationFrame(creep);
+          };
+          creepHandle = requestAnimationFrame(creep);
+          try {
+            startupPreparedPayload = await waitForPreparedNetwork(startupPrepareSequence);
+          } finally {
+            cancelAnimationFrame(creepHandle);
+          }
+          onSubStage(creepLabel, 1);
         },
       },
       {
@@ -568,7 +599,7 @@ async function boot(): Promise<void> {
       },
       {
         name: "Compile render pipelines",
-        weight: 0.20,
+        weight: 0.16,
         run: () => stagedBackend?.startup_build_render_pipelines(),
       },
       {
