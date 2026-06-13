@@ -15,13 +15,22 @@ pub mod manifold;
 pub mod profiler;
 pub mod sim;
 
-use crate::manifold::{Manifold, ManifoldParams, RegionKind};
+use crate::manifold::{Manifold, ManifoldParams, RegionAssignmentMode, RegionKind};
 use crate::sim::backend::SimConfig;
 
 /// Build the manifold for a config. Pure, host-callable; the wasm entry point
 /// and `cargo test` both go through this so there is one code path.
 pub fn build_manifold(config: &SimConfig) -> Manifold {
-    let params = ManifoldParams::new(config.n, config.seed_lo());
+    build_manifold_with_region_assignment(config, RegionAssignmentMode::HashRandom)
+}
+
+/// Build the manifold with an explicit region-assignment mode.
+pub fn build_manifold_with_region_assignment(
+    config: &SimConfig,
+    region_assignment: RegionAssignmentMode,
+) -> Manifold {
+    let params =
+        ManifoldParams::new(config.n, config.seed_lo()).with_region_assignment(region_assignment);
     Manifold::generate(&params)
 }
 
@@ -217,6 +226,7 @@ mod wasm_entry {
         seed: u32,
         visual_settings: &[f32],
         morph_config_json: &str,
+        region_assignment_mode: &str,
     ) -> Result<WasmPreparedNetwork, JsValue> {
         let n = clamp_neuron_count(n);
         let visual = VisualSettings::from_slice(visual_settings);
@@ -225,6 +235,7 @@ mod wasm_entry {
                 .map_err(|e| JsValue::from_str(&format!("[gpu-build] bad morph config: {e}")))?;
         let params = morph_params_from_config_and_visual(&morph_config, &visual);
         let reach = reach_from_visual_settings(&visual);
+        let region_assignment = region_assignment_mode_from_str(region_assignment_mode);
         let config = SimConfig {
             n,
             k,
@@ -234,7 +245,7 @@ mod wasm_entry {
             ..SimConfig::default()
         };
         Ok(WasmPreparedNetwork {
-            inner: PreparedNetworkBuild::prepare(config, params, reach),
+            inner: PreparedNetworkBuild::prepare(config, params, reach, region_assignment),
         })
     }
 
@@ -781,6 +792,13 @@ mod wasm_entry {
     pub fn log_cross_origin_isolation(isolated: bool) {
         web_sys::console::log_1(&format!("[coi] crossOriginIsolated={isolated}").into());
     }
+
+    fn region_assignment_mode_from_str(value: &str) -> RegionAssignmentMode {
+        match value {
+            "anterior-posterior-prototype" => RegionAssignmentMode::AnteriorPosteriorPrototype,
+            _ => RegionAssignmentMode::HashRandom,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -796,6 +814,35 @@ mod tests {
         let m = build_manifold(&c);
         assert_eq!(m.neuron_positions.len(), 4000);
         let (i, a, o) = region_split(&m);
+        assert_eq!(i + a + o, 4000);
+    }
+
+    #[test]
+    fn build_manifold_with_explicit_region_mode_preserves_default_path() {
+        let c = SimConfig {
+            n: 4000,
+            seed: 17,
+            ..SimConfig::default()
+        };
+        let default = build_manifold(&c);
+        let explicit = build_manifold_with_region_assignment(&c, RegionAssignmentMode::HashRandom);
+        assert_eq!(explicit.neuron_regions, default.neuron_regions);
+    }
+
+    #[test]
+    fn build_manifold_with_prototype_region_mode_is_opt_in() {
+        let c = SimConfig {
+            n: 4000,
+            seed: 17,
+            ..SimConfig::default()
+        };
+        let default = build_manifold(&c);
+        let prototype = build_manifold_with_region_assignment(
+            &c,
+            RegionAssignmentMode::AnteriorPosteriorPrototype,
+        );
+        assert_ne!(prototype.neuron_regions, default.neuron_regions);
+        let (i, a, o) = region_split(&prototype);
         assert_eq!(i + a + o, 4000);
     }
 }

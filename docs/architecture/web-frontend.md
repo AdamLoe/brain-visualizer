@@ -67,9 +67,10 @@ before any backend call, pending DOM work is flushed in order:
    `gpuBackend.update_settings()` or `set_morphology_config(json)`
 4. `pendingStim` → `gpuBackend.stimulate()`
 
-Network N/K/seed changes no longer call `gpuBackend.reinitialize()` from rAF.
-`main.ts` snapshots the current `VisualSettings` Float32Array and morphology
-JSON, assigns a monotonic sequence, and sends the request to
+Network N/K/seed and region-assignment-mode changes no longer call
+`gpuBackend.reinitialize()` from rAF. `main.ts` snapshots the current
+`VisualSettings` Float32Array, morphology JSON, and
+`AppConfig.regionAssignmentMode`, assigns a monotonic sequence, and sends the request to
 `NetworkBuildClient`. The worker returns a flat `PreparedNetworkPayload`:
 positions, region codes, surface vertices/faces, spatial-grid CSR arrays,
 morphology segment field arrays, soma field arrays, and stats/config metadata.
@@ -82,7 +83,7 @@ re-push so any newer UI state is restored after the structural rebuild.
 `web/src/rebuild/rebuild-coordinator.ts → RebuildCoordinator` still owns
 latest-wins immediate settings pushes and non-generator morphology config
 pushes. `web/src/rebuild/rebuild-intent.ts` classifies structural UI changes:
-N/K/seed, connection-curve lift, reach knobs, and morphology generator config
+N/K/seed, region assignment, connection-curve lift, reach knobs, and morphology generator config
 changes request a worker-prepared payload for the current network; uniform-only
 lighting and render-quality-only morphology changes can still flow through
 `set_morphology_config(json)` because they do not run the morphology generator.
@@ -221,8 +222,9 @@ lives inside the wasm backend, not in the TS wrapper.
 ## Types and DEFAULT_CONFIG
 
 `web/src/core/types.ts → DEFAULT_CONFIG` boots at `n=6_000, k=16,
-excitability=0.10, ticksPerSec=30` — the high-scale beauty baseline where the
-network is calm enough for propagation to be visible. The product neuron-count cap is
+regionAssignmentMode="hash-random", excitability=0.10, ticksPerSec=30` — the
+high-scale beauty baseline where the network is calm enough for propagation to
+be visible. The product neuron-count cap is
 `PRODUCT_MAX_N = 20_000`; `loadConfig()` and `saveConfig()` clamp persisted or
 incoming `n` through `clampNeuronCount()`, so old saved high-N localStorage
 payloads cannot exceed the current product cap. Tier presets and the per-tier N
@@ -241,10 +243,11 @@ to `DEFAULT_CONFIG` on mismatch/parse-error/missing key, a field-by-field
 a `try/catch` so a blocked localStorage (private browsing, quota) degrades
 silently.
 
-**Persisted fields:** `n`, `k`, `tier`, `backend`, `speed`, `excitability`,
-`ticksPerSec`. The only live backend value is `"gpu"`; stale saved
+**Persisted fields:** `n`, `k`, `tier`, `backend`, `regionAssignmentMode`,
+`speed`, `excitability`, `ticksPerSec`. The only live backend value is `"gpu"`; stale saved
 `backend: "cpu"` values are normalized by `loadConfig()` so old localStorage
-payloads cannot break startup.
+payloads cannot break startup. Unknown `regionAssignmentMode` strings normalize
+to `"hash-random"` so stale prototype saves cannot promote an unrecognized mode.
 **Not persisted:** `seed` (a fixed constant) and any runtime counters.
 
 Wiring:

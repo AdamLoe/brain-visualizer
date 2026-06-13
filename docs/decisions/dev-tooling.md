@@ -33,9 +33,11 @@
 
 - **Decision.** Most `VisualizerSettings` fields are `"live"`, but
   `connectionCurveLift` stays `"renderer-rebuild"` and the descriptor-driven
-  morphology generator/render-quality groups are still rebuild-backed. The old
-  brain-reset Apply API and pending UI are removed; rebuilds go through the
-  network/morphology rebuild controls.
+  morphology generator/render-quality groups are still rebuild-backed. The
+  region-assignment prototype is an `AppConfig` dev-panel checkbox, not a
+  `VisualizerSettings` field, and also rebuilds through the worker-prepared
+  network path. The old brain-reset Apply API and pending UI are removed;
+  rebuilds go through the network/morphology rebuild controls.
 - **Why.** `heterogeneity`, `weightNormalization`, and `inputMode` are `"live"`
   because the integrate uniform is read from GPU memory every tick rather than
   cached at init. `connectionCurveLift` and the morphology generator/quality
@@ -50,8 +52,9 @@
 
 - **Decision.** Dev-panel settings persist under a versioned key
   (`bv2_settings_v2`), morphology config persists under `bv2_morph_v2`, and app
-  runtime config persists under `bv2_config_v2`. On load, saved fields are
-  merged over defaults field-by-field with `?? base` guards. There is still no
+  runtime config persists under `bv2_config_v2`; this includes the hidden
+  region-assignment review mode. On load, saved fields are merged over defaults
+  field-by-field with `?? base` guards. There is still no
   public preset manager; the only presets are the static hidden review buttons
   `accepted-default`, `performance-review`, and `hero-review` in the Storage tab.
 - **Why.** Merge-over-defaults means adding a new field is safe without a
@@ -72,6 +75,24 @@
   visual/morph values unless the version sentinel is bumped. App config is the
   exception for scale safety: saved `n` is clamped to the product cap on
   load/save.
+
+## Region assignment mode stays in AppConfig, not VisualSettings
+
+- **Decision.** The anterior/posterior region prototype toggle lives in
+  `AppConfig.regionAssignmentMode` and is sent with worker-prepared network
+  requests; it is not added to the `VisualizerSettings` Float32Array or to the
+  morphology JSON config.
+- **Why.** Region assignment is a build-time structural choice that changes the
+  generated per-neuron region codes. It does not belong in the live uniform
+  settings array, and putting it there would risk the frozen positional index
+  contract for a value Rust only consumes during preparation.
+- **Applies to.** [`../architecture/dev-panel.md`](../architecture/dev-panel.md),
+  [`../architecture/web-frontend.md`](../architecture/web-frontend.md),
+  [`../architecture/manifold.md`](../architecture/manifold.md).
+- **Code anchors.** `web/src/core/types.ts → AppConfig, normalizeRegionAssignmentMode`;
+  `web/src/ui/dev-panel.ts → _buildNetworkTab`;
+  `web/src/gpu-build/prepared-network.ts → PreparedNetworkRequest`;
+  `crates/brain-visualizer/src/lib.rs → prepare_network_payload`.
 
 ## Morphology config on a separate key + WASM entry point, not the Float32Array
 

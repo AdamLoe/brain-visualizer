@@ -1,7 +1,7 @@
 ---
 status:        shipped
 owner:         unassigned
-last_updated:  2026-06-12
+last_updated:  2026-06-13
 okay_to_delete: true
 long_lived:    false
 owning_docs:
@@ -95,9 +95,11 @@ build-time assignment mode that does not retune connectivity, drive, or LIF
 constants. The default-vs-prototype tradeoff was migrated into
 `decisions/manifold.md`.
 
-No web/HUD/profiling docs changed because this stream added no public UI,
-settings contract, HUD wording, or metrics surface. Visual/dynamics promotion
-review remains manual: the prototype is intentionally internal and not exposed
-through the browser/dev panel, so screenshots or clips require a reviewer to
-wire a temporary local call site or inspect a dedicated future harness before
-changing the default.
+The follow-up owner request exposed the prototype for review without changing
+the shipped default: `architecture/manifold.md`, `architecture/web-frontend.md`,
+`architecture/dev-panel.md`, `decisions/manifold.md`, and
+`decisions/dev-tooling.md` now record the hidden dev-panel Network-tab checkbox,
+`AppConfig.regionAssignmentMode` persistence, unknown-value normalization back
+to hash-random, and worker-prepared structural rebuild path. No HUD/profiling
+surface changed, and no dynamics/connectivity retuning or default promotion was
+made.

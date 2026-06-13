@@ -3,6 +3,7 @@
 export type SpeedPreset = "quarter" | "half" | "normal" | "double";
 export type BackendKind = "gpu";
 export type Tier = "basic" | "low" | "balanced" | "max";
+export type RegionAssignmentMode = "hash-random" | "anterior-posterior-prototype";
 export type BrainState =
   | "deep_sleep"
   | "relaxed"
@@ -33,6 +34,7 @@ export interface AppConfig {
   tier: Tier;
   speed: SpeedPreset;
   backend: BackendKind;
+  regionAssignmentMode: RegionAssignmentMode;
   excitability: number;
   // Live sim speed in ticks/sec (1–60), driven by the dev-panel Speed slider.
   // The `speed` SpeedPreset above is the legacy frame-counter knob (controls.ts);
@@ -57,6 +59,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   tier: "low",
   speed: "normal",
   backend: "gpu",
+  regionAssignmentMode: "hash-random",
   excitability: 0.10, // boot default = BRAIN_STATES.deep_sleep (calm first load)
   ticksPerSec: 30, // default 30 ticks/sec (matches the rAF-loop default)
 };
@@ -76,6 +79,7 @@ interface SavedConfig {
   k: number;
   tier: Tier;
   backend?: string;
+  regionAssignmentMode?: string;
   speed: SpeedPreset;
   excitability: number;
   ticksPerSec: number;
@@ -83,6 +87,12 @@ interface SavedConfig {
 
 function normalizeBackend(_backend: unknown): BackendKind {
   return "gpu";
+}
+
+export function normalizeRegionAssignmentMode(value: unknown): RegionAssignmentMode {
+  return value === "anterior-posterior-prototype"
+    ? "anterior-posterior-prototype"
+    : "hash-random";
 }
 
 /** Load persisted config merged over DEFAULT_CONFIG. Returns a full AppConfig;
@@ -100,6 +110,7 @@ export function loadConfig(): AppConfig {
       k:            parsed.k            ?? base.k,
       tier:         parsed.tier         ?? base.tier,
       backend:      normalizeBackend(parsed.backend ?? base.backend),
+      regionAssignmentMode: normalizeRegionAssignmentMode(parsed.regionAssignmentMode ?? base.regionAssignmentMode),
       speed:        parsed.speed        ?? base.speed,
       excitability: parsed.excitability ?? base.excitability,
       ticksPerSec:  parsed.ticksPerSec  ?? base.ticksPerSec,
@@ -118,6 +129,7 @@ export function saveConfig(c: AppConfig): void {
       k: c.k,
       tier: c.tier,
       backend: c.backend,
+      regionAssignmentMode: normalizeRegionAssignmentMode(c.regionAssignmentMode),
       speed: c.speed,
       excitability: c.excitability,
       ticksPerSec: c.ticksPerSec,

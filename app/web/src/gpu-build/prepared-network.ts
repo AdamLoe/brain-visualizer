@@ -1,3 +1,5 @@
+import type { RegionAssignmentMode } from "../core/types";
+
 export const PREPARED_NETWORK_VERSION = 1;
 
 export interface PreparedNetworkRequest {
@@ -5,6 +7,7 @@ export interface PreparedNetworkRequest {
   n: number;
   k: number;
   seed: number;
+  regionAssignmentMode: RegionAssignmentMode;
   visualSettings: Float32Array;
   morphConfigJson: string;
 }
@@ -15,6 +18,7 @@ export interface PreparedNetworkPayload {
   n: number;
   k: number;
   seed: number;
+  regionAssignmentMode: RegionAssignmentMode;
   gridDim: number;
   gridCellSize: number;
   droppedCount: number;
@@ -45,6 +49,12 @@ export function validatePreparedNetworkPayload(payload: PreparedNetworkPayload):
   }
   if (!Number.isInteger(payload.n) || payload.n <= 0) throw new Error("prepared payload N invalid");
   if (!Number.isInteger(payload.k) || payload.k <= 0) throw new Error("prepared payload K invalid");
+  if (
+    payload.regionAssignmentMode !== "hash-random"
+    && payload.regionAssignmentMode !== "anterior-posterior-prototype"
+  ) {
+    throw new Error("prepared payload regionAssignmentMode invalid");
+  }
   if (!Number.isInteger(payload.gridDim) || payload.gridDim <= 0) throw new Error("prepared payload gridDim invalid");
   if (!Number.isFinite(payload.gridCellSize) || payload.gridCellSize <= 0) throw new Error("prepared payload gridCellSize invalid");
   expectLen("positions", payload.positions.length, payload.n * 3);

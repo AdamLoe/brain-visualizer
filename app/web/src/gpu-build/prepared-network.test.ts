@@ -8,6 +8,7 @@ function payload(): PreparedNetworkPayload {
     n: 2,
     k: 1,
     seed: 7,
+    regionAssignmentMode: "hash-random",
     gridDim: 1,
     gridCellSize: 1,
     droppedCount: 0,
@@ -45,6 +46,12 @@ describe("prepared network payload validation", () => {
     const p = payload();
     p.version = 2;
     expect(() => validatePreparedNetworkPayload(p)).toThrow(/version/);
+  });
+
+  test("rejects unknown region assignment modes", () => {
+    const p = payload();
+    p.regionAssignmentMode = "spatial-lobes" as typeof p.regionAssignmentMode;
+    expect(() => validatePreparedNetworkPayload(p)).toThrow(/regionAssignmentMode/);
   });
 
   test("rejects segment field length mismatch", () => {

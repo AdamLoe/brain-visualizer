@@ -54,8 +54,9 @@ impl PreparedNetworkBuild {
         config: SimConfig,
         params: crate::sim::morphology::MorphologyParams,
         reach: crate::connectivity::ReachParams,
+        region_assignment: crate::manifold::RegionAssignmentMode,
     ) -> Self {
-        let manifold = crate::build_manifold(&config);
+        let manifold = crate::build_manifold_with_region_assignment(&config, region_assignment);
         let source_types =
             crate::sim::morphology::build_source_types(config.seed_lo(), &manifold.neuron_regions);
         let morph = crate::sim::morphology::generate(
@@ -2897,6 +2898,7 @@ mod tests {
             config.clone(),
             params,
             reach_from_visual_settings(&visual),
+            crate::manifold::RegionAssignmentMode::HashRandom,
         );
 
         let rebuilt = PreparedNetworkBuild::from_flat_payload(
@@ -2975,6 +2977,7 @@ mod tests {
             config.clone(),
             params,
             reach_from_visual_settings(&visual),
+            crate::manifold::RegionAssignmentMode::HashRandom,
         );
         let mut regions = prepared.region_codes();
         regions[0] = 9;

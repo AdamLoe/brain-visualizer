@@ -34,6 +34,7 @@ import {
   saveConfig,
   type AppConfig,
   type BackendKind,
+  type RegionAssignmentMode,
 } from "./core/types";
 import { getSettings, parseMetrics, subscribe, toFloat32Array } from "./core/settings";
 import { loadMorphConfig, morphConfigToJson } from "./core/morph-config";
@@ -111,6 +112,7 @@ interface BrainVisualizerTestHooks {
     n?: number;
     k?: number;
     seed?: number;
+    regionAssignmentMode?: RegionAssignmentMode;
   }) => number;
 }
 
@@ -308,6 +310,7 @@ async function boot(): Promise<void> {
     config.n    = 10_000;  // Mobile profile remains below the 20k product cap.
     config.k    = 16;
     config.backend = "gpu";
+    config.regionAssignmentMode = "hash-random";
     console.log("[main] mobile detected → Low tier (N=10k K=16, 0.75×DPR)");
     saveConfig(config); // persist the mobile-forced profile so it survives reload
   }
@@ -427,6 +430,7 @@ async function boot(): Promise<void> {
       n: config.n,
       k: config.k,
       seed: config.seed >>> 0,
+      regionAssignmentMode: config.regionAssignmentMode,
       visualSettings,
       morphConfigJson,
     });
@@ -454,6 +458,7 @@ async function boot(): Promise<void> {
     config.n = clampNeuronCount(request.n ?? config.n);
     config.k = request.k ?? config.k;
     config.seed = (request.seed ?? config.seed) >>> 0;
+    config.regionAssignmentMode = request.regionAssignmentMode ?? config.regionAssignmentMode;
     return requestPreparedNetwork("smoke");
   };
 
@@ -708,6 +713,7 @@ async function boot(): Promise<void> {
     n:            config.n,
     k:            config.k,
     seed:         config.seed >>> 0,
+    regionAssignmentMode: config.regionAssignmentMode,
     excitability: config.excitability,
     tps:          targetTicksPerSec,
   });
@@ -724,7 +730,7 @@ async function boot(): Promise<void> {
         setSimHandlers(h: {
           onExcitability(v: number): void;
           onSpeed(tps: number): void;
-          onNetwork(p: { n: number; k: number; seed: number }): void;
+          onNetwork(p: { n: number; k: number; seed: number; regionAssignmentMode: RegionAssignmentMode }): void;
           onConfigReset?(config: AppConfig): void;
         }): void;
       }).setSimHandlers({
@@ -740,10 +746,11 @@ async function boot(): Promise<void> {
           config.ticksPerSec = targetTicksPerSec;
           saveConfig(config);
         },
-        onNetwork(p: { n: number; k: number; seed: number }): void {
+        onNetwork(p: { n: number; k: number; seed: number; regionAssignmentMode: RegionAssignmentMode }): void {
           config.n    = clampNeuronCount(p.n);
           config.k    = p.k;
           config.seed = p.seed >>> 0;
+          config.regionAssignmentMode = p.regionAssignmentMode;
           saveConfig(config); // 0.1.1: persist user-chosen N/K so it survives reload
           requestPreparedNetwork("network controls");
         },
@@ -754,6 +761,7 @@ async function boot(): Promise<void> {
           config.tier = defaultConfig.tier;
           config.speed = defaultConfig.speed;
           config.backend = defaultConfig.backend;
+          config.regionAssignmentMode = defaultConfig.regionAssignmentMode;
           config.excitability = defaultConfig.excitability;
           config.ticksPerSec = defaultConfig.ticksPerSec;
           targetTicksPerSec = defaultConfig.ticksPerSec;
@@ -927,6 +935,7 @@ async function boot(): Promise<void> {
     config.n = payload.n;
     config.k = payload.k;
     config.seed = payload.seed >>> 0;
+    config.regionAssignmentMode = payload.regionAssignmentMode;
     appliedMorphConfigJson = payload.morphConfigJson;
     lastSettingsSnapshot = getSettings();
     rebuildCoordinator.requestSettingsPush();

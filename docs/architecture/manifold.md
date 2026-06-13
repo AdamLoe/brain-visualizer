@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-12
+last_updated:  2026-06-13
 ---
 
 # Cortical Manifold
@@ -89,16 +89,23 @@ The six-step pipeline runs synchronously in `crates/brain-visualizer/src/manifol
    default 30/40/30 split (Input/Association/Output) is applied by shuffling
    neuron indices with a deterministic hash and slicing the result, so the split
    is spatially random rather than spatially blocked. `ManifoldParams` defaults
-   to `RegionAssignmentMode::HashRandom`; all production/browser construction
-   paths use that default. An internal opt-in prototype
-   (`assign_regions_with_mode` with `RegionAssignmentMode::AnteriorPosteriorPrototype`)
-   uses `ANTERIOR_POSTERIOR_AXIS` to rank neurons by projection plus
-   deterministic jitter, keeping exact 30/40/30 counts while making input
-   posterior-biased, output anterior-biased, and association central. The region
-   fractions and default/prototype routing are tested by
+   to `RegionAssignmentMode::HashRandom`, and the plain
+   `crates/brain-visualizer/src/lib.rs → build_manifold` helper keeps that
+   default. The explicit
+   `build_manifold_with_region_assignment` / `PreparedNetworkBuild::prepare`
+   path can opt into
+   `RegionAssignmentMode::AnteriorPosteriorPrototype`: it uses
+   `ANTERIOR_POSTERIOR_AXIS` to rank neurons by projection plus deterministic
+   jitter, keeping exact 30/40/30 counts while making input posterior-biased,
+   output anterior-biased, and association central. The browser exposes that
+   prototype only as a hidden dev-panel Network-tab checkbox; it is
+   `AppConfig`-backed, default-off, and changes trigger a worker-prepared
+   network rebuild rather than a live settings push. The region fractions and
+   default/prototype routing are tested by
    `crates/brain-visualizer/src/manifold/mod.rs → region_split_approx_30_40_30`,
    `default_region_assignment_mode_is_hash_random`, and
-   `prototype_region_assignment_mode_is_opt_in`.
+   `prototype_region_assignment_mode_is_opt_in`, plus
+   `crates/brain-visualizer/src/lib.rs → build_manifold_with_*` tests.
 
 6. **Spatial grid** (`crates/brain-visualizer/src/manifold/mod.rs`): after placement, a uniform integer
    grid (`DEFAULT_GRID_DIM = 16`, giving 4096 cells) is built over the neuron
@@ -112,7 +119,9 @@ vertices/faces, and the spatial-grid CSR (`min`, `cell_size`, `dim`,
 `cell_start`, `cell_neurons`). `PreparedNetworkBuild::from_flat_payload`
 validates metadata/count agreement, region-code range, face indices, CSR
 span/monotonicity, and one grid entry per neuron before WebGPU upload can
-replace resources.
+replace resources. The region-assignment mode is build-input metadata for
+`prepare_network_payload`; it is not serialized into the prepared payload beyond
+the resulting stable region codes.
 
 ## Region encoding invariant
 

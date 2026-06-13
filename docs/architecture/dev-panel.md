@@ -48,7 +48,7 @@ Seven tabs are defined in the `TABS` constant in `web/src/ui/dev-panel.ts`:
 |---|---|
 | Monitor | Live spike/voltage/E-I metrics + network-state classifier |
 | Dynamics | E/I balance bar, branching-ratio band, per-region rates, interpretive summary |
-| Network | Rebuild controls (N/K/seed) + live Drive and Structure knobs |
+| Network | Rebuild controls (N/K/seed and region assignment) + live Drive and Structure knobs |
 | Appearance | Color, neuron glow/body, morphology visibility, reach, and morphology lighting |
 | Morphology | Descriptor-driven generator and render-quality knobs |
 | Debug | Read-only string labels for current visual-mode settings |
@@ -130,6 +130,21 @@ text is registered via `web/src/ui/dev-panel.ts → _attachTip` (sets the
 items (section separators, the × close button) carry no tip. See
 [`../decisions/dev-tooling.md`](../decisions/dev-tooling.md) for the rationale.
 
+## Region Assignment Prototype
+
+The Network tab includes a hidden-review checkbox labelled "A/P region
+prototype". It toggles `web/src/core/types.ts → AppConfig.regionAssignmentMode`
+between the default `"hash-random"` mode and the opt-in
+`"anterior-posterior-prototype"` mode. It is deliberately not a
+`VisualizerSettings` field and does not add a Float32Array index; changing it
+persists through `CONFIG_LS_KEY` and requests a worker-prepared network rebuild
+through `web/src/main.ts → requestPreparedNetwork`.
+
+The checkbox defaults off because `DEFAULT_CONFIG.regionAssignmentMode` is
+`"hash-random"`. `loadConfig()` normalizes unknown saved strings back to that
+default. The Rust enum/order/type-byte encoding remains owned by
+[`manifold.md`](manifold.md) and [`data-model.md`](data-model.md).
+
 ## Setting-impact classification
 
 Every control in the Rendering and Network tabs carries a colored dot. The dot
@@ -147,7 +162,8 @@ As of the current codebase, every `VisualizerSettings` field except
 `"renderer-rebuild"` because it changes baked morphology geometry.
 `heterogeneity`, `weightNormalization`, and `inputMode` were downgraded from
 `"brain-reset"` to `"live"` once the integrate uniform was read every tick.
-N/K/seed live in `AppConfig` and are out of scope for `SETTING_IMPACT`.
+N/K/seed and region-assignment mode live in `AppConfig` and are out of scope
+for `SETTING_IMPACT`.
 
 The `pointRadius`, `surfaceOpacity`, `surface`, and `adaptiveScalerEnabled`
 fields are **reserved/inert** in the panel:
@@ -179,8 +195,9 @@ The preset table lives in `web/src/ui/dev-panel.ts → HIDDEN_REVIEW_PRESETS`.
 `accepted-default` is derived directly from `DEFAULT_CONFIG`,
 `DEFAULT_SETTINGS`, and `DEFAULT_MORPH_CONFIG`, so it matches the clean
 first-load values by construction rather than carrying a separate tuned payload.
-`performance-review` and `hero-review` keep the same app config but override the
-visual and morphology payloads for lower-cost and screenshot-oriented review.
+`performance-review` and `hero-review` keep the same app config, including the
+default hash-random region assignment, but override the visual and morphology
+payloads for lower-cost and screenshot-oriented review.
 
 These presets are not a public preset manager: they are static buttons inside
 the already-hidden dev panel, intended only for review and comparison.

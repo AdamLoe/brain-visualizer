@@ -21,6 +21,7 @@ import {
   DEFAULT_CONFIG,
   PRODUCT_MAX_N,
   loadConfig,
+  normalizeRegionAssignmentMode,
   saveConfig,
 } from "../core/types";
 import { HIDDEN_REVIEW_PRESETS } from "./dev-panel";
@@ -103,6 +104,35 @@ describe("settings descriptors", () => {
     }));
 
     expect(loadConfig().backend).toBe("gpu");
+  });
+
+  test("app config defaults to hash-random region assignment", () => {
+    installMemoryLocalStorage();
+    expect(loadConfig().regionAssignmentMode).toBe("hash-random");
+    expect(DEFAULT_CONFIG.regionAssignmentMode).toBe("hash-random");
+    expect(normalizeRegionAssignmentMode("unknown")).toBe("hash-random");
+  });
+
+  test("app config persists prototype region assignment and normalizes stale values", () => {
+    installMemoryLocalStorage();
+    saveConfig({
+      ...DEFAULT_CONFIG,
+      regionAssignmentMode: "anterior-posterior-prototype",
+    });
+    expect(loadConfig().regionAssignmentMode).toBe("anterior-posterior-prototype");
+
+    localStorage.setItem(CONFIG_LS_KEY, JSON.stringify({
+      version: 1,
+      n: DEFAULT_CONFIG.n,
+      k: DEFAULT_CONFIG.k,
+      tier: DEFAULT_CONFIG.tier,
+      backend: DEFAULT_CONFIG.backend,
+      regionAssignmentMode: "spatial-lobes",
+      speed: DEFAULT_CONFIG.speed,
+      excitability: DEFAULT_CONFIG.excitability,
+      ticksPerSec: DEFAULT_CONFIG.ticksPerSec,
+    }));
+    expect(loadConfig().regionAssignmentMode).toBe("hash-random");
   });
 
   test("duplicate generator axon curve control is hidden and default-only", () => {

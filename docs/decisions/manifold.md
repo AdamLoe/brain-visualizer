@@ -53,10 +53,13 @@
   hash and slicing the result, producing a spatially random (non-contiguous)
   assignment. A bounded internal prototype mode can instead use the
   anterior-posterior axis with deterministic jitter to bias input posterior and
-  output anterior, but it is opt-in and not exposed as a public control.
+  output anterior, but it is opt-in and exposed only as a hidden dev-panel
+  Network-tab checkbox for side-by-side review.
 - **Why.** The anterior–posterior spatial blocking originally proposed in
   `ANTERIOR_POSTERIOR_AXIS` is now available only as a review prototype because
-  promoting it would change the startup visual/dynamics story. The hash-shuffle
+  promoting it would change the startup visual/dynamics story. Keeping the
+  toggle in the hidden dev panel gives reviewers a persistent side-by-side
+  switch without making the prototype a product default. The hash-shuffle
   achieves the correct proportions with stable, reproducible results across any
   neuron count. The biological anterior–posterior gradient is expressed in the
   default build through the connectivity feed-forward bias owned by the
@@ -65,7 +68,9 @@
 - **Code anchors.** `crates/brain-visualizer/src/manifold/regions.rs →
   RegionAssignmentMode, assign_regions, assign_regions_with_mode`;
   `crates/brain-visualizer/src/manifold/mod.rs → ManifoldParams,
-  ANTERIOR_POSTERIOR_AXIS`
+  ANTERIOR_POSTERIOR_AXIS`;
+  `web/src/core/types.ts → AppConfig.regionAssignmentMode`;
+  `web/src/ui/dev-panel.ts → _buildNetworkTab`
 - **Tradeoffs.** The prototype gives a more legible posterior-to-anterior visual
   story without changing connectivity, drive, or type-byte encoding, but the
   localized drive may change apparent wave startup and needs visual/dynamics

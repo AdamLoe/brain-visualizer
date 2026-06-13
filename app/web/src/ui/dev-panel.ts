@@ -48,6 +48,7 @@ import {
   clampNeuronCount,
   resetConfig,
   type AppConfig,
+  type RegionAssignmentMode,
 } from "../core/types";
 import {
   impactColor,
@@ -266,6 +267,7 @@ interface DevPanelInitialValues {
   n: number;
   k: number;
   seed: number;
+  regionAssignmentMode: RegionAssignmentMode;
   excitability: number;
   tps: number;
 }
@@ -301,7 +303,12 @@ export interface SimHandlers {
   /** Called when speed slider changes (ticks/sec, 1–60). */
   onSpeed: (tps: number) => void;
   /** Called when N/K/seed changes or Regenerate is pressed (triggers network rebuild). */
-  onNetwork: (params: { n: number; k: number; seed: number }) => void;
+  onNetwork: (params: {
+    n: number;
+    k: number;
+    seed: number;
+    regionAssignmentMode: RegionAssignmentMode;
+  }) => void;
   /** Called when Storage reset clears AppConfig persistence; must not rebuild the network. */
   onConfigReset?: (config: AppConfig) => void;
 }
@@ -439,11 +446,13 @@ export class DevPanel {
   private _initExcitability = 0.71;
   private _initTps = 30;
   private _currentSeed = 0;
+  private _currentRegionAssignmentMode: RegionAssignmentMode = "hash-random";
   private _nSlider: HTMLInputElement | null = null;
   private _nInput: HTMLInputElement | null = null;
   private _kSlider: HTMLInputElement | null = null;
   private _kInput: HTMLInputElement | null = null;
   private _seedInput: HTMLInputElement | null = null;
+  private _regionAssignmentInput: HTMLInputElement | null = null;
   private _excitabilitySlider: HTMLInputElement | null = null;
   private _excitabilityInput: HTMLInputElement | null = null;
   private _speedSlider: HTMLInputElement | null = null;
@@ -465,6 +474,7 @@ export class DevPanel {
       this._initN = initialValues.n;
       this._initK = initialValues.k;
       this._initSeed = initialValues.seed;
+      this._currentRegionAssignmentMode = initialValues.regionAssignmentMode;
       this._initExcitability = initialValues.excitability;
       this._initTps = initialValues.tps;
       this._currentSeed = initialValues.seed >>> 0;
@@ -539,7 +549,7 @@ export class DevPanel {
    * Call after setSimHandlers so the Network tab shows current state.
    */
   setInitialValues(opts: {
-    n: number; k: number; seed: number;
+    n: number; k: number; seed: number; regionAssignmentMode: RegionAssignmentMode;
     excitability: number; tps: number;
   }): void {
     this._syncNetworkControls({
@@ -547,6 +557,7 @@ export class DevPanel {
       n: opts.n,
       k: opts.k,
       seed: opts.seed >>> 0,
+      regionAssignmentMode: opts.regionAssignmentMode,
       excitability: opts.excitability,
       ticksPerSec: opts.tps,
     });
@@ -1073,7 +1084,12 @@ export class DevPanel {
       defaultValue: DEFAULT_CONFIG.n,
       integer: true,
     }, (n) => {
-      this.simHandlers?.onNetwork({ n: clampNeuronCount(n), k: parseInt(kInput.value, 10), seed: this._currentSeed });
+      this.simHandlers?.onNetwork({
+        n: clampNeuronCount(n),
+        k: parseInt(kInput.value, 10),
+        seed: this._currentSeed,
+        regionAssignmentMode: this._currentRegionAssignmentMode,
+      });
     }, /* liveOnInput */ false);
     this._nSlider = nSlider;
     this._nInput = nInput;
@@ -1088,7 +1104,12 @@ export class DevPanel {
       defaultValue: DEFAULT_CONFIG.k,
       integer: true,
     }, (k) => {
-      this.simHandlers?.onNetwork({ n: clampNeuronCount(parseInt(nInput.value, 10)), k, seed: this._currentSeed });
+      this.simHandlers?.onNetwork({
+        n: clampNeuronCount(parseInt(nInput.value, 10)),
+        k,
+        seed: this._currentSeed,
+        regionAssignmentMode: this._currentRegionAssignmentMode,
+      });
     }, /* liveOnInput */ false);
     this._kSlider = kSlider;
     this._kInput = kInput;
@@ -1117,6 +1138,7 @@ export class DevPanel {
         n: clampNeuronCount(parseInt(nInput.value, 10)),
         k: parseInt(kInput.value, 10),
         seed: this._currentSeed,
+        regionAssignmentMode: this._currentRegionAssignmentMode,
       });
     };
     seedInput.addEventListener("change", applySeed);
@@ -1139,10 +1161,37 @@ export class DevPanel {
         n: clampNeuronCount(parseInt(nInput.value, 10)),
         k: parseInt(kInput.value, 10),
         seed: this._currentSeed,
+        regionAssignmentMode: this._currentRegionAssignmentMode,
       });
     });
     regenRow.appendChild(regenBtn);
     root.appendChild(regenRow);
+
+    const regionRow = document.createElement("label");
+    regionRow.className = "dp-ctrl-row";
+    this._attachTip(regionRow, "Opt into the anterior/posterior region prototype for review. Off keeps the default hash-random region assignment.");
+    regionRow.appendChild(this._impactDot("brain-reset"));
+    const regionLabel = document.createElement("span");
+    regionLabel.className = "dp-label dp-ctrl-label";
+    regionLabel.textContent = "A/P region prototype";
+    regionRow.appendChild(regionLabel);
+    const regionInput = document.createElement("input");
+    regionInput.type = "checkbox";
+    regionInput.checked = this._currentRegionAssignmentMode === "anterior-posterior-prototype";
+    regionInput.addEventListener("change", () => {
+      this._currentRegionAssignmentMode = regionInput.checked
+        ? "anterior-posterior-prototype"
+        : "hash-random";
+      this.simHandlers?.onNetwork({
+        n: clampNeuronCount(parseInt(nInput.value, 10)),
+        k: parseInt(kInput.value, 10),
+        seed: this._currentSeed,
+        regionAssignmentMode: this._currentRegionAssignmentMode,
+      });
+    });
+    regionRow.appendChild(regionInput);
+    root.appendChild(regionRow);
+    this._regionAssignmentInput = regionInput;
 
     // Suppress unused-var warnings (nSlider/kSlider refs needed for hoisting in closures).
     void nSlider; void kSlider;
@@ -1654,6 +1703,7 @@ export class DevPanel {
       n: defaultConfig.n,
       k: defaultConfig.k,
       seed: defaultConfig.seed,
+      regionAssignmentMode: defaultConfig.regionAssignmentMode,
     });
   }
 
@@ -1880,10 +1930,14 @@ export class DevPanel {
     this._initExcitability = config.excitability;
     this._initTps = config.ticksPerSec;
     this._currentSeed = config.seed >>> 0;
+    this._currentRegionAssignmentMode = config.regionAssignmentMode;
 
     this._setSliderInputPair(this._nSlider, this._nInput, n, 0);
     this._setSliderInputPair(this._kSlider, this._kInput, config.k, 0);
     if (this._seedInput) this._seedInput.value = String(config.seed >>> 0);
+    if (this._regionAssignmentInput) {
+      this._regionAssignmentInput.checked = config.regionAssignmentMode === "anterior-posterior-prototype";
+    }
     this._setSliderInputPair(this._excitabilitySlider, this._excitabilityInput, config.excitability, 2);
     this._setSliderInputPair(this._speedSlider, this._speedInput, config.ticksPerSec, 0);
   }

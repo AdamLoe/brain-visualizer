@@ -24,6 +24,7 @@ function request(sequence: number): PreparedNetworkRequest {
     n: 2,
     k: 1,
     seed: sequence,
+    regionAssignmentMode: "hash-random",
     visualSettings: new Float32Array(26),
     morphConfigJson: "{}",
   };
@@ -36,6 +37,7 @@ function payload(sequence: number): PreparedNetworkPayload {
     n: 2,
     k: 1,
     seed: sequence,
+    regionAssignmentMode: "hash-random",
     gridDim: 1,
     gridCellSize: 1,
     droppedCount: 0,

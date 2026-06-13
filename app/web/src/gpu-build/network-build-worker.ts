@@ -50,6 +50,7 @@ interface WasmGpuBuildModule {
     seed: number,
     visualSettings: Float32Array,
     morphConfigJson: string,
+    regionAssignmentMode: string,
   ): WasmPreparedNetwork;
 }
 
@@ -72,6 +73,7 @@ async function prepare(request: PreparedNetworkRequest): Promise<void> {
       request.seed >>> 0,
       request.visualSettings,
       request.morphConfigJson,
+      request.regionAssignmentMode,
     );
     const payload: PreparedNetworkPayload = {
       version: prepared.version(),
@@ -79,6 +81,7 @@ async function prepare(request: PreparedNetworkRequest): Promise<void> {
       n: prepared.n(),
       k: prepared.k(),
       seed: prepared.seed() >>> 0,
+      regionAssignmentMode: request.regionAssignmentMode,
       gridDim: prepared.grid_dim(),
       gridCellSize: prepared.grid_cell_size(),
       droppedCount: prepared.dropped_count(),
