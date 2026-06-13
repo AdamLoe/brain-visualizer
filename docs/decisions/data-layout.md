@@ -46,20 +46,6 @@
 - **Revisit when.** Biological weights, K, connectivity locality, excitability,
   or tier caps are revised upward enough to shrink the measured margin.
 
-## CPU scatter uses the same fixed-point atomics
-
-- **Decision.** The CPU backend uses the same i32 fixed-point representation
-  and applies every synaptic contribution via `AtomicI32::fetch_add`. Per-thread
-  partial current buffers with a full reduction are rejected.
-- **Why.** A shared representation makes the CPU and GPU paths directly
-  comparable and eliminates a conversion step on the CPU side. Allocation and
-  zeroing of per-thread buffers per tick would cost more than simple atomics
-  at the neuron counts this backend targets.
-- **Applies to.** [`../architecture/data-model.md`](../architecture/data-model.md).
-- **Code anchors.** `crates/brain-visualizer/src/sim/cpu/mod.rs` (scatter loop).
-- **Revisit when.** Profiling shows AtomicI32 contention dominates CPU tick
-  time, at which point spatial partitioning becomes worth measuring.
-
 ## Chunk large GPU storage bindings by byte budget
 
 - **Decision.** Large GPU storage arrays use `ChunkLayout` with a 64 MiB default

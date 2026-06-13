@@ -84,14 +84,6 @@ export function ticksThisFrame(speed: SpeedPreset, frameCounter: number): number
   }
 }
 
-// ── Backend availability ─────────────────────────────────────────────────────
-// Phase 6: both GPU (WebGPU compute) and CPU (event-driven rayon worker) are
-// implemented. The CPU backend runs single-threaded when cross-origin isolation
-// / WASM threads are unavailable (still correct), so it is always selectable.
-function backendAvailable(kind: BackendKind): boolean {
-  return kind === "gpu" || kind === "cpu";
-}
-
 // ── Toast notification ───────────────────────────────────────────────────────
 let _toastTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -131,23 +123,16 @@ export function setSpeed(preset: SpeedPreset, config: AppConfig): void {
 }
 
 // ── setBackend ────────────────────────────────────────────────────────────────
-// Triggers the full restart sequence (BV16) when backend is available.
-// CPU backend: shows toast and returns without switching (Phase 5 limitation).
+// Triggers the full restart sequence when the backend is available.
 export async function setBackend(
   kind: BackendKind,
   config: AppConfig,
   restartFn: (kind: BackendKind) => Promise<void>,
 ): Promise<void> {
-  if (!backendAvailable(kind)) {
-    showToast(`${kind.toUpperCase()} backend is not available yet`);
-    return;
-  }
   if (kind === config.backend) return;
   // Update DOM active state immediately; the restart is quick.
   setActiveButton("#backend-toggle", "backend", kind);
   await restartFn(kind);
-  // 0.1.1: restartFn mutates config.backend (may revert to gpu on CPU failure);
-  // persist the resulting backend so the choice survives a reload.
   saveConfig(config);
 }
 
@@ -290,10 +275,6 @@ export class Controls {
 
   setBackend(kind: BackendKind): void {
     if (kind === this.config.backend) return;
-    if (!backendAvailable(kind)) {
-      showToast(`${kind.toUpperCase()} backend is not available yet`);
-      return;
-    }
     this.config.backend = kind;
     saveConfig(this.config); // 0.1.1: persist user's backend choice
     setActiveButton("#backend-toggle", "backend", kind);

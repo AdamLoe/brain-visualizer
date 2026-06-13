@@ -1,21 +1,19 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-12
+last_updated:  2026-06-13
 ---
 
 # Build and Deploy
 
 How the Rust/WASM + TypeScript codebase is compiled, tested, and shipped. The
 one job: produce a static bundle (WASM + JS/CSS) that a GitHub Pages host can
-serve with the correct cross-origin isolation headers so WebGPU and
-SharedArrayBuffer both work.
+serve with the correct cross-origin isolation headers for the browser runtime.
 
 ## What it owns
 
 - The npm scripts and their ordering (`web/package.json → scripts`).
 - The cross-platform Rust crate: `cdylib` for WASM, `rlib` for host unit tests (`crates/brain-visualizer/Cargo.toml → [lib]`).
-- The `cpu-threads` cargo feature and the two different thread backends it unlocks (`crates/brain-visualizer/Cargo.toml → [features]`).
 - COOP/COEP header strategy: dev/preview server headers (`web/vite.config.ts → crossOriginIsolation`) and the static-host service-worker shim (`web/public/coi-serviceworker.js`).
 - The offline verification surface: the `crates/brain-visualizer/examples/` harnesses (see below).
 - The test gates: `cargo test -p brain-visualizer`,
@@ -44,8 +42,8 @@ npm run build   (in app/web/)
 ```
 
 The wasm-pack output `pkg/` lands inside the crate
-(`crates/brain-visualizer/pkg/`); `web/src/main.ts` and `web/src/cpu/cpu-worker.ts` import
-`../crates/brain-visualizer/pkg/brain_visualizer.js`.
+(`crates/brain-visualizer/pkg/`); `web/src/main.ts` and the network-build worker
+import `../crates/brain-visualizer/pkg/brain_visualizer.js`.
 
 Dev mode (`npm run dev`) runs `wasm-pack build … --dev` once, then starts the
 Vite dev server. The `wasmHotRebuild` Vite plugin watches the crate's `.rs`
@@ -73,28 +71,13 @@ is broken.
 The crate builds on both `x86_64` (host: `cargo build`, `cargo test`, `cargo run
 --example`) and `wasm32-unknown-unknown` (browser target via `wasm-pack`).
 WASM-only glue (`wasm-bindgen`, `web-sys`, `console_error_panic_hook`,
-`wasm-bindgen-rayon`) is gated behind
+`wasm-bindgen-futures`) is gated behind
 `#[target.'cfg(target_arch = "wasm32")'.dependencies]` so host builds stay clean.
 
-## The `cpu-threads` cargo feature
+## COOP/COEP
 
-The feature is **off by default** (the stable WASM build stays single-threaded).
-What it does differs by target:
-
-| Target | Effect |
-|---|---|
-| Host (native) | Enables `rayon` directly — multi-threaded CPU backend on x86_64. |
-| WASM | Enables `wasm-bindgen-rayon` — requires a **nightly** toolchain, `RUSTFLAGS="-C target-feature=+atomics,+bulk-memory"`, and a `build-std` rebuild of `std`. See README §"Threaded WASM build". |
-
-The WASM-threaded path also requires COOP/COEP to be active (for
-`SharedArrayBuffer`). The default `npm run wasm` and `npm run build` scripts use
-stable and do not set these flags; the threaded-WASM recipe is a manual step
-documented in the README.
-
-## COOP/COEP and SharedArrayBuffer
-
-`SharedArrayBuffer` (required by `wasm-bindgen-rayon` and used by the CPU
-coordinator worker) is gated behind cross-origin isolation. Two delivery paths:
+Cross-origin isolation is still part of the browser delivery contract. Two
+delivery paths keep local preview and static hosting aligned:
 
 - **Dev and preview servers:** Vite injects `Cross-Origin-Opener-Policy:
   same-origin` and `Cross-Origin-Embedder-Policy: require-corp` on every
@@ -105,15 +88,13 @@ coordinator worker) is gated behind cross-origin isolation. Two delivery paths:
   `crossOriginIsolated === true` on subsequent loads.
 
 A key gotcha: on the very first page load the service worker is not yet
-registered, so `crossOriginIsolated` is false. The CPU threaded path gracefully
-degrades (single-threaded) rather than crashing. `crates/brain-visualizer/src/lib.rs →
-log_cross_origin_isolation` logs the isolation state at boot for debugging.
+registered, so `crossOriginIsolated` may be false until the follow-up load.
+`crates/brain-visualizer/src/lib.rs → log_cross_origin_isolation` logs the
+isolation state at boot for debugging.
 
 The ES-module worker format (`web/vite.config.ts → worker: { format: "es" }`) is
-required for code-splitting inside both WASM-loading workers: the parked CPU
-coordinator worker and the network-build worker
-(`web/src/gpu-build/network-build-worker.ts`). It also lets
-`crossOriginIsolated` propagate into worker context.
+required for code-splitting inside the WASM-loading network-build worker
+(`web/src/gpu-build/network-build-worker.ts`).
 
 ## Offline verification surface (the examples)
 
@@ -130,7 +111,6 @@ substitute for browser WebGPU numbers on real hardware.**
 
 | Example | How to run | What it verifies |
 |---|---|---|
-| `cpu_check.rs` | `cargo run --release --example cpu_check --features cpu-threads` | CPU/GPU parity: first 100 synapse targets, firing-rate agreement within ±10%, lazy decay, render decay. |
 | `sim_check.rs` | `cargo run --release --example sim_check` | GPU dynamics: non-zero spikes, excitability sweep (sleep→seizure), no NaN/overflow under seizure, i32 accumulator range. |
 | `soc_sweep.rs` | `cargo run --release --example soc_sweep` | Criticality sweep: i_ext parameter sweep + five brain-state acceptance bands. |
 | `render_check.rs` | `cargo run -p brain-visualizer --example render_check` | Render pipeline: offscreen render to 512×512 texture, non-black pixels, distinct region colours, stimulation response, morphology draw, bloom path, zero Naga shader-compile errors. |
@@ -177,8 +157,8 @@ and other pure functions.
 **`npm run test:e2e` (Playwright)** — browser integration tests
 (`web/e2e/brain_visualizer.spec.ts`). Covers: smoke/boot (WASM loads, no
 `recursive use of an object` panic), WebGPU adapter presence (gated: skips when
-no adapter), resize reentrancy regression, controls correctness, CPU backend
-toggle. Requires the dev server running on `localhost:5173`; set
+no adapter), resize reentrancy regression, and controls correctness. Requires
+the dev server running on `localhost:5173`; set
 `USE_WEBSERVER=1` (`npm run test:e2e:server`) for Playwright to start it
 automatically. The port is hard-coded: Vite falls back to 5174+ when 5173 is
 already held by a stale `npm run dev`, and a manual e2e run would then point at
@@ -204,7 +184,6 @@ When the task is specifically about shipping/defaults/build behavior, also run
 ## Update when
 
 - A new `crates/brain-visualizer/examples/` harness is added (update the table above).
-- The `cpu-threads` threaded-WASM recipe changes (nightly flags, `build-std`).
 - The COOP/COEP strategy changes (e.g. GitHub Pages gains header support).
 - `wasm-pack` target or `web/vite.config.ts` worker format changes.
 - New test files are added to `crates/brain-visualizer/tests/` or `web/**/*.test.ts`.
@@ -213,7 +192,7 @@ When the task is specifically about shipping/defaults/build behavior, also run
 
 - [`scaling.md`](scaling.md) — tier presets, adaptive scaler, adapter caps
 - [`gpu-backend.md`](gpu-backend.md) — GPU sim and render architecture
-- [`cpu-backend.md`](cpu-backend.md) — CPU backend and worker topology
+- [`cpu-backend.md`](cpu-backend.md) — retired CPU backend boundary
 - [`connectivity.md`](connectivity.md) — hash determinism rule (the gate test proves the invariant)
 - [`../decisions/scaling.md`](../decisions/scaling.md)
 - [`../agent-context/maintaining-docs.md`](../agent-context/maintaining-docs.md)

@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         Codex orchestrator
-last_updated:  2026-06-12
+last_updated:  2026-06-13
 okay_to_delete: false
 long_lived:    false
 owning_docs:
@@ -66,11 +66,11 @@ stages.
 
 | Stream | Area | Status | Last observed fact | Next action | Blockers |
 |---|---|---|---|---|---|
-| A | Real hardware, startup beacons, field telemetry | Partially implemented | A0 smoke and A1 disabled telemetry contract landed; web typecheck, unit tests, and focused smoke passed; local artifact skipped because no adapter was available. | Review A changes and defer A2 production enablement. | Telemetry sink/retention and real-adapter lane still needed. |
+| A | Real hardware, startup beacons, field telemetry | Partially implemented | A0 smoke and A1 disabled telemetry contract landed; production telemetry explicitly disabled by owner decision. | Run local real-adapter smoke when available; keep telemetry transport disabled. | Real-adapter lane still needed if local has no adapter. |
 | B1 | Settings/metrics/schema contracts | Implemented | Contract tests, tombstone hardening, uniform size checks, estimated labels, docs migration landed; cargo test, npm test, and typecheck passed. | Include in work review/final commit. | None observed. |
 | B2 | Simulation correctness gates | Implemented | Strict adapter helper, synchronized fixed-point overflow stress, Rust/WGSL tick-wrap gates, and docs migration landed; local strict run uses llvmpipe, so it cannot prove the no-adapter failure branch on this machine. | Include in work review/final commit. | Real no-adapter strict-path proof still needs an environment without llvmpipe. |
-| C1 | CPU backend retirement/feature gate | Drafted | Split from original Stream C after plan review. | Await user decision before destructive deletion; feature-gate/archive path can proceed after activation. | Delete-vs-feature-gate decision. |
-| C2 | Legacy render/dead-code amnesty | Drafted | Split from original Stream C after plan review. | Wait until D1 and B1 are no longer touching render/settings surfaces. | Conflicts with D1/B1. |
+| C1 | CPU backend deletion | Shipped | CPU runtime modules/exports, browser worker/renderer paths, CPU build feature/deps, CPU example/e2e expectations, and live/parked docs were removed; stale saved CPU configs normalize to GPU. | None. | None. |
+| C2 | Legacy render/dead-code amnesty | Active after C1 | Owner chose to remove legacy/dead code and references. | Dispatch after C1 so build/backend assumptions are settled. | Must preserve settings tombstone compatibility. |
 | D1 | Morphology segment scaling | Shipped | Chunked morphology resources, per-chunk compaction/draw, docs migration, cargo test, and render_check landed in `593b7d3`. | Use as the settled upload boundary for D2 worker payload integration. | Real high-N browser/GPU smoke remains environment-dependent. |
 | D2 | Rebuild responsiveness | Shipped | Startup worker prep, structural settings/generator routing, staged prepared upload, and high-N/frame-counter Playwright smoke passed; real-hardware throughput remains environment-dependent. | None for non-decision-gated D2. | Real hardware performance evidence still needs a real adapter lane. |
 | E | Visual outcome and region coherence | Shipped | Internal opt-in anterior/posterior prototype landed in `b7fbc66`; default hash-random assignment remains unchanged; cargo test passed. | Manual visual/dynamics review before any default promotion. | No screenshot/clip captured because the prototype is internal-only. |
@@ -84,7 +84,7 @@ stages.
 | 3 | Done | D1 morphology segment scaling | Shipped in `593b7d3`; chunking remains a main-thread GPU upload/resource policy. |
 | 4 | Done | D2 remaining responsiveness work | Startup worker prep, standalone morphology generator prep, and high-N/frame-counter smoke shipped. |
 | 5 | Done | Stream E spatial-region prototype | Shipped as an internal opt-in mode; promotion to default requires visual/dynamics review. |
-| Decision-gated | Pending | A2 production telemetry enablement, C1 CPU deletion, C2 legacy render amnesty | Requires owner decision or dependency clearance. |
+| Decision-gated | Resolved for now | A2 disabled; C1 delete; C2 remove; local real-hardware lane accepted; region prototype gets settings toggle | Continue sequential implementation until remaining accepted scope is done. |
 
 ## Decisions Log
 
@@ -103,15 +103,17 @@ stages.
 - D2 browser responsiveness smoke proves frame-counter/event-loop progress
   during high-N worker preparation; it does not claim real-hardware WebGPU
   throughput on this llvmpipe/no-adapter development environment.
+- Owner decisions on 2026-06-12: keep production telemetry disabled for now;
+  delete the CPU backend completely; remove legacy/dead code and references;
+  use the local machine for real-hardware smoke attempts; expose the region
+  coherence prototype behind a settings/dev toggle, not as default.
 
 ## Open Questions
 
-- Whether field telemetry may use an external service or must be a self-hosted
-  endpoint/static-log flow.
-- Whether CPU backend should be deleted outright or moved behind an explicit
-  dev-only feature first.
-- Whether spatial region coherence should ship by default or as a dev-panel
-  visual/dynamics mode after prototype review.
+- Real hardware smoke depends on whether the local machine exposes a real WebGPU
+  adapter.
+- Region coherence remains non-default until visual/dynamics review supports
+  promotion.
 
 ## Agent Log
 

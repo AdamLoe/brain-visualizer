@@ -31,8 +31,6 @@ now but kept self-contained so extraction is a folder move.
 │      └──► canvas (WebGPU). State stays GPU-resident; no rAF    │
 │           readback (metrics via async Idle/Pending staging).  │
 └──────────────────────────────────────────────────────────────┘
-   Parked: a CPU/WebGL2 backend (rayon active-list sim in a worker,
-   SharedArrayBuffer bridge) — code kept, unwired in V2.
 ```
 
 The network starts **silent**; ambient drive into the posterior input region
@@ -44,8 +42,8 @@ the physics is the intro.
 The shipped build (**V2**) diverged from earlier plans in ways the architecture
 docs capture but a casual reader may not expect:
 
-- **GPU-only.** The CPU/WebGL2 backend is parked — code kept, but GPU is forced
-  at boot and the backend toggle is hidden. See
+- **GPU-only.** The CPU/WebGL2 backend was deleted; old saved CPU configs are
+  normalized to GPU at load. See
   [architecture/cpu-backend.md](architecture/cpu-backend.md).
 - **The live connection/neuron visual is the per-neuron *morphology* renderer**
   (`crates/brain-visualizer/src/sim/morphology.rs` → `render_morphology.wgsl`). The active-edge **ribbon**
@@ -63,9 +61,9 @@ docs capture but a casual reader may not expect:
 
 ## Hard-to-grep facts
 
-- The GPU/CPU paths must stay **bit-identical** on connectivity: the 32-bit hash
-  and `target`/`weight` rule are implemented once in Rust and once in WGSL and
-  gated by `crates/brain-visualizer/tests/wgsl_*_determinism.rs`.
+- The Rust/WGSL paths must stay **bit-identical** on connectivity: the 32-bit
+  hash and `target`/`weight` rule are implemented once in Rust and once in WGSL
+  and gated by `crates/brain-visualizer/tests/wgsl_*_determinism.rs`.
 - WGSL has **no f32 atomics** → synaptic current accumulates in fixed-point i32
   (scale S = 4096). WGSL has **no portable point size** → glow is quad
   billboards, never `@builtin(point_size)`.

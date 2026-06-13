@@ -68,9 +68,9 @@ function wasmHotRebuild(): Plugin {
   };
 }
 
-// COOP/COEP headers enable SharedArrayBuffer / WASM threads in the dev server
-// and preview (the coi-serviceworker shim covers static hosts like GitHub
-// Pages that can't set headers — see web/public/coi-serviceworker.js).
+// COOP/COEP headers align the dev server and preview with static-host
+// cross-origin isolation behavior (the coi-serviceworker shim covers static
+// hosts like GitHub Pages that can't set headers).
 const crossOriginIsolation = {
   "Cross-Origin-Opener-Policy": "same-origin",
   "Cross-Origin-Embedder-Policy": "require-corp",
@@ -87,10 +87,9 @@ export default defineConfig({
   // shared parent app/ so the wasm pkg/ is reachable over /@fs/.
   server: { headers: crossOriginIsolation, fs: { allow: [resolve(__dirname, "..")] } },
   preview: { headers: crossOriginIsolation },
-  // The CPU coordinator worker (web/cpu-worker.ts) dynamically imports the wasm
-  // pkg, which forces code-splitting; ES module workers are required for that
-  // (the default IIFE worker format cannot code-split). Module workers also
-  // carry crossOriginIsolated into the worker for SharedArrayBuffer (BV24).
+  // The network-build worker dynamically imports the wasm pkg, which forces
+  // code-splitting; ES module workers are required for that (the default IIFE
+  // worker format cannot code-split).
   worker: { format: "es", plugins: () => [wasm(), topLevelAwait()] },
   // The wasm-pack `pkg/` output is referenced directly by web/main.ts.
   optimizeDeps: { exclude: ["brain_visualizer"] },

@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-12
+last_updated:  2026-06-13
 ---
 
 # Scaling
@@ -29,7 +29,7 @@ are retained but **dormant** — a tested seed for a future gentle auto-scaler (
 
 - GPU buffer allocation and `reinitialize` — [`gpu-backend.md`](gpu-backend.md).
 - The sim dynamics and excitability model — [`simulation.md`](simulation.md).
-- CPU backend throughput and rayon pool — [`cpu-backend.md`](cpu-backend.md).
+- Retired CPU backend boundary — [`cpu-backend.md`](cpu-backend.md).
 - Connectivity / synapse target math — [`connectivity.md`](connectivity.md).
 - Build, test, and deploy — [`build-and-deploy.md`](build-and-deploy.md).
 

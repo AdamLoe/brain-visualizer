@@ -58,9 +58,10 @@
   its default for existing saves. A version bump is reserved for semantically
   breaking changes (repurposed indices, changed defaults) where old data would
   actively mislead. Morphology loading also filters each group to known current
-  fields, so obsolete config keys from older saves are ignored rather than sent
-  back to Rust. The review presets cover the reproducibility need without
-  growing a user-editable preset system.
+  fields, and app config normalizes stale backend values to GPU, so obsolete
+  config keys from older saves are ignored rather than sent back to Rust. The
+  review presets cover the reproducibility need without growing a user-editable
+  preset system.
 - **Applies to.** [`../architecture/dev-panel.md`](../architecture/dev-panel.md).
 - **Code anchors.** `web/src/core/settings.ts → loadSettings, mergeOver, resetSettings`;
   `web/src/core/morph-config.ts → loadMorphConfig, resetMorphConfig`;

@@ -12,21 +12,20 @@ source lives under `app/`. Doc code anchors are written relative to
 ```
 app/                         Workspace root — Cargo.toml here is the workspace manifest.
   crates/brain-visualizer/   The Rust crate (compiles to WASM; pure logic also host-tested).
-    Cargo.toml               Crate manifest: [lib] cdylib+rlib, cpu-threads feature.
+    Cargo.toml               Crate manifest: [lib] cdylib+rlib.
     src/
       lib.rs                 wasm_bindgen entry points + host-callable build hooks.
       buffers.rs             SoA buffer layout math.
       profiler.rs            Perf ring buffer + per-second JSON dump.
       gpu_limits.rs          Adapter limits → derived caps.
       connectivity/          Procedural wiring: 32-bit hash, integer spatial grid,
-                             target/weight pure functions (shared CPU+GPU).
+                             target/weight pure functions (Rust/WGSL parity).
       manifold/              Cortical surface: icosphere, gyrification, region
                              assignment, neuron placement.
       sim/
         backend.rs           SimBackend trait, SimConfig, TickStats, shared bit/type helpers.
         scaler.rs            Adaptive scaler (within-tier feedback).
         morphology.rs        Per-neuron morphology geometry (MorphSegment), the live visual.
-        cpu/                 Parked CPU backend: core.rs (pure LIF) + mod.rs (CpuBackend).
         gpu/                 Live GPU backend.
           mod.rs             GpuBackend: frame graph, pass ordering, readback, DRAW_LEGACY_* guards.
           pipelines.rs       Pipeline + bind-group-layout construction.
@@ -34,7 +33,7 @@ app/                         Workspace root — Cargo.toml here is the workspace
           shaders/*.wgsl     Compute (integrate, scatter, stimulate, metrics, emit_edges,
                              frustum_cull, write_scatter_dispatch) + render (far, sphere,
                              cylinder, manifold, morphology, ribbon, bloom, draw_indirect).
-    examples/                Offline host-verification harnesses (cpu_check, sim_check,
+    examples/                Offline host-verification harnesses (sim_check,
                              soc_sweep, render_check, near_lod_check, morph_view), run via
                              `cargo run --example <name>`.
     tests/                   Rust integration tests: wgsl_hash_determinism,
@@ -55,14 +54,11 @@ app/                         Workspace root — Cargo.toml here is the workspace
         renderer.ts          WebGPU device/canvas setup.
         profiler.ts          Perf display (mirrors Rust Profiler).
       ui/
-        controls.ts          Brain-state presets, scaler, backend toggle.
+        controls.ts          Brain-state presets, scaler, GPU backend facade.
         dev-panel.ts         Hidden dev panel (gear icon).
         hud.ts               Public corner HUD (CornerHud).
-      cpu/
-        cpu-worker.ts        Parked CPU-backend coordinator worker.
-        cpu-renderer.ts      Parked WebGL2 renderer.
     public/
-      coi-serviceworker.js   COOP/COEP shim for SharedArrayBuffer on GitHub Pages (Vite publicDir).
+      coi-serviceworker.js   COOP/COEP shim for GitHub Pages (Vite publicDir).
     e2e/                     Playwright specs (brain_visualizer.spec.ts).
 
 docs/                        This documentation tree (agent-docs v1). See index.md.

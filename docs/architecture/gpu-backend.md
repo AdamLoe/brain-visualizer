@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-12
+last_updated:  2026-06-13
 ---
 
 # GPU backend / frame graph
@@ -9,7 +9,7 @@ last_updated:  2026-06-12
 The clock-driven WebGPU compute backend. It owns the *order* in which compute
 and render passes are encoded each tick/frame, the lifecycle of the persistent
 GPU buffer set, and the non-blocking staging-readback state machine. It is the
-only sim backend wired in V2; the CPU backend is parked (see
+only live sim backend (see
 [`../decisions/backends.md`](../decisions/backends.md)).
 
 The one job: drive every neuron forward one tick entirely on the GPU with **no

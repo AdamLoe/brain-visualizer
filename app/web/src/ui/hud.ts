@@ -19,7 +19,7 @@
 export interface HudStats {
   fps: number;
   n: number;
-  backend: "gpu" | "cpu";
+  backend: "gpu";
   synapticEventsPerSec: number;
 
   // Optional debug fields (only shown when debugEnabled = true):

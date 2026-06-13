@@ -1,8 +1,7 @@
 // Shared TypeScript types mirroring the Rust enums (src/sim/backend.rs).
-// Phase 1: thin definitions so controls/main can be wired and typecheck.
 
 export type SpeedPreset = "quarter" | "half" | "normal" | "double";
-export type BackendKind = "gpu" | "cpu";
+export type BackendKind = "gpu";
 export type Tier = "basic" | "low" | "balanced" | "max";
 export type BrainState =
   | "deep_sleep"
@@ -76,10 +75,14 @@ interface SavedConfig {
   n: number;
   k: number;
   tier: Tier;
-  backend: BackendKind;
+  backend?: string;
   speed: SpeedPreset;
   excitability: number;
   ticksPerSec: number;
+}
+
+function normalizeBackend(_backend: unknown): BackendKind {
+  return "gpu";
 }
 
 /** Load persisted config merged over DEFAULT_CONFIG. Returns a full AppConfig;
@@ -96,7 +99,7 @@ export function loadConfig(): AppConfig {
       n:            clampNeuronCount(parsed.n ?? base.n),
       k:            parsed.k            ?? base.k,
       tier:         parsed.tier         ?? base.tier,
-      backend:      parsed.backend      ?? base.backend,
+      backend:      normalizeBackend(parsed.backend ?? base.backend),
       speed:        parsed.speed        ?? base.speed,
       excitability: parsed.excitability ?? base.excitability,
       ticksPerSec:  parsed.ticksPerSec  ?? base.ticksPerSec,

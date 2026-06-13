@@ -2290,7 +2290,7 @@ pub fn generate(
     // can use the hot-path `target_with_cell` entry. The uncached
     // `connectivity::target` re-derives the cell with an O(N) `cell_of_index`
     // scan per call, which made morphology generation O(N²·K) and dominated
-    // network-rebuild time at high N. The CPU/GPU paths already cache this map.
+    // network-rebuild time at high N. GPU upload paths already cache this map.
     let cell_of_neuron = grid.cell_of_neuron_map();
 
     // World-space anchors for long-range waypoint routing (deterministic from the

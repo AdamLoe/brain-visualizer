@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-04
+last_updated:  2026-06-13
 ---
 
 # Connectivity
@@ -91,7 +91,7 @@ Connectivity remains source-out and implicit for simulation. The morphology
 builder is the one exception: at network build time it evaluates the production
 `target_with_cell` rule once for every `(source_id, synapse_index)` and stores a
 deterministic host-side reverse view for rendering incoming dendrites. This does
-not alter `target`, `target_with_cell`, `weight`, or the CPU/GPU scatter path.
+not alter `target`, `target_with_cell`, `weight`, or the Rust/WGSL scatter path.
 
 The stored shape is:
 
@@ -143,19 +143,17 @@ multiply; Rust `wrapping_mul`); no `u64` appears anywhere. The Rust
 implementation in `crates/brain-visualizer/src/connectivity/hash.rs` and the WGSL in
 `crates/brain-visualizer/src/sim/gpu/shaders/hash.wgsl` must be byte-identical.
 
-`target` has **three bit-identical implementations** that must move together:
-the shared Rust `target_with_cell`, the GPU WGSL `target_neuron`
-(`crates/brain-visualizer/src/sim/gpu/shaders/scatter.wgsl`), and the CPU backend
-which threads `ReachParams` through `ConnParams.reach` into the same shared
-`target_with_cell` (`crates/brain-visualizer/src/sim/cpu/core.rs → ConnParams`).
+`target` has **two bit-identical implementations** that must move together:
+the shared Rust `target_with_cell` and the GPU WGSL `target_neuron`
+(`crates/brain-visualizer/src/sim/gpu/shaders/scatter.wgsl`).
 The determinism gate `crates/brain-visualizer/tests/wgsl_hash_determinism.rs`
 embeds the WGSL source and asserts the GPU output equals the Rust golden vectors;
 `crates/brain-visualizer/tests/wgsl_target_determinism.rs` does the same
 end-to-end for `target()` and **runs with the long-range tail enabled**
 (`LONG_RANGE_FRAC = 64`, `MAX_REACH = 6`) so the contract is proven with the
 branch live, self-checking GPU `target_neuron` against the live Rust `target`.
-No side (Rust / CPU / WGSL) may be edited without updating the others and
-re-running the gate.
+No side (Rust / WGSL) may be edited without updating the other and re-running
+the gate.
 
 ## Per-tier K and store-once vs regenerate
 

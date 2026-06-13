@@ -17,7 +17,6 @@ import {
   showToast,
   tickExcitability,
 } from "./ui/controls";
-import { CpuRenderer } from "./cpu/cpu-renderer";
 import { CornerHud } from "./ui/hud";
 import { Profiler } from "./render/profiler";
 import { Renderer } from "./render/renderer";
@@ -295,15 +294,12 @@ async function boot(): Promise<void> {
   updateStartupOverlay({ stage: "Loading saved configuration...", progress: 28 });
 
   // 3. Mobile detection — apply full mobile profile (Phase 7 / BV spec):
-  //    Low tier, GPU only, 0.75×DPR render res, no near-LOD, no stim.
+  //    Low tier, 0.75×DPR render res, no near-LOD, no stim.
   const mobile = isMobile();
   // 0.1.1: restore the user's last-used config from localStorage (n/k/tier/
-  // backend/speed/excitability). Mobile override is applied AFTER load.
+  // backend/speed/excitability). Stale CPU backend saves normalize to GPU in
+  // loadConfig(); the mobile override is applied AFTER load.
   const config: AppConfig = loadConfig();
-  if (config.backend !== "gpu") {
-    config.backend = "gpu";
-    saveConfig(config);
-  }
   // 0.1.1: seed the excitability lerp from the persisted config so a reload
   // restores the user's last brain-state/excitability (no ramp from default).
   seedExcitability(config.excitability);
@@ -311,8 +307,8 @@ async function boot(): Promise<void> {
     config.tier = "low";
     config.n    = 10_000;  // Mobile profile remains below the 20k product cap.
     config.k    = 16;
-    config.backend = "gpu"; // GPU only on mobile (no rayon workers overhead)
-    console.log("[main] mobile detected → Low tier (N=10k K=16, GPU only, 0.75×DPR)");
+    config.backend = "gpu";
+    console.log("[main] mobile detected → Low tier (N=10k K=16, 0.75×DPR)");
     saveConfig(config); // persist the mobile-forced profile so it survives reload
   }
   updateStartupOverlay({
@@ -409,20 +405,14 @@ async function boot(): Promise<void> {
   rebuildCoordinator.requestMorphConfig(appliedMorphConfigJson);
 
   // Sim tuning constants (Phase 2 locked values, verified by SOC sweep).
-  // Shared by both GPU and CPU backends so the two backends run identical dynamics.
   const SIM_I_EXT    = 0.055;
   const SIM_SYN_SCALE = 0.03;
-  // Aliases used by their respective backend startup paths.
   const GPU_I_EXT    = SIM_I_EXT;
   const GPU_SYN_SCALE = SIM_SYN_SCALE;
 
-  // GPU backend instance. Created once at boot; recreated on backend switch or
-  // tier change. null during init or when CPU backend is active.
+  // GPU backend instance. Created once at boot; recreated on tier change.
+  // null only while init is in flight.
   let gpuBackend: WasmGpuBackend | null = null;
-
-  // Phase 6 CPU backend coordinator (BV24). Owns the worker + the SoA views the
-  // WebGL2 CpuRenderer draws. Tuning matches examples/cpu_check.rs / sim_check.rs.
-  const cpu = new CpuCoordinator(canvas, SIM_I_EXT, SIM_SYN_SCALE);
 
   function publishNetworkBuildStatus(): void {
     (window as unknown as BrainVisualizerTestHooks).__bvNetworkBuildStatus =
@@ -473,8 +463,8 @@ async function boot(): Promise<void> {
   /**
    * Create (or recreate) the wasm GPU backend for the current config.
    * Startup uses the staged WASM API so the loading overlay can advance from
-   * real completed work and the browser can paint between expensive CPU/GPU
-   * setup blocks.
+   * real completed work and the browser can paint between expensive setup
+   * blocks.
    */
   async function startGpuBackend(): Promise<void> {
     const backendStartedAt = performance.now();
@@ -740,7 +730,7 @@ async function boot(): Promise<void> {
     // UX round 2: wire sim handlers (excitability, speed-tps, network rebuild).
     // onExcitability: delegates to setExcitabilityTarget; existing lerp smoothly approaches.
     // onSpeed: sets targetTicksPerSec (1–60); time-based accumulator uses it next frame.
-    // onNetwork: worker-prepared rebuild — the worker builds the CPU payload, and
+    // onNetwork: worker-prepared rebuild — the worker builds the payload, and
     // rafLoop applies the latest ready payload under the same &mut discipline as
     // all other backend mutations.
     if (typeof (devPanel as unknown as { setSimHandlers: unknown }).setSimHandlers === "function") {
@@ -899,44 +889,22 @@ async function boot(): Promise<void> {
     rebuildCoordinator.requestSettingsPush();
   });
 
-  /**
-   * BV16 restart sequence: cancel rAF, tear down the current backend, reinit the
-   * other one with the SAME seed (identical network). The black-canvas gap
-   * during teardown+reinit is acceptable per the spec.
-   *
-   * Both GPU (WasmGpuBackend) and CPU (CpuCoordinator) paths are real.
-   */
+  /** Restart the GPU backend after a tier/reset-style config change. */
   async function restartWithBackend(kind: BackendKind): Promise<void> {
     if (duringRestart) return;
     duringRestart = true;
     cancelAnimationFrame(rafHandle);
 
     console.log(`[main] restart → backend=${kind} seed=0x${config.seed.toString(16)}`);
-    const prev = config.backend;
-    config.backend = kind;
-    profiler.setConfig(kind, config.tier, config.n, config.k);
+    config.backend = "gpu";
+    profiler.setConfig("gpu", config.tier, config.n, config.k);
 
-    // Tear down previous backend.
-    if (prev === "cpu") cpu.destroy();
-    if (prev === "gpu" && gpuBackend) {
+    if (gpuBackend) {
       gpuBackend.destroy();
       gpuBackend = null;
     }
 
-    // Start new backend.
-    if (kind === "cpu") {
-      try {
-        await cpu.start(config);
-      } catch (e) {
-        console.warn("[main] CPU backend start failed, reverting to GPU:", e);
-        showToast("CPU backend failed to start");
-        config.backend = "gpu";
-        kind = "gpu";
-      }
-    }
-    if (kind === "gpu") {
-      await startGpuBackend();
-    }
+    await startGpuBackend();
 
     duringRestart = false;
     rafHandle = requestAnimationFrame(rafLoop);
@@ -1065,10 +1033,8 @@ async function boot(): Promise<void> {
     if (pendingStim !== null) {
       const { x, y, z, radius, current } = pendingStim;
       pendingStim = null;
-      if (config.backend === "gpu" && gpuBackend) {
+      if (gpuBackend) {
         gpuBackend.stimulate(x, y, z, radius, current);
-      } else if (config.backend === "cpu") {
-        cpu.stimulate(x, y, z, radius, current);
       }
     }
     // ────────────────────────────────────────────────────────────────────────
@@ -1096,50 +1062,42 @@ async function boot(): Promise<void> {
 
     let stats = ZERO_STATS;
 
-    if (config.backend === "cpu") {
-      // CPU path: drive the coordinator worker + WebGL2 render (Phase 6).
-      if (ticks > 0) cpu.tick(ticks, excitability);
-      stats = cpu.lastStats();
-      cpu.render(camera);
-    } else {
-      // GPU path: tick + render via WasmGpuBackend (OD11 closed — bridge wired).
-      if (gpuBackend) {
-        if (ticks > 0) {
-          const spikes = gpuBackend.tick(ticks, excitability);
-          stats = {
-            tickCount: ticks,
-            spikes: spikes,
-            synapticEvents: Math.round(spikes * config.k),
-            tickMs: 0,
-          };
-        }
-        const dist = camera.cameraDistance();
-        gpuBackend.set_lod_camera_distance(dist);
-
-        const mvp   = camera.mvpMatrix();
-        const right = camera.cameraRight();
-        const up    = camera.cameraUp();
-        const eye   = camera.eye();
-        // V2 Phase 0: glow_tau and point_radius are sourced from VisualSettings
-        // inside the backend (set via update_settings); no longer passed here.
-        gpuBackend.render_frame(
-          mvp,
-          right[0], right[1], right[2],
-          up[0],    up[1],    up[2],
-          eye[0],   eye[1],   eye[2],
-          dist,
-        );
-        if (!firstReadyFrameSeen) {
-          firstReadyFrameSeen = true;
-          const totalMs = performance.now() - BOOT_STARTED_AT_MS;
-          updateStartupOverlay({ status: "ready", stage: "Ready", progress: 100 });
-          console.log(`[main] first GPU frame rendered after ${totalMs.toFixed(1)}ms`);
-        }
-      } else {
-        // gpuBackend not yet ready (still initializing); visible startup state is
-        // handled by the DOM overlay so this does not claim the canvas context.
-        renderer.render(camera, tickCount);
+    if (gpuBackend) {
+      if (ticks > 0) {
+        const spikes = gpuBackend.tick(ticks, excitability);
+        stats = {
+          tickCount: ticks,
+          spikes: spikes,
+          synapticEvents: Math.round(spikes * config.k),
+          tickMs: 0,
+        };
       }
+      const dist = camera.cameraDistance();
+      gpuBackend.set_lod_camera_distance(dist);
+
+      const mvp   = camera.mvpMatrix();
+      const right = camera.cameraRight();
+      const up    = camera.cameraUp();
+      const eye   = camera.eye();
+      // V2 Phase 0: glow_tau and point_radius are sourced from VisualSettings
+      // inside the backend (set via update_settings); no longer passed here.
+      gpuBackend.render_frame(
+        mvp,
+        right[0], right[1], right[2],
+        up[0],    up[1],    up[2],
+        eye[0],   eye[1],   eye[2],
+        dist,
+      );
+      if (!firstReadyFrameSeen) {
+        firstReadyFrameSeen = true;
+        const totalMs = performance.now() - BOOT_STARTED_AT_MS;
+        updateStartupOverlay({ status: "ready", stage: "Ready", progress: 100 });
+        console.log(`[main] first GPU frame rendered after ${totalMs.toFixed(1)}ms`);
+      }
+    } else {
+      // gpuBackend not yet ready (still initializing); visible startup state is
+      // handled by the DOM overlay so this does not claim the canvas context.
+      renderer.render(camera, tickCount);
     }
 
     profiler.recordFrame(timestamp, timestamp - lastTimestamp, stats);
@@ -1200,111 +1158,6 @@ async function boot(): Promise<void> {
   void gpuStartupPromise;
 
   console.log("[main] Consolidation ready — OD11 GPU bridge wired (WasmGpuBackend); rAF started before async GPU init");
-}
-
-/**
- * CPU backend coordinator (Phase 6, BV24). Owns the dedicated sim Web Worker
- * (which owns the WASM instance + rayon pool + sim state) and the WebGL2
- * renderer on the main thread. The worker writes the SoA into the shared WASM
- * memory; this class builds Float32Array/Uint32Array views over that memory and
- * hands them to the CpuRenderer each frame (zero-copy, full upload).
- *
- * Compile/typecheck-only here — the runtime path needs a browser (no browser in
- * the build env). Falls back to single-threaded sim when cross-origin isolation
- * / WASM threads are unavailable (still correct, just slower).
- */
-class CpuCoordinator {
-  private worker: Worker | null = null;
-  private renderer: CpuRenderer | null = null;
-  private memory: WebAssembly.Memory | null = null;
-  private neuronCount = 0;
-  private vRenderPtr = 0;
-  private lastSpikePtr = 0;
-  private positionsPtr = 0;
-  private tickCounter = 0;
-  private spikesThisFrame = 0;
-
-  constructor(
-    private canvas: HTMLCanvasElement,
-    private iExt: number,
-    private synScale: number,
-  ) {}
-
-  async start(config: AppConfig): Promise<void> {
-    const gl = this.canvas.getContext("webgl2");
-    if (!gl) throw new Error("WebGL2 unavailable (CPU backend requires it)");
-    this.renderer = new CpuRenderer(gl);
-
-    this.worker = new Worker(new URL("./cpu/cpu-worker.ts", import.meta.url), { type: "module" });
-    const ready = new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("CPU worker init timeout")), 30000);
-      this.worker!.onmessage = (ev: MessageEvent) => {
-        const m = ev.data;
-        if (m.type === "ready") {
-          clearTimeout(timer);
-          this.memory = m.memory;
-          this.neuronCount = m.neuronCount;
-          this.vRenderPtr = m.vRenderPtr;
-          this.lastSpikePtr = m.lastSpikePtr;
-          this.positionsPtr = m.positionsPtr;
-          const pos = new Float32Array(this.memory!.buffer, this.positionsPtr, this.neuronCount * 3);
-          this.renderer!.setPositions(pos, this.neuronCount);
-          console.log(`[cpu] coordinator ready: N=${this.neuronCount} threaded=${m.threaded}`);
-          resolve();
-        } else if (m.type === "ticked") {
-          this.spikesThisFrame = m.spikes;
-          this.tickCounter = m.tick;
-          this.vRenderPtr = m.vRenderPtr;
-          this.lastSpikePtr = m.lastSpikePtr;
-        }
-      };
-      this.worker!.onerror = (e) => { clearTimeout(timer); reject(e); };
-    });
-    this.worker.postMessage({
-      type: "init",
-      n: config.n,
-      k: config.k,
-      seed: config.seed >>> 0,
-      iExt: this.iExt,
-      synapticScale: this.synScale,
-      requestedThreads: navigator.hardwareConcurrency || 4,
-    });
-    await ready;
-  }
-
-  tick(ticks: number, excitability: number): void {
-    this.worker?.postMessage({ type: "tick", ticks, excitability });
-  }
-
-  stimulate(x: number, y: number, z: number, radius: number, current: number): void {
-    this.worker?.postMessage({ type: "stim", x, y, z, radius, current });
-  }
-
-  render(camera: Camera): void {
-    if (!this.renderer || !this.memory || this.neuronCount === 0) return;
-    const vRender = new Float32Array(this.memory.buffer, this.vRenderPtr, this.neuronCount);
-    const lastSpike = new Uint32Array(this.memory.buffer, this.lastSpikePtr, this.neuronCount);
-    this.renderer.render(camera, this.tickCounter, vRender, lastSpike);
-  }
-
-  lastStats(): typeof ZERO_STATS {
-    return {
-      tickCount: 1,
-      spikes: this.spikesThisFrame,
-      synapticEvents: 0,
-      tickMs: 0,
-    };
-  }
-
-  destroy(): void {
-    this.worker?.postMessage({ type: "destroy" });
-    this.worker?.terminate();
-    this.worker = null;
-    this.renderer?.destroy();
-    this.renderer = null;
-    this.memory = null;
-    this.neuronCount = 0;
-  }
 }
 
 /**

@@ -1,5 +1,5 @@
 ---
-status:        draft
+status:        active
 owner:         unassigned
 last_updated:  2026-06-12
 okay_to_delete: false
@@ -19,6 +19,8 @@ owning_docs:
 Remove or archive legacy render/dev paths that are documented as parked and no
 longer part of the live V2 product, without colliding with active GPU scaling or
 settings-contract work.
+
+Owner decision on 2026-06-12: remove legacy/dead code and references outright.
 
 ## Scope
 

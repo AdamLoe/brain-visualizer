@@ -2,7 +2,7 @@
 //! must produce the SAME synapse targets as Rust `connectivity::target()` for a
 //! real manifold grid. The scatter shader reimplements the spatial rule in
 //! WGSL; this proves the two implementations agree bit-for-bit so the GPU and
-//! CPU backends wire the same network (BV6/BV22).
+//! Rust and WGSL wire the same network (BV6/BV22).
 //!
 //! Skips (does not fail) if no wgpu adapter is available. Native-only.
 

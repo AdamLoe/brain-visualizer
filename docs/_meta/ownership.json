@@ -46,7 +46,7 @@
     },
     {
       "id": "cpu-backend",
-      "summary": "the parked CPU/WebGL2 backend: event-driven active-list rayon LIF (cpu/core.rs), CpuBackend, coordinator Web Worker + SharedArrayBuffer, WebGL2 instanced render, cpu-threads feature; code kept but unwired in V2",
+      "summary": "the retired CPU/WebGL2 backend boundary: no live CPU runtime code, stale CPU app configs normalize to GPU, git history is the archive",
       "owner": "architecture/cpu-backend.md",
       "references": ["architecture/simulation.md", "architecture/data-model.md", "architecture/build-and-deploy.md"]
     },
@@ -82,7 +82,7 @@
     },
     {
       "id": "build-and-deploy",
-      "summary": "build pipeline (wasm-pack→tsc→vite), cpu-threads feature + threaded-wasm recipe, COOP/COEP (coi-serviceworker shim), the examples as offline verification surface, the test gates, llvmpipe offline validation",
+      "summary": "build pipeline (wasm-pack→tsc→vite), COOP/COEP (coi-serviceworker shim), the examples as offline verification surface, the test gates, llvmpipe offline validation",
       "owner": "architecture/build-and-deploy.md",
       "references": ["agent-context/testing-how-to.md", "agent-context/dev-loop.md", "architecture/cpu-backend.md"]
     },
@@ -94,7 +94,7 @@
     },
     {
       "id": "dec-backends",
-      "summary": "two interchangeable backends, toggle UX, full-restart-same-seed, CPU coordinator worker, CPU parked for V2",
+      "summary": "GPU-only runtime backend, deleted CPU/WebGL2 code, stale CPU app-config normalization",
       "owner": "decisions/backends.md",
       "references": []
     },

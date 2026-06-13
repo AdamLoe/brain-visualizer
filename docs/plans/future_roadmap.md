@@ -87,7 +87,8 @@ implementation details belong in the versioned plan docs, not here.
 
 ### CPU Backend Revival
 
-- **Deferred.** The CPU/WebGL2 backend stays parked during visual showcase work.
+- **Rejected for now.** The CPU/WebGL2 backend has been deleted; reviving a CPU
+  comparison would be a new product decision and implementation plan.
 
 ### High-N Morphology Degradation Guard
 

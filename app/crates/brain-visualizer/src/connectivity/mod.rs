@@ -1,8 +1,8 @@
 //! Procedural / implicit connectivity (BV6).
 //!
 //! There is no stored edge list. `target(i, j, ...)` and `weight(i, j, ...)`
-//! are **pure integer functions** of the neuron ids and type, so the CPU
-//! (Rust) and GPU (WGSL) backends derive bit-identical synapse lists from the
+//! are **pure integer functions** of the neuron ids and type, so Rust and WGSL
+//! derive bit-identical synapse lists from the
 //! same seed. All arithmetic is on integer cell coordinates and the BV22 hash
 //! (`hash.rs`); there is **no float distance comparison** anywhere on this
 //! path.
@@ -128,8 +128,8 @@ pub fn target(
 
 /// Identical to [`target`] but takes the source neuron's already-known integer
 /// cell coordinate, avoiding the O(N) `cell_of_index` scan. This is the hot-path
-/// entry the CPU backend uses (it precomputes `SpatialGrid::cell_of_neuron_map`
-/// once); the GPU scatter does the same by reading its `cell_of_neuron` buffer.
+/// entry used by host-side callers with `SpatialGrid::cell_of_neuron_map`
+/// precomputed; the GPU scatter does the same by reading its `cell_of_neuron` buffer.
 /// `target` delegates here so both produce bit-identical results.
 #[inline]
 pub fn target_with_cell(

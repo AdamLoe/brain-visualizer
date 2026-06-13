@@ -1,7 +1,7 @@
 //! Phase-7 SOC tuning: i_ext sweep + five-preset acceptance check (BV9).
 //!
 //! Runs natively via the GpuBackend (llvmpike software Vulkan on this machine).
-//! Because llvmpipe is slow, N=30k is used (same as sim_check.rs / cpu_check.rs).
+//! Because llvmpipe is slow, N=30k is used (same as sim_check.rs).
 //! The acceptance criteria bands are spec values; the hz numbers are real.
 //!
 //! Run: `cargo run --release --example soc_sweep`

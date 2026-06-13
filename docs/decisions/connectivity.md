@@ -116,12 +116,11 @@
   The `target` gate runs with the heavy-tailed long-range branch **enabled**
   (non-zero `long_range_frac`/`max_reach`) and self-checks GPU `target_neuron`
   against the live Rust `target`, so the whole reach rule — not just the local
-  path — is covered. None of the three `target` implementations (Rust / CPU /
-  WGSL) may be edited without updating the others and re-running this gate.
-- **Why.** CPU/GPU determinism is load-bearing: the same seed must produce the
-  same network on both backends, which is the entire basis of the backend
-  comparison. A silent constant drift would corrupt results without any visible
-  crash.
+  path — is covered. Neither `target` implementation (Rust / WGSL) may be
+  edited without updating the other and re-running this gate.
+- **Why.** Rust/WGSL determinism is load-bearing: the same seed must produce the
+  same network in host-prepared data and GPU kernels. A silent constant drift
+  would corrupt results without any visible crash.
 - **Applies to.** [`../architecture/connectivity.md`](../architecture/connectivity.md).
 - **Code anchors.** `crates/brain-visualizer/tests/wgsl_hash_determinism.rs`,
   `crates/brain-visualizer/tests/wgsl_target_determinism.rs`.

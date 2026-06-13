@@ -36,8 +36,7 @@
   threshold/leak/refractory spread) already buys much of GLIF's diversity without
   the per-neuron extra state. Add GLIF only when a demo needs adaptation.
 - **Applies to.** [`../architecture/simulation.md`](../architecture/simulation.md).
-- **Code anchors.** `crates/brain-visualizer/src/sim/gpu/shaders/integrate.wgsl → integrate`;
-  `crates/brain-visualizer/src/sim/cpu/core.rs → LifParams`.
+- **Code anchors.** `crates/brain-visualizer/src/sim/gpu/shaders/integrate.wgsl → integrate`.
 - **Revisit when.** A demonstration needs spike-frequency adaptation or bursting
   that heterogeneity + input modes cannot fake.
 

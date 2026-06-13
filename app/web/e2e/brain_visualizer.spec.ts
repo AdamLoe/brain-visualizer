@@ -7,8 +7,8 @@
  * live WebGPU device are gated with a runtime check and emit a clear skip
  * message rather than failing silently.
  *
- * The critical regression tests (smoke/boot, resize reentrancy) work with the
- * CPU/WebGL2 fallback path and do not require a WebGPU adapter.
+ * The critical regression tests (smoke/boot, resize reentrancy) do not require
+ * a WebGPU adapter.
  */
 
 import { test, expect, type Page } from "@playwright/test";
@@ -203,7 +203,7 @@ test("webgpu: navigator.gpu is present on localhost; adapter gated", async ({
         "(WSL2 without a real GPU — SwiftShader Vulkan present but Dawn " +
         "returns no adapters via requestAdapter()). " +
         "WebGPU-device-dependent assertions are skipped. " +
-        "The CPU/WebGL2 path is fully exercised by the other tests.",
+        "Device-dependent WebGPU assertions are skipped.",
     );
     // Not a test failure — environment limitation.
     return;
@@ -356,128 +356,4 @@ test("controls: current public and simulation controls toggle without errors", a
 
   // rAF loop must still be running.
   await waitForFrames(page, 3);
-});
-
-// ---------------------------------------------------------------------------
-// Test 5 — CPU backend toggle (gated on WebGL2 availability)
-// ---------------------------------------------------------------------------
-
-test("cpu-backend: toggle to CPU mode; confirm restart without crash", async ({
-  page,
-}) => {
-  // This test may take longer than the default 60s if the CPU worker times out
-  // (30s worker-init timeout) before falling back. Increase budget accordingly.
-  test.setTimeout(90_000);
-  const errors: string[] = [];
-  const consoleLogs: string[] = [];
-  page.on("pageerror", (err) => errors.push(err.message));
-  page.on("console", (msg) =>
-    consoleLogs.push(`[${msg.type()}] ${msg.text()}`),
-  );
-
-  await page.goto("/", { waitUntil: "networkidle", timeout: 30_000 });
-  await page.waitForFunction(
-    () => (window as unknown as Record<string, unknown>).__bvFrameCounter !== undefined,
-    { timeout: 20_000 },
-  );
-
-  // Wait for the initial rAF loop to be running.
-  await waitForFrames(page, 5);
-
-  // Check if WebGL2 is available (CPU backend requires it).
-  const hasWebGL2 = await page.evaluate(() => {
-    const canvas = document.createElement("canvas");
-    return !!canvas.getContext("webgl2");
-  });
-
-  if (!hasWebGL2) {
-    console.log(
-      "[SKIP-REASON] WebGL2 not available — CPU backend cannot be exercised headless.",
-    );
-    return;
-  }
-
-  const cpuBtn = page.locator('#backend-toggle button[data-backend="cpu"]');
-  if ((await cpuBtn.count()) === 0) {
-    test.skip(
-      true,
-      "Public CPU backend toggle is intentionally hidden in the current V2 UI contract.",
-    );
-  }
-
-  // Click the CPU backend button when a runtime contract exposes it.
-  await expect(cpuBtn).toBeVisible();
-
-  // The CPU button should not be disabled (Phase 6 unlocked it).
-  const isDisabled = await cpuBtn.isDisabled();
-  if (isDisabled) {
-    console.log(
-      "[SKIP-REASON] CPU backend button is disabled — cannot test CPU path.",
-    );
-    return;
-  }
-
-  await cpuBtn.click();
-
-  // Wait for the restart log to appear in the page console.
-  // We use a window-level flag rather than a captured Node array because
-  // page.waitForFunction runs in the page context, not in Node.
-  await page.evaluate(() => {
-    const win = window as unknown as Record<string, unknown>;
-    win.__bvRestartLogged = false;
-    const origLog = console.log.bind(console);
-    console.log = (...args: unknown[]) => {
-      origLog(...args);
-      if (String(args[0]).includes("[main] restart")) {
-        win.__bvRestartLogged = true;
-      }
-    };
-  });
-
-  await cpuBtn.click();
-
-  // Wait up to 5s for the restart log.
-  try {
-    await page.waitForFunction(
-      () => !!(window as unknown as Record<string, unknown>).__bvRestartLogged,
-      { timeout: 5_000 },
-    );
-  } catch {
-    // Restart log may have fired before we patched console; continue.
-  }
-
-  // After clicking CPU, the rAF loop restarts. Give up to 10s for the CPU
-  // worker to init (it loads wasm + builds the network). If the worker times
-  // out (30s worker-init timeout), the backend reverts to GPU — that's fine.
-  // We just need to confirm the rAF loop keeps running.
-  try {
-    await waitForFrames(page, 5, 10_000);
-    // If frames advanced within 10s, CPU backend is running (or reverted to GPU).
-    console.log("[OK] rAF loop still running after CPU backend restart");
-  } catch {
-    // CPU worker may fail to init in this env (no real SAB/threads).
-    // The 30-second worker timeout will eventually trigger a GPU revert;
-    // we don't wait for that here.
-    console.log(
-      "[SKIP-REASON] CPU backend frames did not advance within 10s — worker may " +
-        "still be initializing or SAB/SharedArrayBuffer is unavailable. " +
-        "The UI restart path was triggered without a crash (verified below).",
-    );
-  }
-
-  // Confirm the button exists (active or reverted to GPU; either is valid).
-  const anyActive = await page.locator('#backend-toggle button.active').count();
-  expect(anyActive).toBeGreaterThan(0);
-
-  // No critical crashes (CPU worker timeout is non-critical; can fall back).
-  const criticalErrors = errors.filter(
-    (e) =>
-      !e.includes("GPU backend creation failed") &&
-      !e.includes("CPU worker init timeout") &&
-      !e.includes("CPU backend failed"),
-  );
-  expect(
-    criticalErrors,
-    `Unexpected errors after CPU toggle:\n${criticalErrors.join("\n")}`,
-  ).toHaveLength(0);
 });

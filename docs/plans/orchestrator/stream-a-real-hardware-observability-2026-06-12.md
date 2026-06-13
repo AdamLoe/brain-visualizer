@@ -123,8 +123,9 @@ Stage A2: production telemetry enablement.
 ## Handoff Notes
 
 Implementation can land A0 and A1 without a production telemetry decision.
-Before enabling A2 production telemetry, decide the provider/endpoint, retention
-period, and whether the first enablement is opt-in, opt-out, or dogfood-only.
+Owner decision on 2026-06-12: keep production telemetry disabled for now. A2
+production enablement is intentionally deferred until a future telemetry sink,
+retention period, and opt-in/opt-out/dogfood posture are selected.
 
 ## Migration Notes
 

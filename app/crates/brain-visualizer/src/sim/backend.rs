@@ -1,8 +1,4 @@
 //! The `SimBackend` interface and shared simulation types (BV4).
-//!
-//! Two implementations (GPU/WebGPU compute, CPU/rayon event-driven) sit behind
-//! this one trait and are switched at runtime via full teardown+restart (BV16).
-//! Phase 1 defines the types and stub backends; ticks return zeroed stats.
 
 /// Locked fixed-point current scale factor S = 2^12 (BV19).
 pub const FIXED_POINT_SCALE: i32 = 4096;
@@ -41,7 +37,7 @@ pub struct SimConfig {
     pub n: usize,
     /// Synaptic out-degree (BV18, per-tier knob).
     pub k: usize,
-    /// Network seed; same seed → same network across backends (BV16).
+    /// Network seed; same seed → same generated network.
     pub seed: u64,
     pub tier: Tier,
     pub speed: SpeedPreset,
@@ -109,7 +105,6 @@ pub enum SpeedPreset {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendKind {
     Gpu,
-    Cpu,
 }
 
 /// Difficulty tier (BV3). The adaptive scaler operates inside a tier (BV1).
@@ -121,8 +116,7 @@ pub enum Tier {
 }
 
 /// Data the renderer reads each frame.
-/// - GPU backend: raw buffer handles, state stays GPU-resident (zero readback).
-/// - CPU backend: slices of changed neurons (uploaded to WebGL2 each frame).
+/// GPU state stays GPU-resident; per-frame readback is avoided.
 pub enum RenderState<'a> {
     Gpu {
         v_buf: &'a wgpu::Buffer,
@@ -132,11 +126,6 @@ pub enum RenderState<'a> {
         pos_y_buf: &'a wgpu::Buffer,
         pos_z_buf: &'a wgpu::Buffer,
         neuron_count: usize,
-    },
-    Cpu {
-        v_render: &'a [f32],
-        last_spike: &'a [u32],
-        positions: &'a [[f32; 3]],
     },
     /// Phase-1 stub state: nothing allocated, nothing to render.
     Empty,

@@ -17,7 +17,7 @@ below are the app-specific ones that the global rules don't cover.
 - **No CPU↔GPU readback in the rAF loop.** Readbacks go through the async
   Idle/Pending staging path. See
   [`../architecture/profiling.md`](../architecture/profiling.md).
-- **CPU/GPU determinism is a contract.** Any change to the hash primitive or the
+- **Rust/WGSL determinism is a contract.** Any change to the hash primitive or the
   `target`/`weight` rule must keep Rust and WGSL byte-identical and pass the
   determinism gates ([`testing-how-to.md`](testing-how-to.md)). The hash and
   rule are owned by [`../architecture/connectivity.md`](../architecture/connectivity.md).

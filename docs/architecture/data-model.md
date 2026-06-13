@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-12
+last_updated:  2026-06-13
 ---
 
 # Data Model
@@ -77,9 +77,9 @@ loop does not read it. `crates/brain-visualizer/tests/gpu_current_overflow.rs`
 forces full-network synchrony at product max N with K above the product default
 and fails unless the observed current stays well below `i32::MAX`.
 
-The CPU backend uses the same representation with `AtomicI32` adds, so
-the Rust and WGSL paths produce identical fixed-point values for the same
-inputs.
+Rust host tests and WGSL shaders use the same fixed-point scale and wrapping
+helpers so deterministic gates can compare the live GPU kernels against Rust
+golden behavior.
 
 ## Chunked storage layout
 

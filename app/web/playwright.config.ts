@@ -7,8 +7,7 @@ import { defineConfig, devices } from "@playwright/test";
  * 1. Smoke/boot — wasm loads, no "recursive use of an object" panic.
  * 2. WebGPU init — adapter availability (gated: skipped when no adapter).
  * 3. Resize regression — the exact reentrancy bug the user hit.
- * 4. Controls — brain-state + speed buttons work without error.
- * 5. CPU backend toggle (gated: requires WebGL2 + worker).
+ * 4. Controls — public buttons and dev-panel simulation sliders work without error.
  *
  * The dev server is assumed to be running at http://localhost:5173.
  * Set USE_WEBSERVER=1 to have Playwright start it automatically instead.

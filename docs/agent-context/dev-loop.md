@@ -36,9 +36,8 @@ hot-applied** — a config edit also requires a full dev-server restart, so the
 same kill-then-`npm run dev` sequence applies.
 
 `npm run dev` rebuilds the wasm package and serves the harness with
-cross-origin isolation, so `SharedArrayBuffer` (and the CPU backend's threaded
-path where built) is available. The app boots GPU-only at the beauty-first
-default (~1.2k neurons / K=16) — backend toggle hidden. The hidden dev panel
+cross-origin isolation. The app boots GPU-only at the beauty-first
+default. The hidden dev panel
 opens via `?dev=1`, the backtick key, or the bottom-right affordance
 ([`../architecture/dev-panel.md`](../architecture/dev-panel.md)).
 
@@ -48,7 +47,6 @@ Cargo runs from the workspace root `app/`:
 
 ```bash
 cd app
-cargo run --release --example cpu_check    # CPU/GPU parity on the same seed
 cargo run --release --example soc_sweep    # criticality sweep
 cargo run --release --example morph_view   # morphology geometry
 ```

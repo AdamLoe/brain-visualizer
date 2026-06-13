@@ -84,7 +84,6 @@ impl ProfileSnapshot {
     pub fn to_json(&self) -> String {
         let backend = match self.backend {
             BackendKind::Gpu => "gpu",
-            BackendKind::Cpu => "cpu",
         };
         let tier = match self.tier {
             Tier::Low => "low",
@@ -253,7 +252,7 @@ mod tests {
             ticks_per_sec: 60.0,
             spikes_per_sec: 600.0,
             synaptic_events_per_sec: 19200.0,
-            backend: BackendKind::Cpu,
+            backend: BackendKind::Gpu,
             tier: Tier::Max,
             n: 1000,
             k: 64,
@@ -273,7 +272,7 @@ mod tests {
         ] {
             assert!(json.contains(field), "missing {field} in {json}");
         }
-        assert!(json.contains("\"backend\":\"cpu\""));
+        assert!(json.contains("\"backend\":\"gpu\""));
         assert!(json.contains("\"tier\":\"max\""));
     }
 }

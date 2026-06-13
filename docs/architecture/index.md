@@ -34,8 +34,8 @@ changed over time. Load only the doc that matches your task; follow its
 | Need | Read |
 |---|---|
 | Fixed-N scaling, difficulty tiers, the 20k product cap, adapter-limit caps | [`scaling.md`](scaling.md) |
-| The CPU/WebGL2 backend (parked for V2): active-list rayon sim, coordinator worker, SharedArrayBuffer | [`cpu-backend.md`](cpu-backend.md) |
-| Build pipeline (wasm-pack/vite), `cpu-threads` feature, COOP/COEP, examples, test gates | [`build-and-deploy.md`](build-and-deploy.md) |
+| The retired CPU/WebGL2 backend boundary and stale-config normalization | [`cpu-backend.md`](cpu-backend.md) |
+| Build pipeline (wasm-pack/vite), COOP/COEP, examples, test gates | [`build-and-deploy.md`](build-and-deploy.md) |
 
 ## See also
 

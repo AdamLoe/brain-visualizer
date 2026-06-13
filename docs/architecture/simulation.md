@@ -1,21 +1,21 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-12
+last_updated:  2026-06-13
 ---
 
 # Simulation model
 
-The backend-agnostic neural dynamics: a leaky integrate-and-fire (LIF) spiking
-network whose per-tick evolution is one shared model regardless of which backend
-runs it. This doc owns the *dynamics* (the math, the knobs, the energy source)
-and the *boundary contract* (what crosses wasm↔JS). It does not own how the GPU
-schedules the passes or how the network is wired.
+The neural dynamics: a leaky integrate-and-fire (LIF) spiking network whose
+per-tick evolution runs in the GPU backend. This doc owns the *dynamics* (the
+math, the knobs, the energy source) and the *boundary contract* (what crosses
+wasm↔JS). It does not own how the GPU schedules the passes or how the network
+is wired.
 
 ## What it owns
 
-- The LIF neuron model + per-tick step: `crates/brain-visualizer/src/sim/gpu/shaders/integrate.wgsl → integrate` (canonical, GPU-resident V2) and its parity reference `crates/brain-visualizer/src/sim/cpu/core.rs → integrate_neuron` (parked CPU backend, same dynamics).
-- Locked LIF constants (leak, threshold, reset, refractory): `crates/brain-visualizer/src/sim/gpu/mod.rs` (`LEAK_DECAY`/`THRESHOLD`/`RESET_POTENTIAL`/`REFRACTORY_TICKS`) and the mirror `crates/brain-visualizer/src/sim/cpu/core.rs → LifParams`.
+- The LIF neuron model + per-tick step: `crates/brain-visualizer/src/sim/gpu/shaders/integrate.wgsl → integrate`.
+- Locked LIF constants (leak, threshold, reset, refractory): `crates/brain-visualizer/src/sim/gpu/mod.rs` (`LEAK_DECAY`/`THRESHOLD`/`RESET_POTENTIAL`/`REFRACTORY_TICKS`).
 - Excitability / gain — the single slider that sweeps silent→critical→seizure (the `gain = 0.5 + excitability * 1.5` mapping in `integrate.wgsl`).
 - Region ambient drive: `i_ext` injected into input-region neurons as the *sole* external energy. Region assignment is `crates/brain-visualizer/src/manifold/regions.rs → assign_regions`; the input-region test is `(ntype >> 2) == 0` in `integrate.wgsl`.
 - E/I assignment (~80/20): `crates/brain-visualizer/src/sim/backend.rs → neuron_type_byte`.
@@ -51,9 +51,7 @@ One thread per neuron, every tick (`integrate.wgsl → integrate`):
    current into targets — see [`connectivity.md`](connectivity.md).
 
 The synaptic accumulator is consumed (zeroed) by integrate each tick; scatter
-re-fills it for the next. The CPU reference does lazy decay (`integrate_neuron`
-catches up `leak^dormant`) for its event-driven active list — same math, only the
-*who-runs-this-tick* differs.
+re-fills it for the next.
 
 ### Energy flow — the silent→posterior→anterior story
 

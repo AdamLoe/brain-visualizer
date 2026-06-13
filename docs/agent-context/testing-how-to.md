@@ -12,7 +12,7 @@ itself is owned by
 Run `cargo` from `app/` (workspace root) and `npm` from `app/web/`.
 
 - **`cargo test -p brain-visualizer`** — host unit tests plus the integration gates in `crates/brain-visualizer/tests/`:
-  the CPU/GPU hash + target determinism gates
+  the Rust/WGSL hash + target determinism gates
   (`crates/brain-visualizer/tests/wgsl_hash_determinism.rs`, `crates/brain-visualizer/tests/wgsl_target_determinism.rs`),
   sim dynamics (`crates/brain-visualizer/tests/gpu_sim_dynamics.rs`), fixed-point
   current overflow stress (`crates/brain-visualizer/tests/gpu_current_overflow.rs`),
@@ -53,7 +53,7 @@ The `crates/brain-visualizer/examples/*.rs` are runnable host checks that valida
 a browser or when browser WebGPU is unavailable — the primary way to confirm sim/render
 changes offline. What each covers is owned by
 [`../architecture/build-and-deploy.md`](../architecture/build-and-deploy.md)
-(e.g. `cpu_check` = CPU/GPU parity, `soc_sweep` = criticality sweep). Run with
+(e.g. `soc_sweep` = criticality sweep, `render_check` = render-path smoke). Run with
 `cargo run --release --example <name>`.
 
 ## Gotchas
@@ -64,10 +64,6 @@ changes offline. What each covers is owned by
 - **Strict adapter mode can only prove the strict branch when no adapter is
   actually absent.** On machines with llvmpipe, `BV_REQUIRE_WGPU_TESTS=1` proves
   the tests run under strict mode, not the no-adapter failure path itself.
-- The threaded CPU path needs the `cpu-threads` feature (and, on wasm, a nightly
-  build-std recipe) — see
-  [`../architecture/build-and-deploy.md`](../architecture/build-and-deploy.md).
-
 ## See also
 
 - [`../architecture/build-and-deploy.md`](../architecture/build-and-deploy.md) — build pipeline, examples, COOP/COEP.

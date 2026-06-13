@@ -1,7 +1,7 @@
 //! BV22 — WGSL-friendly 32-bit integer hash.
 //!
 //! These two functions are the determinism backbone of the whole project:
-//! the GPU (WGSL) and CPU (Rust) backends must produce **bit-identical**
+//! the GPU (WGSL) and Rust host paths must produce **bit-identical**
 //! synapse targets and weights from the same neuron id. The constants here are
 //! locked by BV22 and must match `src/sim/gpu/shaders/hash.wgsl` verbatim.
 //!

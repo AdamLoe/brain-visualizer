@@ -94,17 +94,6 @@
 - **Code anchors.** `web/src/ui/controls.ts → BRAIN_STATES`, `tickExcitability`,
   `setExcitabilityTarget`.
 
-## Backend switch tears down and restarts with the same seed
-
-- **Decision.** Switching between GPU and CPU backends cancels the rAF,
-  destroys the current backend, and reinitialises the new one from the same
-  network seed. No mid-run state transfer.
-- **Why.** Transferring state between GPU buffers and WASM SharedArrayBuffer is
-  complex for zero user benefit. The same seed guarantees the visitor sees the
-  same network topology on both backends, which is the meaningful comparison.
-- **Applies to.** [`../architecture/web-frontend.md`](../architecture/web-frontend.md).
-- **Code anchors.** `web/src/main.ts → restartWithBackend`.
-
 ## Scaling is an explicit, persisted user action — not automatic
 
 - **Decision.** N (and the tier/backend/speed/excitability that go with it) change
@@ -118,8 +107,9 @@
 - **Applies to.** [`../architecture/web-frontend.md`](../architecture/web-frontend.md),
   [`../architecture/scaling.md`](../architecture/scaling.md).
 - **Code anchors.** `web/src/core/types.ts → loadConfig`, `saveConfig`
-  (key `bv2_config_v2`); `web/src/main.ts → boot` (stale CPU backend saves are
-  coerced to GPU at startup); `web/src/ui/controls.ts → setTier`, `setSpeed`.
+  (key `bv2_config_v2`); `web/src/core/types.ts → loadConfig` (stale CPU
+  backend saves normalize to GPU); `web/src/ui/controls.ts → setTier`,
+  `setSpeed`.
 
 ## See also
 
