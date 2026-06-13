@@ -259,6 +259,11 @@ mod wasm_entry {
         width: u32,
         height: u32,
         pending_network: Option<NetworkBuildState>,
+        /// Boot-load overhaul (Workstream B): optional one-way `(label, fraction)`
+        /// progress callback for the compile-heavy startup stages. Set by the web
+        /// layer via `set_progress_callback` after `create_staged`. Always
+        /// optional so a stale-vs-regenerated `.d.ts` mismatch can't break boot.
+        progress_cb: Option<js_sys::Function>,
     }
 
     #[wasm_bindgen]
@@ -279,7 +284,7 @@ mod wasm_entry {
         ) -> js_sys::Promise {
             future_to_promise(async move {
                 // Acquire WebGPU device + configure canvas surface.
-                let (ctx, surface, fmt) = GpuBackend::acquire_web(canvas)
+                let (ctx, surface, fmt) = GpuBackend::acquire_web(canvas, None)
                     .await
                     .map_err(|e| JsValue::from_str(&format!("[gpu] acquire_web: {e}")))?;
 
@@ -324,6 +329,7 @@ mod wasm_entry {
                     width: w,
                     height: h,
                     pending_network: None,
+                    progress_cb: None,
                 };
 
                 // wasm-bindgen requires JsValue; wrap the struct.
@@ -342,9 +348,13 @@ mod wasm_entry {
             seed: u32,
             i_ext: f32,
             synaptic_scale: f32,
+            // Boot-load overhaul (Workstream B): optional `(label, fraction)`
+            // progress callback for the GPU-acquire sub-stages. Optional so an
+            // older web layer that passes nothing still works.
+            progress: Option<js_sys::Function>,
         ) -> js_sys::Promise {
             future_to_promise(async move {
-                let (ctx, surface, fmt) = GpuBackend::acquire_web(canvas)
+                let (ctx, surface, fmt) = GpuBackend::acquire_web(canvas, progress.as_ref())
                     .await
                     .map_err(|e| JsValue::from_str(&format!("[gpu] acquire_web: {e}")))?;
 
@@ -378,8 +388,30 @@ mod wasm_entry {
                     width: w,
                     height: h,
                     pending_network: None,
+                    progress_cb: None,
                 }))
             })
+        }
+
+        /// Boot-load overhaul (Workstream B): install an optional one-way
+        /// `(label: string, fraction: f32)` progress callback. `fraction` is
+        /// 0..1 progress within the current startup stage. Called from the
+        /// compile-heavy `startup_build_render_pipelines` stage so the loading
+        /// bar advances with an honest label instead of freezing. Optional; the
+        /// `create()` fallback path never sets it.
+        pub fn set_progress_callback(&mut self, cb: js_sys::Function) {
+            self.progress_cb = Some(cb);
+        }
+
+        /// Emit a `(label, fraction)` event if a progress callback is installed.
+        fn emit_progress(&self, label: &str, fraction: f64) {
+            if let Some(cb) = self.progress_cb.as_ref() {
+                let _ = cb.call2(
+                    &JsValue::NULL,
+                    &JsValue::from_str(label),
+                    &JsValue::from_f64(fraction),
+                );
+            }
         }
 
         /// Staged startup: build the manifold and retain it for upload.
@@ -517,9 +549,22 @@ mod wasm_entry {
             self.pending_network = None;
         }
 
-        /// Staged startup: build render pipelines for the configured surface.
+        /// Staged startup: build the CORE render pipelines for the configured
+        /// surface (everything the first frame draws). Boot-load overhaul
+        /// (2026-06-12): the bloom + true-opacity `*_active` pipelines are
+        /// deferred to `build_render_deferred_pipelines`, called from the rAF
+        /// loop one frame after the first frame renders.
         pub fn startup_build_render_pipelines(&mut self) {
-            self.inner.build_render_pipelines(self.surface_format);
+            self.emit_progress("Compiling render shaders…", 0.1);
+            self.inner.build_render_core_pipelines(self.surface_format);
+            self.emit_progress("Compiling render shaders…", 1.0);
+        }
+
+        /// Boot-load overhaul: compile the deferred render pipelines (bloom +
+        /// `*_active` morphology variants). The web layer calls this from the
+        /// rAF loop one frame after the first GPU frame renders. Idempotent.
+        pub fn build_deferred_render_pipelines(&mut self) {
+            self.inner.build_render_deferred_pipelines();
         }
 
         /// Staged startup: create depth/bloom render targets for the surface size.

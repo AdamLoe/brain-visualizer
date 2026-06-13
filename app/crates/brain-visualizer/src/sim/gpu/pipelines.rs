@@ -230,7 +230,34 @@ impl GpuPipelines {
     /// Build the Phase 3 render + stimulate pipelines.
     /// Called ONCE after `build()` with the canvas surface format.
     /// `color_format` must match the swap-chain / offscreen texture format.
+    ///
+    /// Boot-load overhaul (2026-06-12): this is now `build_render_core` +
+    /// `build_render_deferred` split so boot only compiles the pipelines the
+    /// first frame actually draws. Kept as a convenience wrapper for the
+    /// surface-recreation / render-quality-rebuild paths that want everything
+    /// at once.
     pub fn build_render(
+        &mut self,
+        device: &wgpu::Device,
+        layouts: &GpuLayouts,
+        color_format: wgpu::TextureFormat,
+    ) {
+        let rq = crate::sim::morphology::RenderQualityConfig::default();
+        self.build_render_core(device, layouts, color_format);
+        self.build_render_deferred(device, layouts, color_format, rq);
+    }
+
+    /// Build the render pipelines required to paint the FIRST frame: stimulate
+    /// compute, manifold mesh, far billboards, the additive morphology tube +
+    /// soma passes, and the active/recent compaction compute pipelines.
+    ///
+    /// The bloom post-process pipelines and the true-opacity `*_active`
+    /// morphology variants are NOT built here — they are compiled lazily by
+    /// `build_render_deferred` one frame after `ready`. `render_full` guards
+    /// every bloom/active access with `is_some()`, so a frame that runs before
+    /// the deferred build simply skips those passes (bloom is opt-in and
+    /// default-off; the active layer briefly falls back to the additive look).
+    pub fn build_render_core(
         &mut self,
         device: &wgpu::Device,
         layouts: &GpuLayouts,
@@ -391,6 +418,25 @@ impl GpuPipelines {
             color_format,
             crate::sim::morphology::RenderQualityConfig::default(),
         );
+    }
+
+    /// Build the render pipelines that are NOT needed for the first painted
+    /// frame and can therefore be compiled one frame after `ready`:
+    ///   - the 3 bloom post-process pipelines (bright/blur/composite),
+    ///   - the true-opacity `*_active` morphology tube + soma variants.
+    ///
+    /// Idempotent: safe to call again after a render-quality / surface rebuild
+    /// (it simply overwrites the pipelines). `render_full` guards every access
+    /// to these with `is_some()`, so a frame between core and deferred builds
+    /// renders correctly without them.
+    pub fn build_render_deferred(
+        &mut self,
+        device: &wgpu::Device,
+        layouts: &GpuLayouts,
+        color_format: wgpu::TextureFormat,
+        rq: crate::sim::morphology::RenderQualityConfig,
+    ) {
+        self.build_morph_active_pipelines(device, layouts, color_format, rq);
 
         // ─── V2 Phase E: bloom post-process pipelines ──────────────────────────
         // Fullscreen-triangle passes. bright/blur write rgba16float (HDR), the
@@ -469,6 +515,17 @@ impl GpuPipelines {
             "fs_composite",
             color_format,
         ));
+    }
+
+    /// True if the deferred render pipelines (bloom + `*_active` morphology)
+    /// have all been built. Used by the backend to fire `build_render_deferred`
+    /// exactly once after the first frame.
+    pub fn is_render_deferred_built(&self) -> bool {
+        self.bloom_bright.is_some()
+            && self.bloom_blur.is_some()
+            && self.bloom_composite.is_some()
+            && self.render_morphology_active.is_some()
+            && self.render_soma_spheres_active.is_some()
     }
 
     /// Morphology tube + soma-sphere render pipelines (additive, no depth).
@@ -606,13 +663,76 @@ impl GpuPipelines {
             },
         ));
 
-        // ── True-opacity active layer (active-opacity-render-pass) ───────────────
-        // Two NEW depth-tested, alpha-blended pipelines layered on top of the
-        // additive resting passes. Same module / layout / override constants /
-        // bind-group layout as their additive siblings — only the fragment entry
-        // point, blend mode, and depth_stencil differ — so the
-        // set_morphology_config render-quality rebuild and initial build cover them
-        // with no extra wiring. Depth state copied from the manifold pipeline.
+        // ── Active/recent compaction compute pipelines ──────────────────────────
+        // One module, three entry points (reset → compact → write_args). Reads
+        // segments + last_spike; writes active_segment_indices + draw args. Built
+        // here so the set_morphology_config render-quality rebuild keeps them in
+        // sync (they carry no override constants, so rebuild is harmless).
+        let compact_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("compact_morph_segments.wgsl"),
+            source: wgpu::ShaderSource::Wgsl(COMPACT_MORPH_WGSL.into()),
+        });
+        let compact_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("compact-morph-pl"),
+            bind_group_layouts: &[Some(&layouts.compact_morph_bgl)],
+            immediate_size: 0,
+        });
+        let make_compact = |entry: &str, label: &str| {
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some(label),
+                layout: Some(&compact_pl),
+                module: &compact_module,
+                entry_point: Some(entry),
+                compilation_options: Default::default(),
+                cache: None,
+            })
+        };
+        self.compact_morph_reset = Some(make_compact("reset", "compact_morph_reset"));
+        self.compact_morph = Some(make_compact("compact", "compact_morph"));
+        self.compact_morph_write_args =
+            Some(make_compact("write_args", "compact_morph_write_args"));
+    }
+
+    /// True-opacity active morphology pipelines (depth-tested, alpha-blended):
+    /// `render_morphology_active` (`fs_main_active`) + `render_soma_spheres_active`
+    /// (`fs_sphere_active`). Same module / layout / override constants as their
+    /// additive siblings in `build_morph_pipelines` — only the fragment entry
+    /// point, blend mode, and depth_stencil differ.
+    ///
+    /// Boot-load overhaul: split out of `build_morph_pipelines` so boot's core
+    /// render-pipeline stage skips them; `build_render_deferred` compiles them
+    /// one frame after `ready`. The set_morphology_config render-quality rebuild
+    /// re-invokes `build_morph_pipelines` (additive) AND this (active) so both
+    /// stay in sync.
+    pub fn build_morph_active_pipelines(
+        &mut self,
+        device: &wgpu::Device,
+        layouts: &GpuLayouts,
+        color_format: wgpu::TextureFormat,
+        rq: crate::sim::morphology::RenderQualityConfig,
+    ) {
+        let morph_src = format!("{HASH_WGSL}\n{RENDER_MORPHOLOGY_WGSL}");
+        let morph_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("render_morphology.wgsl"),
+            source: wgpu::ShaderSource::Wgsl(morph_src.into()),
+        });
+        let tube_consts: &[(&str, f64)] = &[("TUBE_SIDES", rq.tube_sides as f64)];
+        let sphere_consts: &[(&str, f64)] = &[
+            ("SPHERE_SLICES", rq.sphere_slices as f64),
+            ("SPHERE_STACKS", rq.sphere_stacks as f64),
+        ];
+        let morph_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("render-morphology-pl"),
+            bind_group_layouts: &[Some(&layouts.render_morphology_bgl)],
+            immediate_size: 0,
+        });
+        let soma_sphere_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("render-soma-spheres-pl"),
+            bind_group_layouts: &[Some(&layouts.render_soma_spheres_bgl)],
+            immediate_size: 0,
+        });
+
+        // Depth state copied from the manifold pipeline.
         let active_depth = wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth32Float,
             depth_write_enabled: Some(true),
@@ -704,35 +824,6 @@ impl GpuPipelines {
                 cache: None,
             },
         ));
-
-        // ── Active/recent compaction compute pipelines ──────────────────────────
-        // One module, three entry points (reset → compact → write_args). Reads
-        // segments + last_spike; writes active_segment_indices + draw args. Built
-        // here so the set_morphology_config render-quality rebuild keeps them in
-        // sync (they carry no override constants, so rebuild is harmless).
-        let compact_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("compact_morph_segments.wgsl"),
-            source: wgpu::ShaderSource::Wgsl(COMPACT_MORPH_WGSL.into()),
-        });
-        let compact_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("compact-morph-pl"),
-            bind_group_layouts: &[Some(&layouts.compact_morph_bgl)],
-            immediate_size: 0,
-        });
-        let make_compact = |entry: &str, label: &str| {
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some(label),
-                layout: Some(&compact_pl),
-                module: &compact_module,
-                entry_point: Some(entry),
-                compilation_options: Default::default(),
-                cache: None,
-            })
-        };
-        self.compact_morph_reset = Some(make_compact("reset", "compact_morph_reset"));
-        self.compact_morph = Some(make_compact("compact", "compact_morph"));
-        self.compact_morph_write_args =
-            Some(make_compact("write_args", "compact_morph_write_args"));
     }
 
     pub fn is_built(&self) -> bool {

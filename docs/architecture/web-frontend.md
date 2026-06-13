@@ -104,12 +104,20 @@ through `WasmGpuBackend.render_frame()`.
 
 `web/index.html` includes a fixed `#startup-overlay` in the initial HTML, so the
 browser paints a loading surface before the TypeScript module and wasm init do
-any heavy work. `main.ts` updates `window.__bvStartup` and the overlay through
-coarse page stages, then through the measured backend stages. The overlay shows
-the current stage, detail text, elapsed time, completed stage count, frame
-counter, progress bar, and the most recent per-stage timings. On success it
-fades out after the first GPU frame; on backend failure it remains visible with
-the error and any completed timings.
+any heavy work. The overlay is a strict **three-row** panel: a title row
+(`#startup-title`), a progress bar (`#startup-progress-track` /
+`#startup-progress-bar`, turquoise→gold gradient), and a single meta row
+(`#startup-meta`) with the percent on the left (`#startup-percent`) and the
+current stage label on the right (`#startup-stage`, ellipsized). `main.ts`
+updates `window.__bvStartup` and the overlay through coarse page stages, then
+through the measured backend stages. `updateStartupOverlay` now accepts only
+`{ status?, stage?, progress? }`; the former diagnostic fields (`detail`,
+`stageIndex`/`totalStages`, per-stage `timings`, `backendMs`, the elapsed/frames
+DOM writes) were dropped along with their DOM nodes. `StartupState` keeps
+`status`, `stage`, `progress`, `frames`, `startedAtMs`, `elapsedMs`;
+`__bvFrameCounter` and `__bvStartup.status` remain the E2E hooks. On success the
+overlay fades out after the first GPU frame; on backend failure it stays visible
+with the error in the stage row and `failed` in the percent slot.
 
 `boot()` starts a lightweight startup `requestAnimationFrame` loop before
 `init()` so tests and users can see `window.__bvFrameCounter` advance while wasm
@@ -124,14 +132,41 @@ The staged path starts a network-build worker request before device acquisition,
 then uses `WasmGpuBackend.create_staged()` followed by explicit `startup_*`
 calls: wait for the prepared payload, validate/stage it with
 `startup_begin_prepared_network`, upload neuron/grid buffers, upload render mesh,
-allocate LOD/edge buffers, upload prepared morphology, refresh bind groups/reset
+finalize render allocation, upload morphology buffers, refresh bind groups/reset
 state, compile render pipelines, and create render targets. `main.ts` awaits one
-animation frame before each stage and records its wall-clock duration, so the
-progress bar advances from completed work instead of a single fake backend
-percentage. The legacy `WasmGpuBackend.create()` monolith remains as a
-compatibility fallback. The old pre-backend `init_manifold()` logging path was
-removed; the real startup manifold/morphology CPU payload is now prepared by the
-same worker path used by structural rebuilds.
+animation frame before each stage so the browser repaints between the compile-
+heavy blocks.
+
+**Sub-stage progress weighting.** The `[54%, 96%]` band is no longer split into
+equal slices. Each stage carries a `weight`, and the band is divided by
+cumulative weight so the GPU-acquire and render-compile stages own the majority
+(acquire+core pipelines `0.45`, compile render pipelines `0.20`, create render
+targets `0.07`, the rest `0.02`–`0.05`). Within those two heavy, synchronous
+Rust calls the bar would otherwise freeze; a one-way Rust→WASM→TS sub-stage
+callback `(label, fraction)` reports intra-stage progress that `onSubStage` maps
+onto the current stage's band, so the label and bar advance continuously
+("Requesting GPU adapter… / device… / Configuring surface…",
+"Compiling render shaders…"). The callback is installed both as an optional
+`create_staged(...)` argument (acquire sub-stages) and via
+`backend.set_progress_callback(...)` (compile sub-stages); both are additive and
+optional, so a stale-vs-regenerated `.d.ts` can't break boot. The legacy
+`WasmGpuBackend.create()` monolith remains as a compatibility fallback (it
+installs no callback and builds all pipelines up front). The real startup
+manifold/morphology CPU payload is prepared by the same worker path used by
+structural rebuilds; that worker is constructed and **warmed** (its own WASM
+instance kicked off via a `warm` message) immediately after the main module's
+`init()`, so the worker instantiate overlaps the renderer init + GPU handshake
+instead of serializing in front of the first `prepare`.
+
+**Deferred render pipelines.** Boot only compiles the render pipelines the first
+frame draws (`startup_build_render_pipelines` → `build_render_core_pipelines`).
+The 3 bloom pipelines and the true-opacity `*_active` morphology variants are
+compiled one frame *after* the first rendered frame: the rAF loop calls
+`gpuBackend.build_deferred_render_pipelines()` on the frame after
+`firstReadyFrameSeen`. `render_full` guards every bloom/active access with
+`is_some()`, so the first frame paints correctly without them (bloom is opt-in
+and default-off; the active layer briefly falls back to the additive look). See
+[`gpu-backend.md`](gpu-backend.md) and [`../decisions/rendering.md`](../decisions/rendering.md).
 
 ## Wasm call boundary
 
@@ -145,7 +180,9 @@ Three categories of backend call, each with a different cost profile:
 | `gpuBackend.set_morphology_config(json)` | On morphology config apply | Separate JSON path for the dev-panel morphology config; the backend diffs and runs the narrowest update. Distinct from the Float32Array — see below |
 | `gpuBackend.apply_prepared_network(flat payload...)` | On worker-prepared N/K/seed rebuild | Validates the versioned flat typed-array payload, reconstructs Rust manifold/grid/morphology structs, then performs main-thread WebGPU upload/resource creation |
 | `gpuBackend.startup_begin_prepared_network(flat payload...)` | Startup only | Validates the worker payload and stores it as staged startup state; later `startup_*` calls own WebGPU upload |
-| `gpuBackend.startup_*()` | Startup only | Staged network/resource creation. JS yields between calls and records timings; the instance is not assigned to the rAF-owned `gpuBackend` until complete. |
+| `gpuBackend.startup_*()` | Startup only | Staged network/resource creation. JS yields one animation frame between calls; `startup_build_render_pipelines` compiles only the core (first-frame) pipelines. The instance is not assigned to the rAF-owned `gpuBackend` until complete. |
+| `gpuBackend.set_progress_callback(cb)` | Startup only | Installs the `(label, fraction)` sub-stage progress callback used by the compile-heavy stage. |
+| `gpuBackend.build_deferred_render_pipelines()` | One frame after first render | Compiles the deferred bloom + `*_active` morphology pipelines off the boot critical path. Idempotent. |
 
 `render_frame` receives the MVP matrix and billboard axes from `Camera`; it does
 not read back any GPU state. The struct contract for `VisualSettings` and the

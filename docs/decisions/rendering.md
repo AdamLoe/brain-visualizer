@@ -14,6 +14,35 @@
 - **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md)
 - **Code anchors.** `crates/brain-visualizer/src/sim/gpu/mod.rs → GpuBackend::render_full` (morphology pass gated on `connection_layer != 0`)
 
+## Compile bloom + active pipelines lazily, one frame after first render
+
+- **Decision.** Boot compiles only the render pipelines the first frame actually
+  draws (manifold, far billboards, additive morphology tube + soma, stimulate,
+  compaction). The 3 bloom pipelines and the true-opacity `*_active` morphology
+  variants are compiled one frame *after* the first rendered frame, via
+  `build_render_deferred_pipelines` called from the web rAF loop. `render_full`
+  guards every bloom/active access with `is_some()`, so the first frame paints
+  correctly without them.
+- **Why.** Synchronous WebGPU shader compilation blocks the calling thread; the
+  bloom + active compiles are the largest avoidable cost on the boot critical
+  path. Deferring them by ~1 frame (~16 ms) is imperceptible — bloom is opt-in
+  and default-off, and the active layer falls back to the additive look for a
+  single frame. Async pipeline creation is not available in wgpu 29's safe API,
+  so this defer-on-first-use approach is the win without dropping below wgpu.
+- **Applies to.** [`../architecture/gpu-backend.md`](../architecture/gpu-backend.md),
+  [`../architecture/web-frontend.md`](../architecture/web-frontend.md).
+- **Code anchors.** `crates/brain-visualizer/src/sim/gpu/pipelines.rs →
+  build_render_core / build_render_deferred / build_morph_active_pipelines /
+  is_render_deferred_built`; `crates/brain-visualizer/src/sim/gpu/mod.rs →
+  build_render_core_pipelines / build_render_deferred_pipelines`;
+  `crates/brain-visualizer/src/lib.rs → startup_build_render_pipelines /
+  build_deferred_render_pipelines`; `web/src/main.ts → rafLoop` (deferred build
+  on the frame after `firstReadyFrameSeen`).
+- **Revisit when.** Hardware testing shows the bloom/active gap is multiple
+  frames or causes a visible flash (fallback: compile bloom in the core stage but
+  still defer the `*_active` variants), or if a future wgpu exposes safe async
+  pipeline creation.
+
 ## Per-neuron identity color
 
 - **Decision.** `color_by = 5` assigns each neuron a stable identity hue from the locked BV22 hash; far glow uses it directly, and morphology blends it with the existing structural tint.

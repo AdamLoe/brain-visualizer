@@ -6,7 +6,13 @@ import {
   type PreparedNetworkRequest,
 } from "./prepared-network";
 
-type WorkerIn = { type: "prepare"; request: PreparedNetworkRequest };
+type WorkerIn =
+  | { type: "prepare"; request: PreparedNetworkRequest }
+  // Boot-load overhaul (A4): kick off the worker's own WASM instantiate early
+  // (overlapping the main-thread GPU handshake) so the first real `prepare`
+  // doesn't serialize behind it. The main module's WASM bytes are already in
+  // the browser cache, so this fetch is a cache hit.
+  | { type: "warm" };
 type WorkerOut =
   | { type: "ready"; payload: PreparedNetworkPayload }
   | { type: "failed"; sequence: number; message: string };
@@ -58,6 +64,13 @@ let wasmReady: Promise<void> | null = null;
 const workerScope = self as unknown as WorkerScope;
 
 workerScope.onmessage = (event: MessageEvent<WorkerIn>) => {
+  if (event.data.type === "warm") {
+    // Start instantiating the worker's WASM now; ignore failures (the real
+    // prepare path reports them). No reply is sent.
+    wasmReady ??= init().then(() => undefined);
+    void wasmReady.catch(() => undefined);
+    return;
+  }
   if (event.data.type !== "prepare") return;
   void prepare(event.data.request);
 };

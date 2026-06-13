@@ -30,9 +30,10 @@ GPU-resident state straight to the render passes.
   `refresh_bind_groups`, `resize_render_targets`, the `init_*` / `resize_neurons`
   allocators, `destroy`).
 - Pipeline + bind-group-layout construction — `crates/brain-visualizer/src/sim/gpu/pipelines.rs →
-  GpuPipelines` (`build`, `build_render`), `GpuLayouts`.
-- Device/queue acquisition — `GpuBackend::acquire_web` / `acquire_native`,
-  `GpuContext`.
+  GpuPipelines` (`build`, `build_render` = `build_render_core` +
+  `build_render_deferred`), `GpuLayouts`.
+- Device/queue acquisition — `GpuBackend::acquire_web` (optional
+  `(label, fraction)` progress callback) / `acquire_native`, `GpuContext`.
 - Browser startup staging — `crates/brain-visualizer/src/lib.rs →
   WasmGpuBackend::create_staged` and the `startup_*` methods drive
   `GpuBackend::begin_initialize`, the staged resource upload helpers, and
@@ -168,7 +169,10 @@ The browser does not call the monolithic `WasmGpuBackend::create()` during norma
 boot. `web/src/main.ts → startGpuBackend` requests a worker-prepared payload,
 uses `WasmGpuBackend::create_staged()` to acquire WebGPU and construct the core
 compute backend, then calls explicit startup stages with a browser frame yield
-between each call:
+between each call. `create_staged` takes an optional `(label, fraction)` progress
+callback (forwarded to `acquire_web`, which emits adapter/device/surface
+sub-progress), and the web layer installs the same callback via
+`set_progress_callback` for the compile stage:
 
 1. `startup_begin_prepared_network` → validates the flat worker payload,
    reconstructs `PreparedNetworkBuild`, stores it as `NetworkBuildState`, and
@@ -177,18 +181,44 @@ between each call:
 3. `startup_upload_render_resources` → `GpuResources::init_render_resources`.
 4. `startup_allocate_lod_edge_resources` → compatibility startup stage with no
    retired resource allocation.
-5. `startup_upload_morphology` → `GpuResources::init_morph_resources_from_prepared`.
+5. `startup_upload_morphology` → `GpuResources::init_morph_resources_from_prepared`
+   (the web-layer stage is labeled **"Upload morphology buffers"** — the worker
+   already generated the geometry; this stage only uploads buffers).
 6. `startup_finish_network` → `refresh_bind_groups`, `write_connect_uniform`,
    and the per-network runtime-state reset.
-7. `startup_build_render_pipelines` → `GpuBackend::build_render_pipelines`.
+7. `startup_build_render_pipelines` → `GpuBackend::build_render_core_pipelines`
+   (CORE pipelines only — see "Deferred render pipelines" below).
 8. `startup_resize_render_targets` → `GpuBackend::resize_render_targets`.
 
 This staging does **not** move WebGPU ownership off the main thread and does not
 make individual Rust stages preemptible. It lets the DOM loading overlay paint
-and report measured per-stage timings between structural allocation blocks. The
-same upload helpers are now also the boundary used by worker-prepared network
-payloads after startup. The rAF loop must not receive the staged
+between structural allocation blocks; the web layer drives a per-stage progress
+**weight table** (acquire+core pipelines `0.45`, compile render pipelines `0.20`,
+create render targets `0.07`, the rest small) so the bar advances proportionally
+to real cost, with the sub-stage callback filling the two heavy synchronous
+stages. The same upload helpers are also the boundary used by worker-prepared
+network payloads after startup. The rAF loop must not receive the staged
 `WasmGpuBackend` until all startup stages complete.
+
+### Deferred render pipelines (boot critical path)
+
+`build_render` splits into `build_render_core` and `build_render_deferred`.
+**Core** (built in the boot compile stage via `build_render_core_pipelines`)
+compiles everything the first frame draws: stimulate compute, manifold mesh, far
+billboards, the additive morphology tube + soma passes (`build_morph_pipelines`),
+and the active/recent compaction compute. **Deferred** compiles the 3 bloom
+pipelines (`bloom_bright`/`bloom_blur`/`bloom_composite`) and the true-opacity
+`*_active` morphology variants (`build_morph_active_pipelines`); the web rAF loop
+calls `build_render_deferred_pipelines` exactly once, one frame after the first
+rendered frame (idempotent via `is_render_deferred_built`). `render_full` already
+guards every bloom/active access with `is_some()`, so a frame between core and
+deferred renders correctly without them — bloom is opt-in/default-off and the
+active layer briefly falls back to the additive look. The non-staged `create()`
+fallback, native `new`, and the examples call `build_render_pipelines`
+(=`build_render`), which builds everything up front, so they are unaffected. The
+`set_morphology_config` render-quality rebuild re-invokes both the additive
+(`build_morph_pipelines`) and, if already built, the active
+(`build_morph_active_pipelines`) pipelines so tessellation stays in sync.
 
 ### bind_groups_dirty rebuild rule
 

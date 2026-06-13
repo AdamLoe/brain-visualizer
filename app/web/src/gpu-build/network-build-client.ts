@@ -32,6 +32,15 @@ export class NetworkBuildClient {
         message: event.message || "network build worker failed",
       };
     };
+    // Boot-load overhaul (A4): warm the worker's WASM instance immediately on
+    // construction so its instantiate overlaps the main-thread renderer init +
+    // GPU handshake, instead of serializing in front of the first `prepare`.
+    this.warm();
+  }
+
+  /** Ask the worker to instantiate its WASM module now (idempotent, fire-and-forget). */
+  warm(): void {
+    this.worker.postMessage({ type: "warm" });
   }
 
   request(request: PreparedNetworkRequest): void {

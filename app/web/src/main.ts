@@ -129,20 +129,10 @@ type StartupStatus = "loading" | "ready" | "failed";
 interface StartupState {
   status: StartupStatus;
   stage: string;
-  detail?: string;
   progress: number;
   frames: number;
   startedAtMs: number;
   elapsedMs: number;
-  stageIndex: number;
-  totalStages: number;
-  backendMs?: number;
-  timings: StartupStageTiming[];
-}
-
-interface StartupStageTiming {
-  name: string;
-  ms: number;
 }
 
 interface StagedGpuBackend extends WasmGpuBackend {
@@ -154,6 +144,13 @@ interface StagedGpuBackend extends WasmGpuBackend {
   startup_finish_network(): void;
   startup_build_render_pipelines(): void;
   startup_resize_render_targets(): void;
+  // Boot-load overhaul (A1): compile bloom + *_active pipelines lazily one
+  // frame after the first render. Inherited from WasmGpuBackend; the call site
+  // still feature-detects at runtime so a stale pkg without it can't break boot.
+  build_deferred_render_pipelines(): void;
+  // Boot-load overhaul (B): install a (label, fraction) sub-stage progress
+  // callback. Inherited from WasmGpuBackend; the call site feature-detects too.
+  set_progress_callback(cb: (label: string, fraction: number) => void): void;
 }
 
 interface StagedGpuBackendConstructor {
@@ -172,32 +169,26 @@ interface StagedGpuBackendConstructor {
     seed: number,
     iExt: number,
     synapticScale: number,
+    // Boot-load overhaul (B): optional (label, fraction) progress callback for
+    // the GPU-acquire sub-stages. Optional so a stale .d.ts can't break boot.
+    progress?: (label: string, fraction: number) => void,
   ): Promise<StagedGpuBackend>;
 }
 
 const BOOT_STARTED_AT_MS = performance.now();
 let startupState: StartupState = {
   status: "loading",
-  stage: "Starting renderer...",
+  stage: "Starting…",
   progress: 0,
   frames: 0,
   startedAtMs: BOOT_STARTED_AT_MS,
   elapsedMs: 0,
-  stageIndex: 0,
-  totalStages: 0,
-  timings: [],
 };
 
 function updateStartupOverlay(update: {
   status?: StartupStatus;
   stage?: string;
   progress?: number;
-  frames?: number;
-  backendMs?: number;
-  detail?: string;
-  stageIndex?: number;
-  totalStages?: number;
-  timings?: StartupStageTiming[];
 }): void {
   const elapsedMs = performance.now() - startupState.startedAtMs;
   startupState = {
@@ -205,7 +196,6 @@ function updateStartupOverlay(update: {
     ...update,
     elapsedMs,
     progress: clampProgress(update.progress ?? startupState.progress),
-    timings: update.timings ?? startupState.timings,
   };
   const w = window as unknown as { __bvStartup: StartupState };
   w.__bvStartup = { ...startupState };
@@ -214,58 +204,25 @@ function updateStartupOverlay(update: {
   const stage = document.getElementById("startup-stage");
   const bar = document.getElementById("startup-progress-bar");
   const percent = document.getElementById("startup-percent");
-  const frames = document.getElementById("startup-frames");
-  const detail = document.getElementById("startup-detail");
-  const elapsed = document.getElementById("startup-elapsed");
-  const steps = document.getElementById("startup-steps");
-  const timings = document.getElementById("startup-timings");
   if (overlay) {
     overlay.classList.toggle("ready", startupState.status === "ready");
     overlay.classList.toggle("failed", startupState.status === "failed");
   }
   if (stage) stage.textContent = startupState.stage;
-  if (detail) detail.textContent = startupState.detail ?? "";
   if (bar) bar.style.width = `${Math.round(startupState.progress)}%`;
   if (percent) percent.textContent = startupState.status === "failed"
     ? "failed"
     : `${Math.round(startupState.progress)}%`;
-  if (frames) frames.textContent = String(startupState.frames);
-  if (elapsed) elapsed.textContent = formatMs(startupState.elapsedMs);
-  if (steps) steps.textContent = startupState.totalStages > 0
-    ? `${startupState.stageIndex}/${startupState.totalStages}`
-    : "0/0";
-  if (timings) {
-    timings.replaceChildren(
-      ...startupState.timings.slice(-6).map((t) => {
-        const row = document.createElement("li");
-        const name = document.createElement("span");
-        const ms = document.createElement("span");
-        name.textContent = t.name;
-        ms.textContent = formatMs(t.ms);
-        row.append(name, ms);
-        return row;
-      }),
-    );
-  }
 }
 
 function publishFrameCounter(frameCounter: number): void {
   (window as unknown as { __bvFrameCounter: number }).__bvFrameCounter = frameCounter;
   startupState = { ...startupState, frames: frameCounter };
   (window as unknown as { __bvStartup: StartupState }).__bvStartup = { ...startupState };
-  if (startupState.status !== "ready") {
-    const frames = document.getElementById("startup-frames");
-    if (frames) frames.textContent = String(startupState.frames);
-  }
 }
 
 function clampProgress(progress: number): number {
   return Math.max(0, Math.min(100, progress));
-}
-
-function formatMs(ms: number): string {
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
 }
 
 function nextAnimationFrame(): Promise<void> {
@@ -287,6 +244,12 @@ async function boot(): Promise<void> {
 
   // 1. Load WASM.
   await init();
+  // Boot-load overhaul (A4): construct the network-build worker as early as
+  // possible (right after the main module's WASM init, before canvas/renderer
+  // setup) so its own WASM instantiate — kicked off by the constructor's warm()
+  // — overlaps the main-thread renderer init and the GPU handshake. The main
+  // module's WASM bytes are already cached, so the worker's fetch is a cache hit.
+  const networkBuildClient = new NetworkBuildClient();
   updateStartupOverlay({ stage: "Checking browser isolation...", progress: 20 });
 
   // 2. COOP/COEP check.
@@ -396,7 +359,6 @@ async function boot(): Promise<void> {
   let pendingResize: { w: number; h: number } | null = null;
   let pendingStim: { x: number; y: number; z: number; radius: number; current: number } | null = null;
   const rebuildCoordinator = new RebuildCoordinator();
-  const networkBuildClient = new NetworkBuildClient();
   let nextNetworkBuildSequence = 1;
   let lastReportedNetworkBuildFailure = 0;
   let appliedMorphConfigJson = morphConfigToJson(loadMorphConfig());
@@ -470,7 +432,11 @@ async function boot(): Promise<void> {
    */
   async function startGpuBackend(): Promise<void> {
     const backendStartedAt = performance.now();
-    const timings: StartupStageTiming[] = [];
+    // Boot-load overhaul: the GPU-acquire+compile stages dominate boot, so the
+    // bar's [progressStart, progressEnd] band is split by per-stage WEIGHTS
+    // (not equal slices). Within the two heavy stages, the Rust B-channel
+    // sub-stage callback fills the gap so the bar moves continuously instead of
+    // freezing at the stage start and snapping at the end.
     const progressStart = 54;
     const progressEnd = 96;
     const ctor = WasmGpuBackend as unknown as StagedGpuBackendConstructor;
@@ -480,13 +446,31 @@ async function boot(): Promise<void> {
 
     type BackendStage = {
       name: string;
-      detail: string;
+      // Per-stage share of the [progressStart, progressEnd] band. The heavy
+      // GPU-acquire and render-compile stages own the majority.
+      weight: number;
       run(): void | Promise<void>;
     };
+    // The acquire+core-pipelines stage spans this band; its B-channel fraction
+    // (set by the running stage below) maps into it so the bar advances during
+    // the synchronous Rust acquire/compile work. Updated as stages run.
+    let stageBandStart = progressStart;
+    let stageBandEnd = progressStart;
+
+    // Boot-load overhaul (B): sub-stage progress handler. Maps the in-stage
+    // fraction (0..1) reported by Rust onto the current stage's progress band.
+    const onSubStage = (label: string, fraction: number): void => {
+      const clamped = Math.max(0, Math.min(1, fraction));
+      updateStartupOverlay({
+        stage: label,
+        progress: stageBandStart + clamped * (stageBandEnd - stageBandStart),
+      });
+    };
+
     const stages: BackendStage[] = [
       {
         name: "Acquire GPU + core pipelines",
-        detail: "requestAdapter, requestDevice, surface, compute pipelines",
+        weight: 0.45,
         run: async () => {
           if (typeof ctor.create_staged !== "function") {
             gpuBackend = await ctor.create(
@@ -506,19 +490,25 @@ async function boot(): Promise<void> {
             config.seed >>> 0,
             GPU_I_EXT,
             GPU_SYN_SCALE,
+            onSubStage,
           );
+          // Install the compile-stage progress callback on the returned backend
+          // so startup_build_render_pipelines can emit sub-stage labels.
+          if (typeof stagedBackend.set_progress_callback === "function") {
+            stagedBackend.set_progress_callback(onSubStage);
+          }
         },
       },
       {
         name: "Prepare network payload",
-        detail: "worker-local WASM: manifold, placement, spatial grid, morphology",
+        weight: 0.05,
         run: async () => {
           startupPreparedPayload = await waitForPreparedNetwork(startupPrepareSequence);
         },
       },
       {
         name: "Stage prepared payload",
-        detail: "validate worker payload and retain it for staged WebGPU upload",
+        weight: 0.03,
         run: () => {
           if (stagedBackend === null || startupPreparedPayload === null) return;
           (stagedBackend as unknown as PreparedNetworkCapableBackend).startup_begin_prepared_network(
@@ -553,81 +543,69 @@ async function boot(): Promise<void> {
       },
       {
         name: "Upload neuron buffers",
-        detail: "positions, voltage/current fields, spike masks, grid CSR",
+        weight: 0.05,
         run: () => stagedBackend?.startup_upload_neuron_buffers(),
       },
       {
         name: "Upload render mesh",
-        detail: "manifold vertex/index buffers and render uniforms",
+        weight: 0.05,
         run: () => stagedBackend?.startup_upload_render_resources(),
       },
       {
-        name: "Finalize render allocation stage",
-        detail: "compatibility startup stage",
+        name: "Finalize render allocation",
+        weight: 0.02,
         run: () => stagedBackend?.startup_allocate_lod_edge_resources(),
       },
       {
-        name: "Generate morphology",
-        detail: "axon/dendrite segments, soma spheres, active compaction buffers",
+        name: "Upload morphology buffers",
+        weight: 0.05,
         run: () => stagedBackend?.startup_upload_morphology(),
       },
       {
         name: "Bind network resources",
-        detail: "compute/render bind groups and deterministic connect uniforms",
+        weight: 0.03,
         run: () => stagedBackend?.startup_finish_network(),
       },
       {
         name: "Compile render pipelines",
-        detail: "surface, morphology, bloom pipelines",
+        weight: 0.20,
         run: () => stagedBackend?.startup_build_render_pipelines(),
       },
       {
         name: "Create render targets",
-        detail: "depth target and bloom ping-pong textures",
+        weight: 0.07,
         run: () => stagedBackend?.startup_resize_render_targets(),
       },
     ];
 
-    const runStage = async (stage: BackendStage, index: number): Promise<boolean> => {
-      const beforeProgress = progressStart + ((index - 1) / stages.length) * (progressEnd - progressStart);
-      updateStartupOverlay({
-        stage: stage.name,
-        detail: stage.detail,
-        progress: beforeProgress,
-        stageIndex: index,
-        totalStages: stages.length,
-        timings,
-      });
+    // Cumulative weight → progress band. Weights are normalized defensively so a
+    // hand-edited table that doesn't sum to 1 still spans the full band.
+    const totalWeight = stages.reduce((sum, s) => sum + s.weight, 0) || 1;
+    const band = progressEnd - progressStart;
+    let cumulativeWeight = 0;
+
+    const runStage = async (stage: BackendStage): Promise<boolean> => {
+      stageBandStart = progressStart + (cumulativeWeight / totalWeight) * band;
+      cumulativeWeight += stage.weight;
+      stageBandEnd = progressStart + (cumulativeWeight / totalWeight) * band;
+      updateStartupOverlay({ stage: stage.name, progress: stageBandStart });
       await nextAnimationFrame();
       const started = performance.now();
       await stage.run();
       const ms = performance.now() - started;
-      timings.push({ name: stage.name, ms });
-      const afterProgress = progressStart + (index / stages.length) * (progressEnd - progressStart);
-      updateStartupOverlay({
-        stage: stage.name,
-        detail: `${stage.detail} (${formatMs(ms)})`,
-        progress: afterProgress,
-        stageIndex: index,
-        totalStages: stages.length,
-        timings: [...timings],
-      });
+      updateStartupOverlay({ stage: stage.name, progress: stageBandEnd });
       console.log(`[startup] ${stage.name}: ${ms.toFixed(1)}ms`);
       return stagedBackend !== null;
     };
 
     try {
       updateStartupOverlay({
-        stage: "Preparing WebGPU backend...",
-        detail: `N=${config.n} K=${config.k} seed=0x${(config.seed >>> 0).toString(16)}`,
+        stage: "Preparing WebGPU backend…",
         progress: progressStart,
-        stageIndex: 0,
-        totalStages: stages.length,
-        timings,
       });
 
       for (let i = 0; i < stages.length; i++) {
-        const stillStaged = await runStage(stages[i], i + 1);
+        const stillStaged = await runStage(stages[i]);
         // Old generated packages only expose create(); that call returns a fully
         // initialized backend, so the remaining explicit stages are unavailable.
         if (i === 0 && !stillStaged) break;
@@ -640,13 +618,8 @@ async function boot(): Promise<void> {
       rebuildCoordinator.requestMorphConfig(morphConfigToJson(loadMorphConfig()));
       const backendMs = performance.now() - backendStartedAt;
       updateStartupOverlay({
-        stage: "Backend ready. Rendering first frame...",
-        detail: `${timings.length} startup stages in ${formatMs(backendMs)}`,
+        stage: "Rendering first frame…",
         progress: 98,
-        stageIndex: timings.length,
-        totalStages: stages.length,
-        backendMs,
-        timings: [...timings],
       });
       console.log(`[main] WasmGpuBackend startup completed in ${backendMs.toFixed(1)}ms`);
     } catch (e) {
@@ -656,9 +629,7 @@ async function boot(): Promise<void> {
       updateStartupOverlay({
         status: "failed",
         stage: `WebGPU startup failed: ${message}`,
-        detail: timings.length > 0 ? `${timings.length} stages completed before failure` : undefined,
         progress: 100,
-        timings: [...timings],
       });
       gpuBackend = null;
     }
@@ -959,6 +930,9 @@ async function boot(): Promise<void> {
   let lastTimestamp = performance.now();
   let tickCount = 0;
   let firstReadyFrameSeen = false;
+  // Boot-load overhaul (A1): true once the deferred render pipelines (bloom +
+  // *_active morphology) have been compiled, one frame after the first frame.
+  let deferredPipelinesBuilt = false;
 
   function rafLoop(timestamp: DOMHighResTimeStamp): void {
     // ── Flush deferred mutations BEFORE any backend call ────────────────────
@@ -1081,6 +1055,25 @@ async function boot(): Promise<void> {
         const totalMs = performance.now() - BOOT_STARTED_AT_MS;
         updateStartupOverlay({ status: "ready", stage: "Ready", progress: 100 });
         console.log(`[main] first GPU frame rendered after ${totalMs.toFixed(1)}ms`);
+      } else if (!deferredPipelinesBuilt) {
+        // Boot-load overhaul (A1): compile the deferred render pipelines (bloom +
+        // true-opacity *_active morphology variants) one frame AFTER the first
+        // frame painted, so those shader compiles stay off the critical path.
+        // render_full guards every bloom/active access with is_some(), so the
+        // first frame renders correctly without them; bloom/active appear ~1
+        // frame later (imperceptible). No-op on the create() fallback path,
+        // which already built everything.
+        deferredPipelinesBuilt = true;
+        const deferrable = gpuBackend as unknown as {
+          build_deferred_render_pipelines?: () => void;
+        };
+        if (typeof deferrable.build_deferred_render_pipelines === "function") {
+          try {
+            deferrable.build_deferred_render_pipelines();
+          } catch (e) {
+            console.error("[main] deferred render pipeline build failed:", e);
+          }
+        }
       }
     } else {
       // gpuBackend not yet ready (still initializing); visible startup state is

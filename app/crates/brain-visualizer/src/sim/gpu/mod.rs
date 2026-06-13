@@ -1046,6 +1046,19 @@ impl GpuBackend {
                 self.render_color_format,
                 rq,
             );
+            // Boot-load overhaul: the true-opacity active variants are compiled
+            // lazily (build_render_deferred). If they're already built, keep
+            // them in sync with the new tessellation; if not (rare: a
+            // render-quality change before the first frame deferred build), skip
+            // — the deferred build will use the current morph_config.render_quality.
+            if self.pipelines.render_morphology_active.is_some() {
+                self.pipelines.build_morph_active_pipelines(
+                    &self.ctx.device,
+                    &self.layouts,
+                    self.render_color_format,
+                    rq,
+                );
+            }
             self.morph_tube_verts = tube_verts(rq.tube_sides);
             self.morph_sphere_verts = sphere_verts(rq.sphere_slices, rq.sphere_stacks);
         }
@@ -1125,7 +1138,22 @@ impl GpuBackend {
     #[cfg(target_arch = "wasm32")]
     pub async fn acquire_web(
         canvas: web_sys::HtmlCanvasElement,
+        progress: Option<&js_sys::Function>,
     ) -> Result<(GpuContext, wgpu::Surface<'static>, wgpu::TextureFormat), String> {
+        // Boot-load overhaul (Workstream B): emit coarse sub-stage progress
+        // (label, fraction 0..1) so the loading bar fills inside the
+        // "Acquire GPU + core pipelines" stage instead of freezing.
+        let emit = |label: &str, frac: f64| {
+            if let Some(cb) = progress {
+                let _ = cb.call2(
+                    &wasm_bindgen::JsValue::NULL,
+                    &wasm_bindgen::JsValue::from_str(label),
+                    &wasm_bindgen::JsValue::from_f64(frac),
+                );
+            }
+        };
+        emit("Requesting GPU adapter…", 0.1);
+
         // 1. Instance with all default backends (includes BROWSER_WEBGPU on wasm).
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
 
@@ -1156,6 +1184,7 @@ impl GpuBackend {
             })
             .await
             .map_err(|e| format!("no wgpu adapter: {e}"))?;
+        emit("Requesting GPU device…", 0.4);
 
         let timestamps_supported = adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
         let mut required_features = wgpu::Features::empty();
@@ -1185,6 +1214,7 @@ impl GpuBackend {
             })
             .await
             .map_err(|e| format!("request_device: {e}"))?;
+        emit("Configuring surface…", 0.7);
 
         // 5. Configure the surface.
         let caps = surface.get_capabilities(&adapter);
@@ -1500,9 +1530,46 @@ impl GpuBackend {
         self.render_color_format = color_format;
         self.pipelines
             .build_render(&self.ctx.device, &self.layouts, color_format);
-        // v0.3.1: build_render builds the morph pipelines at DEFAULT tessellation;
-        // re-apply the current render-quality config so a non-default tubeSides /
-        // sphere tessellation survives a surface re-creation.
+        self.apply_render_quality_after_build(color_format);
+    }
+
+    /// Boot-load overhaul (2026-06-12): compile only the CORE render pipelines
+    /// needed to paint the first frame (manifold, far, additive morphology,
+    /// soma, stimulate, compaction). The 3 bloom pipelines and the true-opacity
+    /// `*_active` morphology variants are deferred to
+    /// `build_render_deferred_pipelines`, fired one frame after the first
+    /// rendered frame. `render_full` guards every bloom/active access with
+    /// `is_some()`. Used by the staged startup path only; the `create()`
+    /// fallback / native / example callers use `build_render_pipelines`, which
+    /// builds everything up front.
+    pub fn build_render_core_pipelines(&mut self, color_format: wgpu::TextureFormat) {
+        self.render_color_format = color_format;
+        self.pipelines
+            .build_render_core(&self.ctx.device, &self.layouts, color_format);
+        self.apply_render_quality_after_build(color_format);
+    }
+
+    /// Boot-load overhaul: compile the deferred render pipelines (bloom +
+    /// true-opacity `*_active` morphology variants) that are not needed for the
+    /// first painted frame. Fired from the rAF loop one frame after the first
+    /// frame renders. Idempotent + cheap to re-check via `is_render_deferred_built`.
+    pub fn build_render_deferred_pipelines(&mut self) {
+        if self.pipelines.is_render_deferred_built() {
+            return;
+        }
+        let rq = self.morph_config.render_quality;
+        self.pipelines.build_render_deferred(
+            &self.ctx.device,
+            &self.layouts,
+            self.render_color_format,
+            rq,
+        );
+    }
+
+    /// Shared tail of the render-pipeline build paths: re-apply the current
+    /// render-quality config so a non-default tubeSides / sphere tessellation
+    /// survives a surface re-creation, and recompute the derived vert counts.
+    fn apply_render_quality_after_build(&mut self, color_format: wgpu::TextureFormat) {
         let rq = self.morph_config.render_quality;
         if rq != crate::sim::morphology::RenderQualityConfig::default() {
             self.pipelines

@@ -14,6 +14,23 @@
 - **Code anchors.** `web/src/ui/dev-panel.ts → DevPanel` (open triggers);
   `web/src/main.ts` (wires the gear button via `onVisibilityChange`).
 
+## Boot overlay is a clean three-row panel, not a diagnostics surface
+
+- **Decision.** The startup overlay shows only a title, a progress bar, and a
+  percent + current-stage row. The former boot diagnostics — `step X/Y`, elapsed
+  `time`, `frames`, and the rolling per-stage timings list — were removed from the
+  overlay and from `updateStartupOverlay`. Per-stage timings are still logged to
+  the console (`[startup] <stage>: <ms>`), and `__bvFrameCounter` / `__bvStartup.status`
+  remain as E2E hooks.
+- **Why.** The boot panel is part of the product first impression, not a dev
+  surface; the diagnostics were noise for the common case and added DOM/state for
+  numbers a developer can read from the console or the e2e smoke artifact. Felt
+  speed is driven by honest, continuous progress (the sub-stage weighting), not by
+  exposing raw timings.
+- **Applies to.** [`../architecture/web-frontend.md`](../architecture/web-frontend.md).
+- **Code anchors.** `web/index.html` (`#startup-overlay` markup + CSS);
+  `web/src/main.ts → updateStartupOverlay / startGpuBackend`.
+
 ## Colored-dot impact classification as the single source of truth
 
 - **Decision.** Every control in the panel carries a colored dot (green =
