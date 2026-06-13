@@ -31,7 +31,7 @@ import {
   type PreparedNetworkStatus,
 } from "./gpu-build/network-build-client";
 import type { PreparedNetworkPayload } from "./gpu-build/prepared-network";
-import { formatSubStageLabel, mapSubStageProgress } from "./boot-overlay";
+import { runGpuStartup, type StagedBackendLike } from "./boot-sequencer";
 import {
   ZERO_STATS,
   clampNeuronCount,
@@ -412,21 +412,6 @@ async function boot(): Promise<void> {
     return sequence;
   }
 
-  async function waitForPreparedNetwork(sequence: number): Promise<PreparedNetworkPayload> {
-    for (;;) {
-      const ready = networkBuildClient.consumeReady();
-      publishNetworkBuildStatus();
-      if (ready !== null && ready.sequence === sequence) {
-        return ready;
-      }
-      const status = networkBuildClient.currentStatus();
-      if (status.kind === "failed" && status.sequence === sequence) {
-        throw new Error(status.message);
-      }
-      await nextAnimationFrame();
-    }
-  }
-
   (window as unknown as BrainVisualizerTestHooks).__bvRequestPreparedNetworkSmoke = (request) => {
     config.n = clampNeuronCount(request.n ?? config.n);
     config.k = request.k ?? config.k;
@@ -447,221 +432,82 @@ async function boot(): Promise<void> {
    */
   async function startGpuBackend(): Promise<void> {
     const backendStartedAt = performance.now();
-    // Boot-load overhaul: the GPU-acquire+compile stages dominate boot, so the
-    // bar's [progressStart, progressEnd] band is split by per-stage WEIGHTS
-    // (not equal slices). Within the two heavy stages, the Rust B-channel
-    // sub-stage callback fills the gap so the bar moves continuously instead of
-    // freezing at the stage start and snapping at the end.
-    const progressStart = 54;
-    const progressEnd = 96;
+    // Boot-load overhaul: the staged-startup orchestration lives in
+    // `boot-sequencer.ts` (runGpuStartup) so the real runStage / onSubStage /
+    // onProgress wiring can be exercised in a GPU-free integration test. The
+    // sequencer fires the early "startup" payload request itself (before the
+    // GPU-acquire stage) and attaches the payload-progress listener up front, so
+    // worker ticks emitted while it races the GPU handshake aren't dropped.
     const ctor = WasmGpuBackend as unknown as StagedGpuBackendConstructor;
-    let stagedBackend: StagedGpuBackend | null = null;
-    let startupPreparedPayload: PreparedNetworkPayload | null = null;
-    const startupPrepareSequence = requestPreparedNetwork("startup", appliedMorphConfigJson);
 
-    type BackendStage = {
-      name: string;
-      // Per-stage share of the [progressStart, progressEnd] band. The heavy
-      // GPU-acquire and render-compile stages own the majority.
-      weight: number;
-      run(): void | Promise<void>;
-    };
-    // The acquire+core-pipelines stage spans this band; its B-channel fraction
-    // (set by the running stage below) maps into it so the bar advances during
-    // the synchronous Rust acquire/compile work. Updated as stages run.
-    let stageBandStart = progressStart;
-    let stageBandEnd = progressStart;
+    const result = await runGpuStartup({
+      factory: {
+        create: () => ctor.create(
+          canvas,
+          config.n,
+          config.k,
+          config.seed >>> 0,
+          GPU_I_EXT,
+          GPU_SYN_SCALE,
+        ),
+        create_staged: typeof ctor.create_staged === "function"
+          ? (onSubStage) =>
+              ctor.create_staged!(
+                canvas,
+                config.n,
+                config.k,
+                config.seed >>> 0,
+                GPU_I_EXT,
+                GPU_SYN_SCALE,
+                onSubStage,
+              ) as unknown as Promise<StagedBackendLike>
+          : undefined,
+      },
+      networkClient: networkBuildClient,
+      requestStartupNetwork: () =>
+        requestPreparedNetwork("startup", appliedMorphConfigJson),
+      updateOverlay: (update) => updateStartupOverlay(update),
+      nextFrame: () => {
+        // Publish status each poll turn so __bvNetworkBuildStatus tracks the
+        // in-flight payload build during boot (as the old inline wait did).
+        publishNetworkBuildStatus();
+        return nextAnimationFrame();
+      },
+      stagePreparedPayload: (backend, payload) => {
+        (backend as unknown as PreparedNetworkCapableBackend).startup_begin_prepared_network(
+          payload.version,
+          payload.n,
+          payload.k,
+          payload.seed >>> 0,
+          payload.visualSettings,
+          payload.morphConfigJson,
+          payload.positions,
+          payload.regionCodes,
+          payload.gridMin,
+          payload.gridCellSize,
+          payload.gridDim,
+          payload.gridCellStart,
+          payload.gridCellNeurons,
+          payload.vertices,
+          payload.faces,
+          payload.segmentEndpoints,
+          payload.segmentPathLen,
+          payload.segmentNeuronIds,
+          payload.segmentKinds,
+          payload.segmentTargetIds,
+          payload.sphereGeometry,
+          payload.sphereNeuronIds,
+          payload.sphereKinds,
+          payload.droppedCount,
+        );
+        appliedMorphConfigJson = payload.morphConfigJson;
+        lastSettingsSnapshot = getSettings();
+      },
+      log: (message) => console.log(message),
+    });
 
-    // Boot-load overhaul (B): sub-stage progress handler. Maps the in-stage
-    // fraction (0..1) reported by Rust (or the synthetic creep below) onto the
-    // current stage's progress band, and appends the WITHIN-STAGE percent to the
-    // stage label (e.g. "Prepare network payload 42%") so the bottom-right label
-    // shows that stage's own progress, not just the overall bar.
-    const onSubStage = (label: string, fraction: number): void => {
-      updateStartupOverlay({
-        stage: formatSubStageLabel(label, fraction),
-        progress: mapSubStageProgress(fraction, stageBandStart, stageBandEnd),
-      });
-    };
-
-    const stages: BackendStage[] = [
-      {
-        name: "Acquire GPU + core pipelines",
-        weight: 0.34,
-        run: async () => {
-          if (typeof ctor.create_staged !== "function") {
-            gpuBackend = await ctor.create(
-              canvas,
-              config.n,
-              config.k,
-              config.seed >>> 0,
-              GPU_I_EXT,
-              GPU_SYN_SCALE,
-            );
-            return;
-          }
-          stagedBackend = await ctor.create_staged(
-            canvas,
-            config.n,
-            config.k,
-            config.seed >>> 0,
-            GPU_I_EXT,
-            GPU_SYN_SCALE,
-            onSubStage,
-          );
-          // Install the compile-stage progress callback on the returned backend
-          // so startup_build_render_pipelines can emit sub-stage labels.
-          if (typeof stagedBackend.set_progress_callback === "function") {
-            stagedBackend.set_progress_callback(onSubStage);
-          }
-        },
-      },
-      {
-        name: "Prepare network payload",
-        weight: 0.18,
-        run: async () => {
-          // The worker generates the payload inside a single synchronous WASM
-          // call (manifold → source-types → morphology → soma spheres). That
-          // call now fires a `(phase, fraction)` progress callback at each phase
-          // boundary; the worker `postMessage`s each tick to this (non-blocked)
-          // main thread, so the within-stage percent reflects REAL work and
-          // never stalls at a synthetic ceiling. On this no-GPU box the worker
-          // often finishes before any tick lands (it overlaps the GPU
-          // handshake), so the label may jump straight to 100% — expected here;
-          // the real climb shows on GPU hardware.
-          const label = "Prepare network payload";
-          onSubStage(label, 0);
-          networkBuildClient.onProgress((progress) => {
-            if (progress.sequence !== startupPrepareSequence) return;
-            onSubStage(label, progress.fraction);
-          });
-          try {
-            startupPreparedPayload = await waitForPreparedNetwork(startupPrepareSequence);
-          } finally {
-            networkBuildClient.onProgress(null);
-          }
-          // Snap to 100% on completion (safety: progress phases stop at 1.0 but
-          // the payload may still be in flight when the last tick is dropped).
-          onSubStage(label, 1);
-        },
-      },
-      {
-        name: "Stage prepared payload",
-        weight: 0.03,
-        run: () => {
-          if (stagedBackend === null || startupPreparedPayload === null) return;
-          (stagedBackend as unknown as PreparedNetworkCapableBackend).startup_begin_prepared_network(
-            startupPreparedPayload.version,
-            startupPreparedPayload.n,
-            startupPreparedPayload.k,
-            startupPreparedPayload.seed >>> 0,
-            startupPreparedPayload.visualSettings,
-            startupPreparedPayload.morphConfigJson,
-            startupPreparedPayload.positions,
-            startupPreparedPayload.regionCodes,
-            startupPreparedPayload.gridMin,
-            startupPreparedPayload.gridCellSize,
-            startupPreparedPayload.gridDim,
-            startupPreparedPayload.gridCellStart,
-            startupPreparedPayload.gridCellNeurons,
-            startupPreparedPayload.vertices,
-            startupPreparedPayload.faces,
-            startupPreparedPayload.segmentEndpoints,
-            startupPreparedPayload.segmentPathLen,
-            startupPreparedPayload.segmentNeuronIds,
-            startupPreparedPayload.segmentKinds,
-            startupPreparedPayload.segmentTargetIds,
-            startupPreparedPayload.sphereGeometry,
-            startupPreparedPayload.sphereNeuronIds,
-            startupPreparedPayload.sphereKinds,
-            startupPreparedPayload.droppedCount,
-          );
-          appliedMorphConfigJson = startupPreparedPayload.morphConfigJson;
-          lastSettingsSnapshot = getSettings();
-        },
-      },
-      {
-        name: "Upload neuron buffers",
-        weight: 0.05,
-        run: () => stagedBackend?.startup_upload_neuron_buffers(),
-      },
-      {
-        name: "Upload render mesh",
-        weight: 0.05,
-        run: () => stagedBackend?.startup_upload_render_resources(),
-      },
-      {
-        name: "Finalize render allocation",
-        weight: 0.02,
-        run: () => stagedBackend?.startup_allocate_lod_edge_resources(),
-      },
-      {
-        name: "Upload morphology buffers",
-        weight: 0.05,
-        run: () => stagedBackend?.startup_upload_morphology(),
-      },
-      {
-        name: "Bind network resources",
-        weight: 0.03,
-        run: () => stagedBackend?.startup_finish_network(),
-      },
-      {
-        name: "Compile render pipelines",
-        weight: 0.16,
-        run: () => stagedBackend?.startup_build_render_pipelines(),
-      },
-      {
-        name: "Create render targets",
-        weight: 0.07,
-        run: () => stagedBackend?.startup_resize_render_targets(),
-      },
-    ];
-
-    // Cumulative weight → progress band. Weights are normalized defensively so a
-    // hand-edited table that doesn't sum to 1 still spans the full band.
-    const totalWeight = stages.reduce((sum, s) => sum + s.weight, 0) || 1;
-    const band = progressEnd - progressStart;
-    let cumulativeWeight = 0;
-
-    const runStage = async (stage: BackendStage): Promise<boolean> => {
-      stageBandStart = progressStart + (cumulativeWeight / totalWeight) * band;
-      cumulativeWeight += stage.weight;
-      stageBandEnd = progressStart + (cumulativeWeight / totalWeight) * band;
-      updateStartupOverlay({ stage: stage.name, progress: stageBandStart });
-      await nextAnimationFrame();
-      const started = performance.now();
-      await stage.run();
-      const ms = performance.now() - started;
-      updateStartupOverlay({ stage: stage.name, progress: stageBandEnd });
-      console.log(`[startup] ${stage.name}: ${ms.toFixed(1)}ms`);
-      return stagedBackend !== null;
-    };
-
-    try {
-      updateStartupOverlay({
-        stage: "Preparing WebGPU backend…",
-        progress: progressStart,
-      });
-
-      for (let i = 0; i < stages.length; i++) {
-        const stillStaged = await runStage(stages[i]);
-        // Old generated packages only expose create(); that call returns a fully
-        // initialized backend, so the remaining explicit stages are unavailable.
-        if (i === 0 && !stillStaged) break;
-      }
-      if (stagedBackend !== null) {
-        gpuBackend = stagedBackend;
-      }
-
-      rebuildCoordinator.requestSettingsPush();
-      rebuildCoordinator.requestMorphConfig(morphConfigToJson(loadMorphConfig()));
-      const backendMs = performance.now() - backendStartedAt;
-      updateStartupOverlay({
-        stage: "Rendering first frame…",
-        progress: 98,
-      });
-      console.log(`[main] WasmGpuBackend startup completed in ${backendMs.toFixed(1)}ms`);
-    } catch (e) {
+    if (result.error !== null) {
+      const e = result.error;
       console.error("[main] GPU backend creation failed:", e);
       showToast("WebGPU init failed — check browser support");
       const message = e instanceof Error ? e.message : String(e);
@@ -671,7 +517,18 @@ async function boot(): Promise<void> {
         progress: 100,
       });
       gpuBackend = null;
+      return;
     }
+
+    gpuBackend = result.backend as WasmGpuBackend | null;
+    rebuildCoordinator.requestSettingsPush();
+    rebuildCoordinator.requestMorphConfig(morphConfigToJson(loadMorphConfig()));
+    const backendMs = performance.now() - backendStartedAt;
+    updateStartupOverlay({
+      stage: "Rendering first frame…",
+      progress: 98,
+    });
+    console.log(`[main] WasmGpuBackend startup completed in ${backendMs.toFixed(1)}ms`);
   }
 
   const gpuStartupPromise = startGpuBackend();

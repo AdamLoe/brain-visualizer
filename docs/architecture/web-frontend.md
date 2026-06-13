@@ -21,6 +21,11 @@ avoid wasm-bindgen reentrancy panics.
   `web/src/gpu-build/network-build-worker.ts` — latest-wins worker preparation
   for network rebuild payloads; the worker owns a worker-local WASM instance and
   never requests WebGPU
+- `web/src/boot-sequencer.ts → runGpuStartup` — the staged GPU-backend startup
+  orchestration (the `stages` table, `runStage`, `onSubStage`, and the
+  early-attached payload-progress listener), extracted from `main.ts` so the real
+  boot wiring is testable GPU-free; `main.ts.startGpuBackend` injects the WebGPU
+  backend factory, network client, overlay updater, and frame-yield into it
 - `web/src/boot-overlay.ts` — pure startup-overlay label/band helpers
   (`formatSubStageLabel`, `mapSubStageProgress`) used by `main.ts`, split out so
   the boot-panel contract is unit-testable without loading `main.ts`
@@ -174,9 +179,27 @@ maps the real fraction onto the stage band. Because the worker thread is blocked
 inside the sync WASM call but the *main* thread is not, those messages repaint
 the overlay between phases, so `Prepare network payload N%` climbs with real
 work and never stalls at a fake ceiling. `waitForPreparedNetwork` still snaps to
-`100%` on completion as a safety. On a box with no real GPU the worker often
-finishes before any tick lands (it overlaps the GPU handshake), so the label can
-jump straight to `100%`; the real climb shows on GPU hardware. The acquire/
+`100%` on completion as a safety.
+
+**Progress-listener lifecycle (stuck-at-0% fix).** The startup payload request
+is fired *before* the GPU-acquire stage so the warmed worker overlaps the GPU
+handshake. The worker therefore emits its `prepare-payload` ticks while
+"Acquire GPU + core pipelines" is still the active stage. The progress listener
+is attached **up front** (right after the startup request, before the acquire
+stage) and the latest fraction is buffered; the "Prepare network payload" stage
+replays that buffered fraction when it becomes active. Previously the listener
+was attached only inside that stage's `run()` (after acquire), so on a fast GPU
+where the worker finished during acquire every tick was dropped (no listener
+yet) and the label sat at `0%` then jumped to `100%` — observed on real hardware
+as a stall at "Prepare network payload 0%". The staged-boot orchestration now
+lives in `web/src/boot-sequencer.ts` (`runGpuStartup`), which `main.ts`
+delegates to, so the real `runStage`/`onSubStage`/`onProgress` wiring is exercised
+GPU-free by `web/src/boot-sequencer.test.ts` (a fake staged backend + a real
+`NetworkBuildClient` driven on a controllable timeline, covering both the
+worker-still-generating and worker-finished-during-acquire orderings). On a box
+with no real GPU the worker often finishes before any tick lands, so the label
+can still jump straight to `100%`; the real intermediate climb shows on GPU
+hardware and is asserted by the integration test. The acquire/
 compile sub-stage callback is installed both as an optional
 `create_staged(...)` argument (acquire sub-stages) and via
 `backend.set_progress_callback(...)` (compile sub-stages); both are additive and
