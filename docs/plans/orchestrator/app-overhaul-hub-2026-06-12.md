@@ -1,5 +1,5 @@
 ---
-status:        active
+status:        shipped
 owner:         Codex orchestrator
 last_updated:  2026-06-13
 okay_to_delete: false
@@ -58,15 +58,15 @@ stages.
 | Intake/bootstrap | Done | Manifest, docs router, overview, global orchestration rules, plan lifecycle, and pasted critique read. | Dispatch planning agents. |
 | Planning | Done | Eight child draft plan docs persisted under `docs/plans/orchestrator/` after splitting Stream C. | Activate first implementation wave. |
 | Plan review | Done | High-level review recommended staging A, splitting C, serializing B1/B2, and clarifying D1/D2. | Apply plan review edits and activate first wave. |
-| Implementation | Done | C2 legacy render/dead-code amnesty is implemented and gated after C1; legacy render/dev surfaces are removed and settings compatibility is preserved. | Prepare final closeout. |
-| Work review | Done for wave 1 | Review-work pass found one smoke artifact gap and fixed it; no remaining blocking findings. | Commit wave 1. |
-| Closeout | In progress | Consolidated gates for C2 passed; real-adapter smoke remains environment-dependent for the broader hub. | Commit C2 and report remaining hub status. |
+| Implementation | Done | Accepted scope is implemented: A0/A1, B1/B2, C1/C2, D1/D2, and E with dev-panel toggle. | None. |
+| Work review | Done | Wave review and focused follow-up reviews/fixes landed across CPU deletion, render cleanup, docs drift, and region toggle work. | None. |
+| Closeout | Done | Strict local smoke ran and proved the environment has no browser WebGPU adapter; all accepted implementation work is committed. | Report shipped status and remaining environment limitation. |
 
 ## Streams
 
 | Stream | Area | Status | Last observed fact | Next action | Blockers |
 |---|---|---|---|---|---|
-| A | Real hardware, startup beacons, field telemetry | Partially implemented | A0 smoke and A1 disabled telemetry contract landed; production telemetry explicitly disabled by owner decision. | Run local real-adapter smoke when available; keep telemetry transport disabled. | Real-adapter lane still needed if local has no adapter. |
+| A | Real hardware, startup beacons, field telemetry | Shipped for accepted scope | A0 smoke and A1 disabled telemetry contract landed; production telemetry explicitly disabled by owner decision. Strict local smoke with `BV_REQUIRE_WEBGPU=1` wrote an artifact and failed because Chromium had no WebGPU adapter. | None for accepted scope; keep telemetry transport disabled. | Real-adapter proof still needs a machine/browser with an actual WebGPU adapter. |
 | B1 | Settings/metrics/schema contracts | Implemented | Contract tests, tombstone hardening, uniform size checks, estimated labels, docs migration landed; cargo test, npm test, and typecheck passed. | Include in work review/final commit. | None observed. |
 | B2 | Simulation correctness gates | Implemented | Strict adapter helper, synchronized fixed-point overflow stress, Rust/WGSL tick-wrap gates, and docs migration landed; local strict run uses llvmpipe, so it cannot prove the no-adapter failure branch on this machine. | Include in work review/final commit. | Real no-adapter strict-path proof still needs an environment without llvmpipe. |
 | C1 | CPU backend deletion | Shipped | CPU runtime modules/exports, browser worker/renderer paths, CPU build feature/deps, CPU example/e2e expectations, and live/parked docs were removed; stale saved CPU configs normalize to GPU. | None. | None. |
@@ -79,8 +79,8 @@ stages.
 
 | Wave | Status | Plans | Reason |
 |---|---|---|---|
-| 1 | Ready | A0 real-hardware smoke from Stream A; B1 settings/metrics contracts; D2 wave 1 rebuild coordinator groundwork | Low-regret foundations that do not require production telemetry, CPU deletion, or region-default decisions. |
-| 2 | Pending | B2 simulation correctness gates | Valuable but overlaps `sim/gpu/mod.rs`; run after B1 or with strict file-region ownership. |
+| 1 | Done | A0 real-hardware smoke from Stream A; B1 settings/metrics contracts; D2 wave 1 rebuild coordinator groundwork | Low-regret foundations that do not require production telemetry, CPU deletion, or region-default decisions. |
+| 2 | Done | B2 simulation correctness gates | Strict adapter helper and overflow/tick-wrap gates shipped after B1. |
 | 3 | Done | D1 morphology segment scaling | Shipped in `593b7d3`; chunking remains a main-thread GPU upload/resource policy. |
 | 4 | Done | D2 remaining responsiveness work | Startup worker prep, standalone morphology generator prep, and high-N/frame-counter smoke shipped. |
 | 5 | Done | Stream E spatial-region prototype | Shipped as an internal opt-in mode; promotion to default requires visual/dynamics review. |
@@ -108,12 +108,13 @@ stages.
   use the local machine for real-hardware smoke attempts; expose the region
   coherence prototype behind a settings/dev toggle, not as default.
 
-## Open Questions
+## Remaining Limits
 
-- Real hardware smoke depends on whether the local machine exposes a real WebGPU
-  adapter.
+- Real hardware proof still depends on running the smoke on a machine/browser
+  that exposes an actual WebGPU adapter. This local Chromium run reported
+  `navigator.gpu` present but `requestAdapter()` unavailable.
 - Region coherence remains non-default until visual/dynamics review supports
-  promotion.
+  promotion. The accepted request was to expose it behind a settings/dev toggle.
 
 ## Agent Log
 
@@ -141,8 +142,10 @@ stages.
   the sandbox after the sandbox blocked the `wasm-pack` dev build.
 - `cd app/web && USE_WEBSERVER=1 npm run test:e2e:smoke` passed outside the
   sandbox after the sandbox blocked Chromium startup.
-- Real-adapter smoke remains outstanding: this environment can produce a
-  no-adapter/llvmpipe-style artifact, not real hardware proof.
+- `cd app/web && BV_REQUIRE_WEBGPU=1 USE_WEBSERVER=1 npm run test:e2e:smoke`
+  ran outside the sandbox and failed by design because Chromium exposed no
+  WebGPU adapter. Artifact:
+  `app/web/test-results/real_hardware_smoke-real-h-d19c1--canvas-and-frame-artifacts-chromium/real-hardware-smoke.json`.
 
 ## Migration Notes
 

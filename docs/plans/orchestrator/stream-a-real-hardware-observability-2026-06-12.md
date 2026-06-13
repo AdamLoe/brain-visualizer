@@ -1,7 +1,7 @@
 ---
-status:        active
-owner:         unassigned
-last_updated:  2026-06-12
+status:        shipped
+owner:         Codex orchestrator
+last_updated:  2026-06-13
 okay_to_delete: false
 long_lived:    false
 owning_docs:
@@ -126,6 +126,16 @@ Implementation can land A0 and A1 without a production telemetry decision.
 Owner decision on 2026-06-12: keep production telemetry disabled for now. A2
 production enablement is intentionally deferred until a future telemetry sink,
 retention period, and opt-in/opt-out/dogfood posture are selected.
+
+Accepted-scope ship note, 2026-06-13: A0 real-hardware/browser smoke and A1
+disabled telemetry contract are implemented and documented. Local strict smoke
+was run with `BV_REQUIRE_WEBGPU=1 USE_WEBSERVER=1 npm run test:e2e:smoke`; the
+test infrastructure reached Chromium and wrote
+`app/web/test-results/real_hardware_smoke-real-h-d19c1--canvas-and-frame-artifacts-chromium/real-hardware-smoke.json`,
+but this machine exposed `navigator.gpu` without a WebGPU adapter
+(`hasAdapter: false`). That is an environment limitation for real-adapter proof,
+not an open implementation task. Production telemetry enablement remains
+explicitly out of scope.
 
 ## Migration Notes
 
