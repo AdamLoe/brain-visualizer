@@ -34,7 +34,7 @@
     },
     {
       "id": "gpu-rendering",
-      "summary": "render scheme (far additive glow billboards, live per-neuron morphology pass), the depth-tested alpha active-opacity layer (active=firing tubes/somas occlude the additive resting layer; active_opacity/inactive_opacity_floor knobs), morphology compaction and indirect draws, manifold surface render, HDR/bloom, visual mode enums (color_by/neuron_visibility/signal_source/surface)",
+      "summary": "render scheme (far additive glow billboards, live per-neuron morphology pass), the depth-tested alpha active-opacity layer (active=firing tubes/somas occlude the additive resting layer; active_opacity/inactive_opacity_floor knobs), morphology compaction and indirect draws, manifold surface render, HDR/bloom, visual mode enums (color_by/neuron_visibility/surface)",
       "owner": "architecture/gpu-rendering.md",
       "references": ["architecture/gpu-backend.md", "architecture/active-edges.md", "architecture/manifold.md", "architecture/simulation.md"]
     },
@@ -64,7 +64,7 @@
     },
     {
       "id": "dev-panel",
-      "summary": "the hidden dev panel (open triggers, tabs, impact-dot system from SETTING_IMPACT), settings persistence contract (versioned bv2_settings_v1 localStorage, public/dev split, merge-over-defaults, no preset manager), the VisualSettings Float32Array index contract",
+      "summary": "the hidden dev panel (open triggers, tabs, impact-dot system from SETTING_IMPACT), settings persistence contract (versioned bv2_settings_v2 localStorage, public/dev split, merge-over-defaults, static hidden review presets), the VisualSettings Float32Array index contract",
       "owner": "architecture/dev-panel.md",
       "references": ["architecture/profiling.md", "architecture/web-frontend.md", "architecture/simulation.md"]
     },
@@ -148,7 +148,7 @@
     },
     {
       "id": "dec-dev-tooling",
-      "summary": "hidden dev panel + impact-dot metadata, versioned localStorage, no preset manager",
+      "summary": "hidden dev panel + impact-dot metadata, versioned localStorage, static hidden review presets",
       "owner": "decisions/dev-tooling.md",
       "references": []
     }

@@ -19,7 +19,7 @@ constrains.
 | Three tiers, K as a per-tier scaler axis, 20k product cap separate from GPU capacity | [`scaling.md`](scaling.md) |
 | "Pretty toy" interaction model, natural start (no scripted intro), speed presets, brain-state presets | [`interaction.md`](interaction.md) |
 | First-class profiling + corner HUD, periodic GPU reduction + async readback, cheap hot-loop counters | [`profiling.md`](profiling.md) |
-| Hidden dev panel + impact-dot metadata, versioned localStorage, no preset manager | [`dev-tooling.md`](dev-tooling.md) |
+| Hidden dev panel + impact-dot metadata, versioned localStorage, static hidden review presets | [`dev-tooling.md`](dev-tooling.md) |
 
 ## See also
 

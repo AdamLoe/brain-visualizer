@@ -32,7 +32,7 @@ is wired.
 - The synapse target rule + weight values (`scatter.wgsl`, `connectivity::target`/`weight`) → [`connectivity.md`](connectivity.md).
 - The SoA buffer layout + fixed-point current packing → [`data-model.md`](data-model.md).
 - Metrics *meaning*, reduction, and the non-blocking readback state machine → [`profiling.md`](profiling.md).
-- Neuron geometry / glow / ribbons (anything visual) → the rendering docs.
+- Neuron geometry / glow / morphology (anything visual) → the rendering docs.
 
 ## The per-tick step
 
