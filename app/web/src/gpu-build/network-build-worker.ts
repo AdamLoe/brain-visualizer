@@ -15,6 +15,12 @@ type WorkerIn =
   | { type: "warm" };
 type WorkerOut =
   | { type: "ready"; payload: PreparedNetworkPayload }
+  // Additive boot-load progress: emitted at each WASM payload-build phase
+  // boundary so the main thread (not blocked while the worker runs the sync
+  // WASM call) can repaint the "Prepare network payload" overlay percent with
+  // real work. Carries the request's `sequence` so latest-wins discipline
+  // ignores stale ticks. The existing ready/failed shapes are unchanged.
+  | { type: "progress"; sequence: number; stage: "prepare-payload"; phase: string; fraction: number }
   | { type: "failed"; sequence: number; message: string };
 
 interface WorkerScope {
@@ -57,6 +63,7 @@ interface WasmGpuBuildModule {
     visualSettings: Float32Array,
     morphConfigJson: string,
     regionAssignmentMode: string,
+    progress?: (phase: string, fraction: number) => void,
   ): WasmPreparedNetwork;
 }
 
@@ -80,6 +87,15 @@ async function prepare(request: PreparedNetworkRequest): Promise<void> {
     wasmReady ??= init().then(() => undefined);
     await wasmReady;
     const module = wasm as unknown as WasmGpuBuildModule;
+    const onPhase = (phase: string, fraction: number): void => {
+      workerScope.postMessage({
+        type: "progress",
+        sequence: request.sequence,
+        stage: "prepare-payload",
+        phase,
+        fraction,
+      } satisfies WorkerOut);
+    };
     const prepared = module.prepare_network_payload(
       request.n,
       request.k,
@@ -87,6 +103,7 @@ async function prepare(request: PreparedNetworkRequest): Promise<void> {
       request.visualSettings,
       request.morphConfigJson,
       request.regionAssignmentMode,
+      onPhase,
     );
     const payload: PreparedNetworkPayload = {
       version: prepared.version(),

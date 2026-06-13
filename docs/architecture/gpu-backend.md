@@ -156,7 +156,15 @@ All large buffers are **persistent across frames**. Allocation happens only on a
   direct path remains for internal/native callers.
 - **worker-prepared network rebuild** — `PreparedNetworkBuild` carries the CPU
   manifold, placement, spatial grid, morphology segments, soma instances, and
-  metadata produced away from the main thread. The payload is GPU-agnostic and
+  metadata produced away from the main thread. `PreparedNetworkBuild::prepare`
+  delegates to `prepare_with_progress`, which takes an optional
+  `Option<&dyn Fn(&str, f32)>` progress callback fired at each phase boundary
+  (manifold `0.15` → source-types `0.25` → morphology `0.85` → soma `1.0`); the
+  `&dyn Fn` keeps this native-compiled path free of `js_sys`. The wasm-bindgen
+  `prepare_network_payload` export takes an optional trailing `js_sys::Function`
+  and bridges it into that callback so the network-build worker can
+  `postMessage` real payload-build progress to the (non-blocked) main thread.
+  The payload is GPU-agnostic and
   flat; `GpuBackend::initialize_prepared` still runs `resize_neurons`,
   `init_render_resources`, `GpuResources::init_morph_resources_from_prepared`,
   and `finish_initialize` on the main thread. Segment chunking remains an

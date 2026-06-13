@@ -155,15 +155,23 @@ to the bottom-right, so it reads e.g. `Prepare network payload 42%` and climbs t
 `100%` as that stage progresses — distinct from the overall bar percent on the
 bottom-left.
 
-**Prepare-network-payload progress is synthetic.** The worker builds the payload
+**Prepare-network-payload progress is measured.** The worker builds the payload
 inside a single synchronous WASM `prepare_network_payload` call (manifold →
-placement → spatial grid → morphology → soma spheres) with no incremental seam
-back to the main thread, so this stage's within-stage percent is a time-based
-creep: a rAF-driven `0.95·(1 − e^(−t/τ))` ease (τ ≈ 700 ms) that animates the
-label while `waitForPreparedNetwork` awaits, then snaps to `100%` on completion.
-It is *not* a measured fraction. On a box with no real GPU the worker often
-finishes before the first creep tick (it overlaps the GPU handshake), so the
-label can jump straight to `100%`; real climb shows on GPU hardware. The callback is installed both as an optional
+source-types → morphology → soma spheres). That call takes an optional
+`(phase_label, fraction)` progress callback and fires it at each phase boundary
+(manifold `0.15` → source-types `0.25` → morphology `0.85` → soma `1.0`;
+morphology is the heavy phase, hence the wide jump). The worker `postMessage`s
+each tick as an additive `{type:"progress", sequence, stage:"prepare-payload",
+phase, fraction}` message (carrying the request `sequence` so latest-wins drops
+stale ticks); `NetworkBuildClient.onProgress` relays it to `onSubStage`, which
+maps the real fraction onto the stage band. Because the worker thread is blocked
+inside the sync WASM call but the *main* thread is not, those messages repaint
+the overlay between phases, so `Prepare network payload N%` climbs with real
+work and never stalls at a fake ceiling. `waitForPreparedNetwork` still snaps to
+`100%` on completion as a safety. On a box with no real GPU the worker often
+finishes before any tick lands (it overlaps the GPU handshake), so the label can
+jump straight to `100%`; the real climb shows on GPU hardware. The acquire/
+compile sub-stage callback is installed both as an optional
 `create_staged(...)` argument (acquire sub-stages) and via
 `backend.set_progress_callback(...)` (compile sub-stages); both are additive and
 optional, so a stale-vs-regenerated `.d.ts` can't break boot. The legacy

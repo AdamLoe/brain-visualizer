@@ -89,4 +89,21 @@ describe("NetworkBuildClient", () => {
     worker.emit({ type: "failed", sequence: 3, message: "old" });
     expect(client.currentStatus()).toEqual({ kind: "preparing", sequence: 4 });
   });
+
+  test("delivers progress ticks for the latest request and drops stale ones", () => {
+    const worker = new MockWorker();
+    const client = new NetworkBuildClient(() => worker as unknown as Worker);
+    const seen: number[] = [];
+    client.onProgress((p) => seen.push(p.fraction));
+
+    client.request(request(5));
+    client.request(request(6));
+    worker.emit({ type: "progress", sequence: 5, stage: "prepare-payload", phase: "old", fraction: 0.5 });
+    worker.emit({ type: "progress", sequence: 6, stage: "prepare-payload", phase: "Growing morphology", fraction: 0.85 });
+    expect(seen).toEqual([0.85]);
+
+    client.onProgress(null);
+    worker.emit({ type: "progress", sequence: 6, stage: "prepare-payload", phase: "done", fraction: 1 });
+    expect(seen).toEqual([0.85]);
+  });
 });

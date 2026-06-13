@@ -56,9 +56,32 @@ impl PreparedNetworkBuild {
         reach: crate::connectivity::ReachParams,
         region_assignment: crate::manifold::RegionAssignmentMode,
     ) -> Self {
+        Self::prepare_with_progress(config, params, reach, region_assignment, None)
+    }
+
+    /// Same as [`prepare`], but invokes an optional `(phase_label, fraction)`
+    /// progress callback at each phase boundary. `fraction` is 0..1 over the
+    /// whole payload build, weighted by relative phase cost (morphology is the
+    /// heavy one). The callback is `&dyn Fn` so the wasm layer can bridge it to
+    /// a `js_sys::Function` while native callers (tests, examples) pass `None`
+    /// — no wasm/js_sys dependency leaks into this native-compiled path.
+    pub fn prepare_with_progress(
+        config: SimConfig,
+        params: crate::sim::morphology::MorphologyParams,
+        reach: crate::connectivity::ReachParams,
+        region_assignment: crate::manifold::RegionAssignmentMode,
+        progress: Option<&dyn Fn(&str, f32)>,
+    ) -> Self {
+        let emit = |label: &str, frac: f32| {
+            if let Some(cb) = progress {
+                cb(label, frac);
+            }
+        };
         let manifold = crate::build_manifold_with_region_assignment(&config, region_assignment);
+        emit("Folding manifold", 0.15);
         let source_types =
             crate::sim::morphology::build_source_types(config.seed_lo(), &manifold.neuron_regions);
+        emit("Assigning source types", 0.25);
         let morph = crate::sim::morphology::generate(
             &manifold.neuron_positions,
             &manifold.spatial_grid,
@@ -68,12 +91,14 @@ impl PreparedNetworkBuild {
             &source_types,
             reach,
         );
+        emit("Growing morphology", 0.85);
         let spheres = crate::sim::morphology::emit_soma_spheres(
             &manifold.neuron_positions,
             &source_types,
             &params,
             &morph.process_roots,
         );
+        emit("Emitting soma spheres", 1.0);
         let morphology = PreparedMorphology {
             segments: morph.segments,
             spheres,

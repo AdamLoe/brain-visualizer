@@ -6,7 +6,16 @@ import {
 
 type WorkerOut =
   | { type: "ready"; payload: PreparedNetworkPayload }
+  | { type: "progress"; sequence: number; stage: "prepare-payload"; phase: string; fraction: number }
   | { type: "failed"; sequence: number; message: string };
+
+/** Real payload-build progress for the current request (latest-wins). */
+export interface PreparedNetworkProgress {
+  sequence: number;
+  phase: string;
+  /** 0..1 over the whole payload build. */
+  fraction: number;
+}
 
 export type PreparedNetworkStatus =
   | { kind: "idle" }
@@ -19,6 +28,7 @@ export class NetworkBuildClient {
   private latestRequested = 0;
   private status: PreparedNetworkStatus = { kind: "idle" };
   private readyPayload: PreparedNetworkPayload | null = null;
+  private progressListener: ((progress: PreparedNetworkProgress) => void) | null = null;
 
   constructor(workerFactory: () => Worker = defaultWorkerFactory) {
     this.worker = workerFactory();
@@ -54,6 +64,15 @@ export class NetworkBuildClient {
     return this.status;
   }
 
+  /**
+   * Subscribe to real payload-build progress for the latest request. Additive:
+   * existing consumers that never call this are unaffected. Only ticks whose
+   * `sequence` matches the latest request are delivered (latest-wins).
+   */
+  onProgress(listener: ((progress: PreparedNetworkProgress) => void) | null): void {
+    this.progressListener = listener;
+  }
+
   consumeReady(): PreparedNetworkPayload | null {
     const payload = this.readyPayload;
     this.readyPayload = null;
@@ -73,6 +92,15 @@ export class NetworkBuildClient {
       validatePreparedNetworkPayload(message.payload);
       this.readyPayload = message.payload;
       this.status = { kind: "ready", sequence: message.payload.sequence };
+      return;
+    }
+    if (message.type === "progress") {
+      if (message.sequence !== this.latestRequested) return;
+      this.progressListener?.({
+        sequence: message.sequence,
+        phase: message.phase,
+        fraction: message.fraction,
+      });
       return;
     }
     if (message.sequence !== this.latestRequested) return;

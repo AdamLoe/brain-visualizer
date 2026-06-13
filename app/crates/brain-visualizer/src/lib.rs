@@ -227,6 +227,13 @@ mod wasm_entry {
         visual_settings: &[f32],
         morph_config_json: &str,
         region_assignment_mode: &str,
+        // Boot-load overhaul: optional `(phase_label, fraction 0..1)` progress
+        // callback fired at each payload-build phase boundary. The worker
+        // `postMessage`s each tick to the (non-blocked) main thread so the
+        // "Prepare network payload" overlay percent climbs with real work
+        // instead of a synthetic creep. Optional so an older web layer (or a
+        // stale `.d.ts`) that passes nothing still works.
+        progress: Option<js_sys::Function>,
     ) -> Result<WasmPreparedNetwork, JsValue> {
         let n = clamp_neuron_count(n);
         let visual = VisualSettings::from_slice(visual_settings);
@@ -244,9 +251,23 @@ mod wasm_entry {
             backend: crate::sim::backend::BackendKind::Gpu,
             ..SimConfig::default()
         };
-        Ok(WasmPreparedNetwork {
-            inner: PreparedNetworkBuild::prepare(config, params, reach, region_assignment),
-        })
+        let bridge = progress.map(|cb| {
+            move |label: &str, frac: f32| {
+                let _ = cb.call2(
+                    &JsValue::NULL,
+                    &JsValue::from_str(label),
+                    &JsValue::from_f64(frac as f64),
+                );
+            }
+        });
+        let inner = PreparedNetworkBuild::prepare_with_progress(
+            config,
+            params,
+            reach,
+            region_assignment,
+            bridge.as_ref().map(|f| f as &dyn Fn(&str, f32)),
+        );
+        Ok(WasmPreparedNetwork { inner })
     }
 
     /// Browser GPU backend. Own the wgpu surface; delegates all sim/render to
