@@ -294,7 +294,7 @@ async function boot(): Promise<void> {
   updateStartupOverlay({ stage: "Loading saved configuration...", progress: 28 });
 
   // 3. Mobile detection — apply full mobile profile (Phase 7 / BV spec):
-  //    Low tier, 0.75×DPR render res, no near-LOD, no stim.
+  //    Low tier, 0.75×DPR render res, no stim.
   const mobile = isMobile();
   // 0.1.1: restore the user's last-used config from localStorage (n/k/tier/
   // backend/speed/excitability). Stale CPU backend saves normalize to GPU in
@@ -392,9 +392,6 @@ async function boot(): Promise<void> {
   // mutations must flow through it.
   let pendingResize: { w: number; h: number } | null = null;
   let pendingStim: { x: number; y: number; z: number; radius: number; current: number } | null = null;
-  // V2 Phase B: brain-reset flag.  Kept as no-op stub (UX round 2 removed the
-  // pending UI, but the flag is harmless and keeps the flush path intact).
-  let pendingBrainReset = false;
   const rebuildCoordinator = new RebuildCoordinator();
   const networkBuildClient = new NetworkBuildClient();
   let nextNetworkBuildSequence = 1;
@@ -560,8 +557,8 @@ async function boot(): Promise<void> {
         run: () => stagedBackend?.startup_upload_render_resources(),
       },
       {
-        name: "Allocate LOD + edge buffers",
-        detail: "near-LOD append buffers and active-edge ring",
+        name: "Finalize render allocation stage",
+        detail: "compatibility startup stage",
         run: () => stagedBackend?.startup_allocate_lod_edge_resources(),
       },
       {
@@ -576,7 +573,7 @@ async function boot(): Promise<void> {
       },
       {
         name: "Compile render pipelines",
-        detail: "surface, morphology, near-LOD, bloom pipelines",
+        detail: "surface, morphology, bloom pipelines",
         run: () => stagedBackend?.startup_build_render_pipelines(),
       },
       {
@@ -715,18 +712,7 @@ async function boot(): Promise<void> {
     tps:          targetTicksPerSec,
   });
 
-  // V2 Phase B: wire brain-reset apply handler to the dev panel.
-  // The handler sets a flag consumed at the top of rafLoop; never calls the
-  // backend directly (would re-enter a live &mut on WasmGpuBackend).
   if (devPanel) {
-    devPanel.setApplyHandlers({
-      onBrainReset: () => {
-        if (gpuBackend !== null) {
-          pendingBrainReset = true;
-        }
-      },
-    });
-
     // UX round 2: wire sim handlers (excitability, speed-tps, network rebuild).
     // onExcitability: delegates to setExcitabilityTarget; existing lerp smoothly approaches.
     // onSpeed: sets targetTicksPerSec (1–60); time-based accumulator uses it next frame.
@@ -975,11 +961,6 @@ async function boot(): Promise<void> {
       }
       pendingResize = null;
     }
-    // V2 Phase B: brain reset — now a no-op stub (UX round 2 removed the UI).
-    if (pendingBrainReset && gpuBackend) {
-      pendingBrainReset = false;
-      // No-op: brain-reset pending UI removed; network rebuilds go via the build worker.
-    }
     if (gpuBackend) {
       const preparedPayload = networkBuildClient.consumeReady();
       if (preparedPayload !== null) {
@@ -1072,13 +1053,11 @@ async function boot(): Promise<void> {
           tickMs: 0,
         };
       }
-      const dist = camera.cameraDistance();
-      gpuBackend.set_lod_camera_distance(dist);
-
       const mvp   = camera.mvpMatrix();
       const right = camera.cameraRight();
       const up    = camera.cameraUp();
       const eye   = camera.eye();
+      const dist  = camera.cameraDistance();
       // V2 Phase 0: glow_tau and point_radius are sourced from VisualSettings
       // inside the backend (set via update_settings); no longer passed here.
       gpuBackend.render_frame(

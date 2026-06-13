@@ -1,8 +1,8 @@
 ---
-status:        active
-owner:         unassigned
-last_updated:  2026-06-12
-okay_to_delete: false
+status:        shipped
+owner:         Codex
+last_updated:  2026-06-13
+okay_to_delete: true
 long_lived:    false
 owning_docs:
   - architecture/gpu-rendering.md
@@ -26,9 +26,9 @@ Owner decision on 2026-06-12: remove legacy/dead code and references outright.
 
 In scope after dependencies clear:
 
-- Retired ribbons, near-LOD spheres/cylinders, no-op brain-reset Apply flow,
-  `connection_layer` mode 2, tombstoned bloom implementation, and scaler stubs
-  only where removal does not retune active product scaling.
+- Retired ribbon/close-body render branches, no-op brain-reset Apply flow,
+  the inactive third connection-layer value, tombstoned bloom implementation,
+  and scaler stubs only where removal does not retune active product scaling.
 
 Out of scope:
 
@@ -42,15 +42,16 @@ Out of scope:
 - `docs/architecture/dev-panel.md`
 - `docs/decisions/rendering.md`
 - `docs/decisions/dev-tooling.md`
-- Legacy anchors found by `rg "DRAW_LEGACY|EdgeBuffers|NearLod|bloom|connection_layer|adaptiveScaler|ApplyHandlers"`.
+- Legacy render/dev anchors found by search across GPU resources, pipelines,
+  shaders, settings, and dev-panel surfaces.
 
 ## Approach
 
 1. Wait until B1 and D1 are not editing the same settings/render surfaces.
 2. Remove one parked path at a time, preserving compatibility tombstones where
    settings indices require it.
-3. Clamp or normalize persisted `connectionLayer = 2` rather than shifting
-   settings indices.
+3. Clamp or normalize the former third connection-layer value rather than
+   shifting settings indices.
 4. Update architecture and decisions docs after each coherent removal batch.
 
 ## Exit Gate
@@ -70,6 +71,13 @@ stream to shift or repurpose settings indices.
 
 ## Migration Notes
 
-At ship time, update `architecture/gpu-rendering.md`,
+Shipped on 2026-06-13. Removed retired ribbon/close-body GPU resources,
+pipelines, shaders, native example coverage, no-op brain-reset Apply UI wiring,
+and the inactive third connection-layer surface. Persisted settings above the
+active range now normalize to active/recent without changing Float32Array
+indices. Bloom stayed because the backend setter and `render_check` still
+exercise that internal path. Updated `architecture/gpu-rendering.md`,
 `architecture/active-edges.md`, `architecture/dev-panel.md`,
-`decisions/rendering.md`, and `decisions/dev-tooling.md`.
+`architecture/gpu-backend.md`, `decisions/rendering.md`, and
+`decisions/dev-tooling.md`, plus metadata/layout docs that held stale removed
+path references.

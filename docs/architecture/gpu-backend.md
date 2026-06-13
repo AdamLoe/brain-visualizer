@@ -30,7 +30,7 @@ GPU-resident state straight to the render passes.
   `refresh_bind_groups`, `resize_render_targets`, the `init_*` / `resize_neurons`
   allocators, `destroy`).
 - Pipeline + bind-group-layout construction — `crates/brain-visualizer/src/sim/gpu/pipelines.rs →
-  GpuPipelines` (`build`, `build_render`, `build_near_lod`), `GpuLayouts`.
+  GpuPipelines` (`build`, `build_render`), `GpuLayouts`.
 - Device/queue acquisition — `GpuBackend::acquire_web` / `acquire_native`,
   `GpuContext`.
 - Browser startup staging — `crates/brain-visualizer/src/lib.rs →
@@ -42,10 +42,6 @@ GPU-resident state straight to the render passes.
   `crates/brain-visualizer/src/lib.rs → WasmGpuBackend::startup_begin_prepared_network`
   / `apply_prepared_network` enter the same main-thread WebGPU upload/resource
   path as direct builds.
-- The standing guardrail constants `DRAW_LEGACY_CYLINDERS`,
-  `DRAW_LEGACY_NEAR_SPHERES`, `DRAW_LEGACY_RIBBONS` that gate retired passes out
-  of the graph, and `crates/brain-visualizer/src/sim/gpu/pipelines.rs →
-  DRAW_LEGACY_ALL_SEGMENTS` that bypasses morphology compaction.
 
 ## What it does NOT own
 
@@ -53,7 +49,7 @@ GPU-resident state straight to the render passes.
   norm, heterogeneity, the spatial `target_neuron` rule) — [`simulation.md`](simulation.md).
 - The visual logic of each render pass (billboards, manifold, morphology, bloom)
   — [`gpu-rendering.md`](gpu-rendering.md).
-- The active-edge / ribbon emit+ring internals — [`active-edges.md`](active-edges.md).
+- The deleted active-edge ribbon history — [`active-edges.md`](active-edges.md).
 - What the metrics slots *mean* and how JS parses them — [`profiling.md`](profiling.md).
 - Buffer field layouts and SoA neuron storage shapes — [`data-model.md`](data-model.md).
 
@@ -79,10 +75,7 @@ submits it once. Per tick, in fixed order (`crates/brain-visualizer/src/sim/gpu/
    `dispatch_workgroups_indirect(dispatch_args, 0)`. Each thread routes one
    spike·synapse to a target cell and `atomicAdd`s fixed-point current into
    `I_next`.
-6. **(optional) emit_edges** — `emit_edges.wgsl`, gated behind `do_emit`
-   (`DRAW_LEGACY_RIBBONS && connection_layer != 0`). Default-off ⇒ skipped
-   entirely. See [`active-edges.md`](active-edges.md).
-7. **swap** — flip `self.parity ^= 1` and `self.tick = self.tick.wrapping_add(1)`.
+6. **swap** — flip `self.parity ^= 1` and `self.tick = self.tick.wrapping_add(1)`.
 
 After the loop (once per batch), stats are staged and the metrics state machine
 is driven (below).
@@ -118,29 +111,19 @@ upload of per-instance data. Order:
 4. **active/recent compaction compute + morphology tube pass** — when `connection_layer != 0`. For each morphology segment chunk, the compaction compute (`compact_morph_segments.wgsl`: `reset` 1wg → `compact` ⌈chunk_segs/64⌉wg → `write_args` 1wg) writes that chunk's `active_draw_args`; the tube pass then binds each chunk and `draw_indirect`s over its compacted active/recent subset (additive, no depth) via `render_morphology.wgsl → vs_main`. Instance counts are GPU-decided per chunk — no CPU readback sizes these draws. See [`gpu-rendering.md`](gpu-rendering.md) for the selection predicate.
 5. **morphology soma sphere pass** — when `connection_layer != 0`; additive, no depth. One UV-sphere per neuron via `render_morphology.wgsl → vs_sphere`. Uses `render_soma_spheres` pipeline (`crates/brain-visualizer/src/sim/gpu/pipelines.rs → GpuPipelines`), reusing the same `last_spike` and `morph_uniform` buffers from the tube pass.
 6. **active-opacity tube + soma passes** — when `connection_layer != 0` and the active-opacity guard is on; depth-tested **alpha** blend (not additive), layered over the additive morphology passes so firing geometry genuinely occludes. The active-tube pass owns the depth `Clear(1.0)`; the active-soma pass `Load`s it. See [`gpu-rendering.md`](gpu-rendering.md) for the opacity model and skip-at-zero guard.
-7. **(retired) ribbon pass** — behind `DRAW_LEGACY_RIBBONS`.
-8. **(retired) near-LOD passes** — cull_neurons → (cull_synapses) → write_indirect
-   → sphere draw → (cylinder draw), all behind `DRAW_LEGACY_NEAR_SPHERES`.
-9. **(optional) bloom post** — bright → blur_h → blur_v → composite into the
+7. **(optional) bloom post** — bright → blur_h → blur_v → composite into the
    surface.
 
 Per-frame uniform uploads use `queue.write_buffer` into buffers the bind groups
 already reference, so no bind-group rebuild is needed for a uniform change. See
 [`gpu-rendering.md`](gpu-rendering.md) for each pass's visual semantics.
 
-### Retired-pass guardrails
-
-Three passes are kept in code but gated OUT of the live graph so they never
-double-draw connections or re-introduce old visual bugs:
-
-| Const | Default | Gates out |
-|---|---|---|
-| `DRAW_LEGACY_CYLINDERS` | `false` | near-LOD straight-cylinder synapses (cull_synapses + cylinder draw) |
-| `DRAW_LEGACY_NEAR_SPHERES` | `false` | the faceted near-LOD icosphere body + the whole near-LOD branch (`run_near_lod`) |
-| `DRAW_LEGACY_RIBBONS` | `false` | the Phase-D ribbon emit (`do_emit`) + ribbon render pass |
+### Retired-pass policy
 
 The morphology pass is the one connection renderer; billboards are the body
-visual at all distances. Flip a const to `true` only to debug the old geometry.
+visual at all distances. Older ribbon and close-body branches were removed
+rather than preserved behind runtime or compile-time switches. Git history is
+the archive.
 
 ## Resource lifecycle
 
@@ -149,8 +132,8 @@ All large buffers are **persistent across frames**. Allocation happens only on a
 
 - **tier resize / network rebuild** — `GpuBackend::initialize` (called by
   `resize`) runs the `GpuResources::resize_neurons` + `init_render_resources` +
-  `init_near_lod_resources` + `init_edge_resources` + `init_morph_resources`
-  allocators, then `refresh_bind_groups`. `init_morph_resources` splits the
+  `init_morph_resources` allocators, then `refresh_bind_groups`.
+  `init_morph_resources` splits the
   generated branch segments into `MorphSegmentChunk` resources using
   `morph_segment_chunk_layout` (64 MiB default budget, further capped by the
   adapter's storage-binding limit), allocates chunk-local compaction buffers
@@ -174,11 +157,10 @@ All large buffers are **persistent across frames**. Allocation happens only on a
   manifold, placement, spatial grid, morphology segments, soma instances, and
   metadata produced away from the main thread. The payload is GPU-agnostic and
   flat; `GpuBackend::initialize_prepared` still runs `resize_neurons`,
-  `init_render_resources`, `init_near_lod_resources`, `init_edge_resources`,
-  `GpuResources::init_morph_resources_from_prepared`, and `finish_initialize`
-  on the main thread. Segment chunking remains an upload/resource policy inside
-  `GpuResources`; the worker never encodes chunk layout or creates WebGPU
-  resources.
+  `init_render_resources`, `GpuResources::init_morph_resources_from_prepared`,
+  and `finish_initialize` on the main thread. Segment chunking remains an
+  upload/resource policy inside `GpuResources`; the worker never encodes chunk
+  layout or creates WebGPU resources.
 
 ### Browser startup staging
 
@@ -193,8 +175,8 @@ between each call:
    applies the prepared visual/morph config without running generator work.
 2. `startup_upload_neuron_buffers` → `GpuResources::resize_neurons`.
 3. `startup_upload_render_resources` → `GpuResources::init_render_resources`.
-4. `startup_allocate_lod_edge_resources` →
-   `init_near_lod_resources` + `init_edge_resources`.
+4. `startup_allocate_lod_edge_resources` → compatibility startup stage with no
+   retired resource allocation.
 5. `startup_upload_morphology` → `GpuResources::init_morph_resources_from_prepared`.
 6. `startup_finish_network` → `refresh_bind_groups`, `write_connect_uniform`,
    and the per-network runtime-state reset.
@@ -221,8 +203,8 @@ bind group pointing at a freed buffer can never reach a dispatch.
 
 ## Async non-blocking readback state machine
 
-Shared shape for the two instrumentation readbacks (metrics + edge_emitted).
-Driven by `GpuBackend::update_metrics`, modelled in
+Shared shape for the metrics instrumentation readback. Driven by
+`GpuBackend::update_metrics`, modelled in
 [`profiling.md`](profiling.md):
 
 - **Idle** — safe to issue: zero `metrics_buf`, dispatch the read-only
@@ -242,10 +224,9 @@ COPY+MAP round-trip is not per-tick.
 
 On wasm/WebGPU `device.poll(Wait)` is a documented no-op, so a *blocking* map can
 never resolve and would leave staging permanently mapped — poisoning the next
-encoder. Therefore the **blocking** readbacks (`read_stats`, `read_u32`,
-`read_near_lod_stats`, the per-batch `stats_staging` / `edge_emitted` copies) are
-all `#[cfg(not(target_arch = "wasm32"))]` and return 0 on wasm. The
-metrics/edge_emitted *non-blocking* state machine works identically on both.
+encoder. Therefore the **blocking** readback (`read_stats` and the per-batch
+`stats_staging` copy) is `#[cfg(not(target_arch = "wasm32"))]` and returns 0 on
+wasm. The metrics *non-blocking* state machine works identically on both.
 `debug_dynamics_snapshot` / `readback` are explicit stalls for crates/brain-visualizer/tests/debug only —
 never on the hot path.
 
@@ -274,14 +255,13 @@ clock-driven.
 - A new persistent resource set or `init_*` allocator is added (update the
   lifecycle + dirty-flag section).
 - The readback state machine gains a state or a new staged buffer.
-- A `DRAW_LEGACY_*` guard is added, removed, or flipped to default-on.
 - The indirect-scatter contract changes (e.g. spike_count consumed differently).
 
 ## See also
 
 - [`simulation.md`](simulation.md) — LIF/dynamics math inside integrate/scatter
 - [`gpu-rendering.md`](gpu-rendering.md) — visual logic of the render passes
-- [`active-edges.md`](active-edges.md) — edge/ribbon emit + ring internals
+- [`active-edges.md`](active-edges.md) — deleted active-edge ribbon history
 - [`profiling.md`](profiling.md) — metrics meaning + parseMetrics
 - [`data-model.md`](data-model.md) — buffer/field layouts
 - [`../decisions/backends.md`](../decisions/backends.md) — GPU-only / clock-driven rationale

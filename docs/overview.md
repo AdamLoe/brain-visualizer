@@ -46,11 +46,10 @@ docs capture but a casual reader may not expect:
   normalized to GPU at load. See
   [architecture/cpu-backend.md](architecture/cpu-backend.md).
 - **The live connection/neuron visual is the per-neuron *morphology* renderer**
-  (`crates/brain-visualizer/src/sim/morphology.rs` → `render_morphology.wgsl`). The active-edge **ribbon**
-  pass, the near-LOD **cylinder** pass, and the near-LOD **sphere** pass are all
-  retired behind `DRAW_LEGACY_*` flags in `crates/brain-visualizer/src/sim/gpu/mod.rs` — present but not
-  drawn. See [architecture/gpu-rendering.md](architecture/gpu-rendering.md) and
-  [architecture/active-edges.md](architecture/active-edges.md).
+  (`crates/brain-visualizer/src/sim/morphology.rs` → `render_morphology.wgsl`).
+  Older ribbon and close-body branches have been deleted; git history is the
+  archive. See [architecture/gpu-rendering.md](architecture/gpu-rendering.md)
+  and [architecture/active-edges.md](architecture/active-edges.md).
 - **Regions are assigned uniformly at random over the volume**, not as
   contiguous anterior/posterior lobes; directionality comes from the
   excitatory feed-forward bias in the connectivity rule. See

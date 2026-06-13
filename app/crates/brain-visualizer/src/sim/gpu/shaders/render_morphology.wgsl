@@ -96,12 +96,8 @@ struct MorphUniforms {
 // `active_segment_count` instances and fetch segments[active_segment_indices[inst]].
 // Binding 6 is used
 // (not 3/4/5) so it does not collide with the soma pass bindings in this shared
-// module. When DRAW_LEGACY_ALL_SEGMENTS is on, `inst` indexes `segments`
-// directly (the old all-segment path, kept for debugging).
+// module.
 @group(0) @binding(6) var<storage, read> active_segment_indices: array<u32>;
-
-// Pipeline-overridable: 0 = compacted draw (default), 1 = legacy all-segment.
-override DRAW_LEGACY_ALL_SEGMENTS: u32 = 0u;
 
 // ── Soma sphere pass bindings (group 0, bindings 3/4/5) ──────────────────────
 // The sphere pipeline uses its OWN bind group layout (render_soma_spheres_bgl)
@@ -469,9 +465,7 @@ fn vs_main(
     @builtin(vertex_index) vid: u32,
     @builtin(instance_index) inst: u32,
 ) -> TubeVertOut {
-    // Compacted path (default): remap the instance through the active-segment
-    // index list. Legacy path (DRAW_LEGACY_ALL_SEGMENTS=1): instance == segment.
-    let seg_index = select(active_segment_indices[inst], inst, DRAW_LEGACY_ALL_SEGMENTS == 1u);
+    let seg_index = active_segment_indices[inst];
     let seg = segments[seg_index];
     let a = seg.a;
     let b = seg.b;

@@ -105,9 +105,8 @@ At device acquisition time, `crates/brain-visualizer/src/gpu_limits.rs → GpuCa
 `wgpu::Limits` into project-level caps (`GpuCaps`): workgroup size (largest
 power-of-two ≤ both the X-size and invocation caps, capped at 256 for
 occupancy), max neurons per single 4-byte storage binding, max flat dispatch
-threads, max scan items, and max near-LOD instances. All downstream tier,
-dispatch-split, and instance-count logic reads `GpuCaps` rather than hard-coding
-device assumptions.
+threads, and max scan items. All downstream tier and dispatch-split logic reads
+`GpuCaps` rather than hard-coding device assumptions.
 
 The derivation is pure (takes a plain `LimitsInput` struct) and is exercised by
 `cargo test` without a real device. The `LimitsInput::webgpu_defaults()` fixture

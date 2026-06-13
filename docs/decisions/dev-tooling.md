@@ -33,14 +33,15 @@
 
 - **Decision.** Most `VisualizerSettings` fields are `"live"`, but
   `connectionCurveLift` stays `"renderer-rebuild"` and the descriptor-driven
-  morphology generator/render-quality groups are still rebuild-backed. The
-  `brain-reset` API slots (`ApplyHandlers`, pending-dot, `clearPendingBrainReset`)
-  are preserved as no-ops.
+  morphology generator/render-quality groups are still rebuild-backed. The old
+  brain-reset Apply API and pending UI are removed; rebuilds go through the
+  network/morphology rebuild controls.
 - **Why.** `heterogeneity`, `weightNormalization`, and `inputMode` are `"live"`
   because the integrate uniform is read from GPU memory every tick rather than
   cached at init. `connectionCurveLift` and the morphology generator/quality
   controls still change baked geometry or WGSL overrides, so keeping them
-  explicit avoids pretending they are cheap live knobs.
+  explicit avoids pretending they are cheap live knobs. Removing the no-op Apply
+  surface avoids suggesting there is a second rebuild path.
 - **Applies to.** [`../architecture/dev-panel.md`](../architecture/dev-panel.md).
 - **Revisit when.** A truly structural setting is added (e.g. one that changes
   buffer sizes or requires re-uploading connectivity).
@@ -117,12 +118,12 @@
 
 ## Tombstone or quarantine dead Float32Array slots instead of renumbering
 
-- **Decision.** `connectionLightPast` (index 9), `signalSource` (index 16), and
-  `adaptiveScalerEnabled` (index 23) are removed from UI/debug persistence paths
-  and zero-written, but the 26-slot `VisualSettings` array is not renumbered.
-  `pointRadius` (index 1), `surfaceOpacity` (index 11), and `surface` (index
-  20) are also removed from UI/persistence and default-written rather than
-  renumbered or exposed.
+- **Decision.** `connectionLightPast` (index 9), `bloomStrength` as a user
+  setting (index 10), `signalSource` (index 16), and `adaptiveScalerEnabled`
+  (index 23) are removed from UI/debug persistence paths and zero-written, but
+  the 26-slot `VisualSettings` array is not renumbered. `pointRadius` (index 1),
+  `surfaceOpacity` (index 11), and `surface` (index 20) are also removed from
+  UI/persistence and default-written rather than renumbered or exposed.
 - **Why.** Renumbering the Rust/TypeScript flat-array contract is a corruption
   risk with little payoff. Tombstoning/quarantining removes misleading controls
   while keeping old positional meaning stable and keeping dormant Rust render

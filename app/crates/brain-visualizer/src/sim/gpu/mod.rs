@@ -16,9 +16,8 @@ pub mod resources;
 use crate::sim::backend::{RenderState, SimBackend, SimConfig, TickStats};
 use pipelines::GpuPipelines;
 use resources::{
-    EdgeUniforms, FrustumCullUniforms, GpuBindGroups, GpuLayouts, GpuResources, IntegrateUniforms,
-    MetricsUniforms, MorphUniforms, NearLodStats, NearRenderUniforms, RenderUniforms,
-    RibbonUniforms, StimUniform, EDGE_CAP, METRICS_SLOT_COUNT,
+    GpuBindGroups, GpuLayouts, GpuResources, IntegrateUniforms, MetricsUniforms, MorphUniforms,
+    RenderUniforms, StimUniform, METRICS_SLOT_COUNT,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -528,7 +527,7 @@ pub struct VisualSettings {
     /// index 6  — Morphology controls: branch-width multiplier on the stored
     /// tube radii (default 1.0; <1 thinner, >1 thicker)
     pub connection_visual_width: f32,
-    /// index 7  — Bézier midpoint lift for ribbon curves (default 0.15)
+    /// index 7  — axon branch curve lift (default 0.15)
     pub connection_curve_lift: f32,
     /// index 8  — Morphology controls: light a firing neuron's downstream
     /// (outgoing) axon connections (0 = off, 1 = on; default 1)
@@ -554,7 +553,7 @@ pub struct VisualSettings {
     // ── mode enums (stored as integer cast to f32) ─────────────────────────
     /// index 16 — reserved_zero (signalSource removed)
     pub signal_source: u32,
-    /// index 17 — connection_layer mode: 0=Off, 1=Active/recent only (default), 2=Resting debug
+    /// index 17 — connection_layer mode: 0=Off, 1=Active/recent only (default)
     pub connection_layer: u32,
     /// index 18 — color_by mode (default 6 = Brain)
     pub color_by: u32,
@@ -601,7 +600,7 @@ impl Default for VisualSettings {
             morph_resting_opacity: 0.0,
             signal_source: 0,
             // Morphology controls: 0=Off (skip all morphology work), 1=Active/recent only
-            // (default — compacted GPU draw of recently-lit segments + somas), 2=Resting debug.
+            // (default — compacted GPU draw of recently-lit segments + somas).
             connection_layer: 1,
             color_by: 6,
             neuron_visibility: 0,
@@ -643,7 +642,7 @@ impl VisualSettings {
             heterogeneity: f(14, d.heterogeneity),
             morph_resting_opacity: f(15, d.morph_resting_opacity),
             signal_source: 0, // index 16: reserved_zero (signalSource removed)
-            connection_layer: u(17, d.connection_layer),
+            connection_layer: normalize_connection_layer(u(17, d.connection_layer)),
             color_by: u(18, d.color_by),
             neuron_visibility: u(19, d.neuron_visibility),
             surface: u(20, d.surface),
@@ -688,6 +687,10 @@ impl VisualSettings {
     }
 }
 
+fn normalize_connection_layer(mode: u32) -> u32 {
+    if mode == 0 { 0 } else { 1 }
+}
+
 pub fn reach_from_visual_settings(visual: &VisualSettings) -> crate::connectivity::ReachParams {
     let den = crate::connectivity::REACH_FRAC_DEN;
     let frac = (visual.long_range_reach_frac * den as f32).round();
@@ -708,46 +711,11 @@ pub fn morph_params_from_config_and_visual(
         .with_curve_lift(visual.connection_curve_lift)
 }
 
-// ─── LOD transition thresholds ───────────────────────────────────────────────
-/// Camera distance above which only far-LOD runs.
-const LOD_FAR_ONLY_DIST: f32 = 1.5;
-/// Camera distance below which only near-LOD runs.
-const LOD_NEAR_ONLY_DIST: f32 = 0.8;
-
 /// LIF parameters (phase-2 spec; locked, adjust only via excitability gain).
 const LEAK_DECAY: f32 = 0.95;
 const THRESHOLD: f32 = 1.0;
 const RESET_POTENTIAL: f32 = 0.0;
 const REFRACTORY_TICKS: u32 = 5;
-
-/// V2 Phase E: the active-edge ribbon renderer (Phase D) is now the ONE
-/// connection renderer. The legacy near-LOD straight-cylinder synapse path is
-/// kept (not deleted) but guarded off so it never double-draws connections.
-/// Flip to true only for debugging the legacy near-LOD synapse geometry.
-const DRAW_LEGACY_CYLINDERS: bool = false;
-
-/// UX fix (near-LOD / shadow line): the near-LOD faceted icosphere body
-/// (render_sphere.wgsl, a level-1 20-tri icosphere) is retired the same way the
-/// cylinders were. Up close it read as a blocky "hexagon of color" (BUG 5) and
-/// its `abs(dot(n,light))` shading drew a dark terminator band per sphere — the
-/// "shadow line on the ball" (BUG 9). The soft additive billboards
-/// (render_far.wgsl) are the beauty-first body visual at ALL distances now.
-/// Kept (not deleted) and guarded off; flip to true only to debug the geometry.
-const DRAW_LEGACY_NEAR_SPHERES: bool = false;
-
-/// Morphology: the Phase-D active-edge ribbon (1 curved arc per firing neuron)
-/// is RETIRED. Real procedural neuron morphology (soma + dendrite tree + axon
-/// arbor with an outward signal pulse) is the connection visual now. The ribbon
-/// emit pass (in tick) and render pass (in render_full) are both gated behind
-/// this const — mirroring DRAW_LEGACY_NEAR_SPHERES — so the code is preserved
-/// (flip to true only to debug the old ribbons), never double-drawing.
-const DRAW_LEGACY_RIBBONS: bool = false;
-
-/// Morphology controls: the retired ribbon emit ring's modulus used to read the
-/// `max_active_visual_edges` budget; that field was repurposed to
-/// `morph_resting_opacity`, so the gated-off (DRAW_LEGACY_RIBBONS=false) ribbon
-/// path uses this fixed fallback budget instead. Never reached by default.
-const LEGACY_RIBBON_EDGE_BUDGET: u32 = 100;
 
 /// Morphology controls: default resting structure opacity (matches the
 /// VisualSettings default for morph_resting_opacity). Resting brightness is now
@@ -836,10 +804,6 @@ pub struct GpuBackend {
     synaptic_scale: f32,
     /// Pending stimulation parameters (written via stimulate(), consumed at tick start).
     stim_pending: Option<StimUniform>,
-    /// Phase 4: most recently read near-LOD profiler stats (non-blocking readback).
-    pub near_lod_stats: NearLodStats,
-    /// Phase 4: camera distance from surface (set by caller each frame).
-    lod_camera_distance: f32,
     /// V2 Phase 0: merged visual + sim settings (source of truth for glow_tau,
     /// point_radius, i_ext, synaptic_scale, and future visual knobs).
     visual: VisualSettings,
@@ -856,11 +820,6 @@ pub struct GpuBackend {
     last_cascade_age: u32,
     /// Ticks elapsed since the last reduction was issued (throttle counter).
     ticks_since_metrics_issue: u32,
-    // ─── V2 Phase D: active-edge emit instrumentation ─────────────────────────
-    /// Last read edge_emitted count (edges emitted in the most recent tick batch
-    /// where the connection layer was active). "No silent caps": queryable via
-    /// `edges_emitted_last()`. 0 when the layer is off.
-    edges_emitted_last: u32,
     /// V2 Phase E: surface color format the render pipelines were built for.
     /// The bloom HDR scene target uses THIS format (so the scene pipelines stay
     /// compatible); only the bloom blur ping-pong is rgba16float.
@@ -914,8 +873,6 @@ impl GpuBackend {
             i_ext,
             synaptic_scale: 1.0,
             stim_pending: None,
-            near_lod_stats: NearLodStats::default(),
-            lod_camera_distance: f32::MAX,
             visual,
             // V2 Phase A
             metrics_state: MetricsReadState::Idle,
@@ -924,7 +881,6 @@ impl GpuBackend {
             metrics_history: std::collections::VecDeque::with_capacity(METRICS_HISTORY_LEN),
             last_cascade_age: 0,
             ticks_since_metrics_issue: METRICS_ISSUE_INTERVAL, // issue on first batch
-            edges_emitted_last: 0,
             // V2 Phase E: overwritten by build_render_pipelines with the real
             // surface format; this is only a placeholder until then.
             render_color_format: wgpu::TextureFormat::Rgba8Unorm,
@@ -948,7 +904,8 @@ impl GpuBackend {
     /// the live sim knobs (i_ext, synaptic_scale) so the next tick picks them
     /// up.  All other fields are consumed by render_full (glow_tau/point_radius)
     /// or by future phases.
-    pub fn set_visual_settings(&mut self, v: VisualSettings) {
+    pub fn set_visual_settings(&mut self, mut v: VisualSettings) {
+        v.connection_layer = normalize_connection_layer(v.connection_layer);
         self.set_i_ext(v.i_ext);
         self.set_synaptic_scale(v.synaptic_scale);
         // Morphology controls: connection_curve_lift is baked into the axon bow at
@@ -1139,18 +1096,10 @@ impl GpuBackend {
     /// Set the connection-layer mode.
     ///   0 = Off — skip ALL morphology work: compaction compute, tube passes, soma sphere passes.
     ///   1 = Active/recent only (default) — compacted GPU draw of recently-lit tubes + somas.
-    ///   2 = Resting debug — intended to show full resting morphology via the legacy
-    ///       all-segment path; currently behaves like mode 1 unless `DRAW_LEGACY_ALL_SEGMENTS`
-    ///       in pipelines.rs is flipped to true at compile time.
+    /// Values above 1 are normalized to 1 for compatibility with old saved settings.
     /// Granular setter so the harness/UI can flip it without a full VisualSettings snapshot.
     pub fn set_connection_layer(&mut self, mode: u32) {
-        self.visual.connection_layer = mode;
-    }
-
-    /// "No silent caps": edges emitted in the most recent active tick batch.
-    /// 0 when the connection layer is off. Read back non-blocking on native.
-    pub fn edges_emitted_last(&self) -> u32 {
-        self.edges_emitted_last
+        self.visual.connection_layer = normalize_connection_layer(mode);
     }
 
     /// V2 Phase E: set the bloom post-process intensity. 0.0 (default) = OFF →
@@ -1429,9 +1378,10 @@ impl GpuBackend {
     pub fn begin_initialize_prepared_with_settings(
         &mut self,
         prepared: PreparedNetworkBuild,
-        visual: VisualSettings,
+        mut visual: VisualSettings,
         morph_config: crate::sim::morphology::MorphologyConfig,
     ) -> NetworkBuildState {
+        visual.connection_layer = normalize_connection_layer(visual.connection_layer);
         self.set_i_ext(visual.i_ext);
         self.set_synaptic_scale(visual.synaptic_scale);
         self.visual = visual;
@@ -1462,16 +1412,10 @@ impl GpuBackend {
         );
     }
 
-    /// Allocate near-LOD + persistent edge resources for a staged build.
+    /// Compatibility stage retained for startup sequencing after legacy LOD and
+    /// edge-ring resources were removed.
     pub fn initialize_lod_edge_resources(&mut self, state: &NetworkBuildState) {
-        self.resources.init_near_lod_resources(
-            &self.ctx.device,
-            &self.ctx.queue,
-            &state.config,
-            &state.manifold.spatial_grid,
-        );
-        self.resources
-            .init_edge_resources(&self.ctx.device, &self.ctx.queue);
+        let _ = state;
     }
 
     /// Generate and upload morphology buffers for a staged build.
@@ -1513,7 +1457,6 @@ impl GpuBackend {
         self.parity = 0;
         self.max_abs_current_hw = 0;
         self.stim_pending = None;
-        self.near_lod_stats = NearLodStats::default();
         // V2 Phase A: reset metrics readback state (buffers were recreated).
         self.metrics_state = MetricsReadState::Idle;
         self.metrics_ready.store(false, Ordering::SeqCst);
@@ -1521,7 +1464,6 @@ impl GpuBackend {
         self.metrics_history.clear();
         self.last_cascade_age = 0;
         self.ticks_since_metrics_issue = METRICS_ISSUE_INTERVAL;
-        self.edges_emitted_last = 0;
     }
 
     /// Build the network from a manifold and upload the silent-start state.
@@ -1567,20 +1509,11 @@ impl GpuBackend {
         }
         self.morph_tube_verts = tube_verts(rq.tube_sides);
         self.morph_sphere_verts = sphere_verts(rq.sphere_slices, rq.sphere_stacks);
-        // Phase 4: near-LOD pipelines use the same color format.
-        self.pipelines
-            .build_near_lod(&self.ctx.device, &self.layouts, color_format);
     }
 
-    /// Set camera distance (from surface/origin) each frame so near-LOD can
-    /// decide whether to run. Phase 5 (controls) will call this.
-    pub fn set_lod_camera_distance(&mut self, d: f32) {
-        self.lod_camera_distance = d;
-    }
-
-    /// Return the most recently read near-LOD profiler stats.
-    pub fn near_lod_stats(&self) -> NearLodStats {
-        self.near_lod_stats
+    /// Compatibility no-op for older callers; the renderer no longer has a
+    /// distance-gated geometry path.
+    pub fn set_lod_camera_distance(&mut self, _d: f32) {
     }
 
     /// Resize the depth texture when the canvas/offscreen dimensions change.
@@ -1593,15 +1526,8 @@ impl GpuBackend {
         );
     }
 
-    /// Render one frame. Encodes:
-    ///   1. manifold dark mesh pass (depth write, opaque),
-    ///   2. far-LOD billboard glow pass (additive, no depth write),
-    ///   3. (when near LOD active) cull_neurons → cull_synapses → write_indirect
-    ///      → sphere render → cylinder render (depth test against pass 1).
-    ///
-    /// `camera_pos` is the eye position in world space (needed for frustum cull).
-    /// `camera_distance` is ||eye - origin||; the caller may pass f32::MAX to
-    /// force far-only mode.
+    /// Render one frame. Encodes the optional manifold pass, the far billboard
+    /// pass, morphology passes, active-opacity passes, and optional bloom.
     ///
     /// Upload pattern (per-frame): write render_uniform + manifold_uniform via
     /// queue.write_buffer; the bind groups already reference those buffers so
@@ -1615,7 +1541,6 @@ impl GpuBackend {
         glow_tau: f32,
         point_radius: f32,
     ) {
-        // Default to far-only: caller did not set camera_distance explicitly.
         self.render_full(
             target_view,
             mvp,
@@ -1624,12 +1549,11 @@ impl GpuBackend {
             glow_tau,
             point_radius,
             [0.0, 0.0, 3.0],
-            self.lod_camera_distance,
+            f32::MAX,
         );
     }
 
-    /// Full render variant accepting camera_pos + camera_distance explicitly
-    /// (used by the near_lod_check harness and future TS bridge).
+    /// Full render variant accepting camera_pos + camera_distance explicitly.
     pub fn render_full(
         &mut self,
         target_view: &wgpu::TextureView,
@@ -1693,32 +1617,7 @@ impl GpuBackend {
 
         let n = self.config.n as u32;
 
-        // --- LOD transition ---
-        // UX fix (near-LOD / shadow line): the near-LOD faceted sphere is retired
-        // (see DRAW_LEGACY_NEAR_SPHERES). The soft billboards (render_far.wgsl) are
-        // the body visual at ALL camera distances — no crossfade to spheres — so we
-        // force far_alpha = 1.0. The legacy crossfade ramp is preserved below
-        // (computed only when the spheres are re-enabled for debugging) so flipping
-        // the const back on restores the exact old behavior.
-        let dist = camera_distance;
-        let _legacy_far_alpha = if dist >= LOD_FAR_ONLY_DIST {
-            1.0f32
-        } else if dist <= LOD_NEAR_ONLY_DIST {
-            0.0f32
-        } else {
-            (dist - LOD_NEAR_ONLY_DIST) / (LOD_FAR_ONLY_DIST - LOD_NEAR_ONLY_DIST)
-        };
-        // Billboards-everywhere: always full-strength. (Was `_legacy_far_alpha`.)
-        let far_alpha = if DRAW_LEGACY_NEAR_SPHERES {
-            _legacy_far_alpha
-        } else {
-            1.0f32
-        };
-        let near_alpha = 1.0 - far_alpha;
-        let run_near_lod = DRAW_LEGACY_NEAR_SPHERES
-            && near_alpha > 0.001
-            && self.resources.near_lod_buffers.is_some()
-            && self.pipelines.is_near_lod_built();
+        let _ = camera_distance;
 
         // Upload per-frame render uniforms.
         let ru = RenderUniforms {
@@ -1747,89 +1646,6 @@ impl GpuBackend {
         self.ctx
             .queue
             .write_buffer(&rr.render_uniform, 0, bytemuck::bytes_of(&ru));
-
-        // V2 Phase D: upload the per-frame ribbon uniform when the layer is on.
-        // Morphology: ribbons are RETIRED — gated behind DRAW_LEGACY_RIBBONS.
-        if DRAW_LEGACY_RIBBONS && self.visual.connection_layer != 0 {
-            if let Some(eb) = self.resources.edge_buffers.as_ref() {
-                let modulus = LEGACY_RIBBON_EDGE_BUDGET.min(EDGE_CAP);
-                let rib = RibbonUniforms {
-                    mvp: *mvp,
-                    camera_right,
-                    tick: self.tick,
-                    camera_up,
-                    // Morphology: ribbons are retired (DRAW_LEGACY_RIBBONS=false);
-                    // the lifetime/pulse-speed settings were repurposed to the
-                    // lighting toggles, so feed literal fallbacks here just to
-                    // keep this gated-off path compiling.
-                    lifetime: 60.0,
-                    width: self.visual.connection_visual_width,
-                    curve_lift: self.visual.connection_curve_lift,
-                    pulse_speed: 0.05,
-                    modulus,
-                    connection_layer: self.visual.connection_layer,
-                    _pad0: 0,
-                    _pad1: 0,
-                    _pad2: 0,
-                };
-                self.ctx
-                    .queue
-                    .write_buffer(&eb.ribbon_uniform, 0, bytemuck::bytes_of(&rib));
-            }
-        }
-
-        // Phase 4: upload per-frame near-LOD uniforms and frustum.
-        if run_near_lod {
-            if let Some(nlb) = self.resources.near_lod_buffers.as_ref() {
-                // Near-render uniform.
-                let nru = NearRenderUniforms {
-                    mvp: *mvp,
-                    camera_pos,
-                    sphere_radius: point_radius * 2.5, // larger than billboard radius
-                    lod_alpha: near_alpha,
-                    _pad: [0.0; 3],
-                };
-                self.ctx
-                    .queue
-                    .write_buffer(&nlb.near_render_uniform, 0, bytemuck::bytes_of(&nru));
-
-                // Extract 6 frustum planes from column-major MVP matrix.
-                // Standard Gribb/Hartmann plane extraction from MVP rows.
-                let planes = extract_frustum_planes(mvp);
-                let fu = FrustumCullUniforms {
-                    planes,
-                    camera_pos,
-                    max_synapse_dist: 2.5, // cull synapses beyond 2.5 world units
-                    current_tick: self.tick,
-                    n,
-                    _pad: [0; 2],
-                };
-                self.ctx
-                    .queue
-                    .write_buffer(&nlb.frustum_uniform, 0, bytemuck::bytes_of(&fu));
-
-                // Zero per-frame atomic counters.
-                let zero = [0u32];
-                self.ctx
-                    .queue
-                    .write_buffer(&nlb.neuron_count, 0, bytemuck::cast_slice(&zero));
-                self.ctx
-                    .queue
-                    .write_buffer(&nlb.synapse_count, 0, bytemuck::cast_slice(&zero));
-                self.ctx
-                    .queue
-                    .write_buffer(&nlb.neuron_overflow, 0, bytemuck::cast_slice(&zero));
-                self.ctx
-                    .queue
-                    .write_buffer(&nlb.synapse_overflow, 0, bytemuck::cast_slice(&zero));
-                self.ctx
-                    .queue
-                    .write_buffer(&nlb.neuron_visible, 0, bytemuck::cast_slice(&zero));
-                self.ctx
-                    .queue
-                    .write_buffer(&nlb.synapse_visible, 0, bytemuck::cast_slice(&zero));
-            }
-        }
 
         // V2 Phase E: optional surface context. When surface != 0 we upload the
         // manifold uniform (MVP + opacity + mode) and draw the dim mesh FIRST
@@ -1901,8 +1717,7 @@ impl GpuBackend {
 
         // Pass 1: far-LOD neuron glow — no depth test so all neurons are visible
         // from every angle. Clears to black each frame (unless the surface pass
-        // already cleared, in which case it loads on top). Near-LOD crossfade:
-        // skip draw when fully zoomed in, but still clear so near-LOD passes start clean.
+        // already cleared, in which case it loads on top).
         {
             let color_load = if draw_surface {
                 wgpu::LoadOp::Load
@@ -1930,11 +1745,9 @@ impl GpuBackend {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            if far_alpha > 0.001 {
-                pass.set_pipeline(pipe_far);
-                pass.set_bind_group(0, bg.render_far.as_ref().unwrap(), &[]);
-                pass.draw(0..6, 0..n);
-            }
+            pass.set_pipeline(pipe_far);
+            pass.set_bind_group(0, bg.render_far.as_ref().unwrap(), &[]);
+            pass.draw(0..6, 0..n);
         }
 
         // ─── Morphology: procedural neuron geometry pass ──────────────────────
@@ -1950,9 +1763,7 @@ impl GpuBackend {
         // draw ONLY those instances via draw_indirect — frame cost scales with
         // active/recent count, not total segment count. No CPU readback decides
         // the per-frame selection (discipline rule).
-        let compaction_ran = if self.visual.connection_layer != 0
-            && !crate::sim::gpu::pipelines::DRAW_LEGACY_ALL_SEGMENTS
-        {
+        let compaction_ran = if self.visual.connection_layer != 0 {
             if let (Some(p_reset), Some(p_compact), Some(p_write), Some(mb)) = (
                 self.pipelines.compact_morph_reset.as_ref(),
                 self.pipelines.compact_morph.as_ref(),
@@ -2057,7 +1868,7 @@ impl GpuBackend {
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
-                if mb.segment_count > 0 {
+                if mb.segment_count > 0 && compaction_ran {
                     pass.set_pipeline(pipe_morph);
                     // tube_sides * 2 * 3 verts per segment (two rings, triangulated
                     // as quads → 2 tris × 3 verts per side). v0.3.1: runtime value
@@ -2073,11 +1884,7 @@ impl GpuBackend {
                             continue;
                         }
                         pass.set_bind_group(0, &chunk_bg.render_morphology, &[]);
-                        if compaction_ran {
-                            pass.draw_indirect(&chunk.active_draw_args, 0);
-                        } else {
-                            pass.draw(0..self.morph_tube_verts, 0..chunk.segment_count);
-                        }
+                        pass.draw_indirect(&chunk.active_draw_args, 0);
                     }
                 }
             }
@@ -2086,8 +1893,7 @@ impl GpuBackend {
         // ─── NEW: true-opacity active tube pass ───────────────────────────────
         // Depth-tested, alpha-blended draw of the SAME tubes, on top of the
         // additive resting tube pass. Owns the frame's depth clear (Clear(1.0))
-        // since the additive passes never touch depth and the surface/near-LOD
-        // depth users are off by default. `fs_main_active` returns continuous
+        // since the additive passes never touch depth. `fs_main_active` returns continuous
         // spike-proximity straight alpha so active_opacity smoothly changes tube
         // occlusion while the bright packet remains fragment-local.
         // Reuses the additive tube bind group + draw count (same override consts).
@@ -2119,7 +1925,7 @@ impl GpuBackend {
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
-                if mb.segment_count > 0 {
+                if mb.segment_count > 0 && compaction_ran {
                     pass.set_pipeline(pipe_active);
                     // Same compacted instance list as the additive pass — the
                     // active-opacity pass MUST NOT reintroduce full-segment draws.
@@ -2130,11 +1936,7 @@ impl GpuBackend {
                             continue;
                         }
                         pass.set_bind_group(0, &chunk_bg.render_morphology, &[]);
-                        if compaction_ran {
-                            pass.draw_indirect(&chunk.active_draw_args, 0);
-                        } else {
-                            pass.draw(0..self.morph_tube_verts, 0..chunk.segment_count);
-                        }
+                        pass.draw_indirect(&chunk.active_draw_args, 0);
                     }
                 }
             }
@@ -2220,175 +2022,6 @@ impl GpuBackend {
                     pass.set_bind_group(0, soma_bg, &[]);
                     pass.draw(0..self.morph_sphere_verts, 0..n_spheres);
                 }
-            }
-        }
-
-        // ─── V2 Phase D: active-edge ribbon pass (RETIRED) ────────────────────
-        // Morphology replaces this. Gated behind DRAW_LEGACY_RIBBONS (default
-        // false) — kept only to debug the old curved-arc ribbons. Additive, no depth.
-        if DRAW_LEGACY_RIBBONS && self.visual.connection_layer != 0 {
-            if let (Some(pipe_ribbon), Some(rbg)) = (
-                self.pipelines.render_ribbon.as_ref(),
-                bg.render_ribbon.as_ref(),
-            ) {
-                let modulus = LEGACY_RIBBON_EDGE_BUDGET.min(EDGE_CAP);
-                // SEGMENTS=8 → 48 verts per instance (matches render_ribbon.wgsl).
-                const RIBBON_VERTS_PER_INSTANCE: u32 = 8 * 6;
-                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("ribbon-pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: scene_view,
-                        resolve_target: None,
-                        depth_slice: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Load,
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                if modulus > 0 {
-                    pass.set_pipeline(pipe_ribbon);
-                    pass.set_bind_group(0, rbg, &[]);
-                    pass.draw(0..RIBBON_VERTS_PER_INSTANCE, 0..modulus);
-                }
-            }
-        }
-
-        // ─── Phase 4: Near-LOD passes ─────────────────────────────────────────
-        // Only run when camera is close enough (near_alpha > threshold).
-        // Pass order: cull_neurons → cull_synapses → write_indirect →
-        //             draw_indexed_indirect(spheres) + draw_indexed_indirect(cylinders).
-        if run_near_lod {
-            let nlb = self.resources.near_lod_buffers.as_ref().unwrap();
-            let bg = self.resources.bind_groups.as_ref().unwrap();
-            let pipe_cull_n = self.pipelines.cull_neurons.as_ref().unwrap();
-            let pipe_cull_s = self.pipelines.cull_synapses.as_ref().unwrap();
-            let pipe_indirect = self.pipelines.write_indirect.as_ref().unwrap();
-            let pipe_sphere = self.pipelines.render_sphere.as_ref().unwrap();
-            let pipe_cylinder = self.pipelines.render_cylinder.as_ref().unwrap();
-            let cg0 = bg.cull_group0.as_ref().unwrap();
-            let cg1 = bg.cull_group1.as_ref().unwrap();
-            let dig = bg.draw_indirect.as_ref().unwrap();
-            let srg = bg.render_sphere.as_ref().unwrap();
-            let crg = bg.render_cylinder.as_ref().unwrap();
-
-            let cull_groups = n.div_ceil(256).max(1);
-
-            // Cull neurons compute pass.
-            {
-                let mut cp = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("cull-neurons"),
-                    timestamp_writes: None,
-                });
-                cp.set_pipeline(pipe_cull_n);
-                cp.set_bind_group(0, cg0, &[]);
-                cp.set_bind_group(1, cg1, &[]);
-                cp.dispatch_workgroups(cull_groups, 1, 1);
-            }
-            // Cull synapses compute pass.
-            // V2 Phase E: guarded behind DRAW_LEGACY_CYLINDERS — the ribbon pass
-            // (Phase D) is the one connection renderer now. Skipping the cull
-            // leaves synapse_count at 0 so the indirect cylinder draw is a no-op.
-            if DRAW_LEGACY_CYLINDERS {
-                let mut cp = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("cull-synapses"),
-                    timestamp_writes: None,
-                });
-                cp.set_pipeline(pipe_cull_s);
-                cp.set_bind_group(0, cg0, &[]);
-                cp.set_bind_group(1, cg1, &[]);
-                cp.dispatch_workgroups(cull_groups, 1, 1);
-            }
-            // Write indirect args.
-            {
-                let mut cp = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("write-indirect"),
-                    timestamp_writes: None,
-                });
-                cp.set_pipeline(pipe_indirect);
-                cp.set_bind_group(0, dig, &[]);
-                cp.dispatch_workgroups(1, 1, 1);
-            }
-            // Sphere render pass (draw_indexed_indirect).
-            // Clear depth here — the manifold prepass no longer does it.
-            {
-                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("near-sphere-pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: scene_view,
-                        resolve_target: None,
-                        depth_slice: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Load,
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                        view: depth_view,
-                        depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(1.0),
-                            store: wgpu::StoreOp::Store,
-                        }),
-                        stencil_ops: None,
-                    }),
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                pass.set_pipeline(pipe_sphere);
-                pass.set_bind_group(0, srg, &[]);
-                pass.set_vertex_buffer(0, nlb.sphere_vb.slice(..));
-                pass.set_index_buffer(nlb.sphere_ib.slice(..), wgpu::IndexFormat::Uint16);
-                pass.draw_indexed_indirect(&nlb.neuron_draw_args, 0);
-            }
-            // Cylinder render pass (legacy near-LOD straight connections).
-            // V2 Phase E: guarded off by default — see DRAW_LEGACY_CYLINDERS.
-            if DRAW_LEGACY_CYLINDERS {
-                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("near-cylinder-pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: scene_view,
-                        resolve_target: None,
-                        depth_slice: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Load,
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                        view: depth_view,
-                        depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Load,
-                            store: wgpu::StoreOp::Discard,
-                        }),
-                        stencil_ops: None,
-                    }),
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                pass.set_pipeline(pipe_cylinder);
-                pass.set_bind_group(0, crg, &[]);
-                pass.set_vertex_buffer(0, nlb.cylinder_vb.slice(..));
-                pass.set_index_buffer(nlb.cylinder_ib.slice(..), wgpu::IndexFormat::Uint16);
-                pass.draw_indexed_indirect(&nlb.synapse_draw_args, 0);
-            }
-
-            // Stage profiler counters for async readback (non-blocking; never stalls the loop).
-            // On wasm/WebGPU device.poll(Wait) is a no-op so map_async never resolves
-            // synchronously — identical deadlock risk as stats_staging in tick(). Skip.
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                enc.copy_buffer_to_buffer(&nlb.neuron_count, 0, &nlb.profiler_staging, 0, 4);
-                enc.copy_buffer_to_buffer(&nlb.neuron_overflow, 0, &nlb.profiler_staging, 4, 4);
-                enc.copy_buffer_to_buffer(&nlb.synapse_count, 0, &nlb.profiler_staging, 8, 4);
-                enc.copy_buffer_to_buffer(&nlb.synapse_overflow, 0, &nlb.profiler_staging, 12, 4);
-                enc.copy_buffer_to_buffer(&nlb.neuron_visible, 0, &nlb.profiler_staging, 16, 4);
-                enc.copy_buffer_to_buffer(&nlb.synapse_visible, 0, &nlb.profiler_staging, 20, 4);
             }
         }
 
@@ -2597,13 +2230,6 @@ impl GpuBackend {
 
         self.ctx.queue.submit([enc.finish()]);
 
-        // Non-blocking profiler readback for near-LOD stats (only when near-LOD ran).
-        #[cfg(not(target_arch = "wasm32"))]
-        if run_near_lod {
-            if let Some(nlb) = self.resources.near_lod_buffers.as_ref() {
-                self.near_lod_stats = read_near_lod_stats(&self.ctx.device, &nlb.profiler_staging);
-            }
-        }
     }
 
     /// Debug-mode correctness check (architecture §"correctness checks"). Reads
@@ -2903,25 +2529,6 @@ impl SimBackend for GpuBackend {
         let pipe_write = self.pipelines.write_dispatch.as_ref().unwrap();
         let pipe_scatter = self.pipelines.scatter.as_ref().unwrap();
 
-        // V2 Phase D: active-edge emit pass — ONLY when the connection layer is on
-        // (default off ⇒ these resolve to None-paths and the pass is SKIPPED
-        // ENTIRELY, so determinism/dynamics are bit-for-bit unaffected).
-        let connection_layer = self.visual.connection_layer;
-        let edge_modulus = LEGACY_RIBBON_EDGE_BUDGET.min(EDGE_CAP);
-        // Morphology: the active-edge emit pass feeds the RETIRED ribbon renderer.
-        // Gate it behind DRAW_LEGACY_RIBBONS so it never runs by default (the
-        // morphology pulse reads neuron last_spike directly — no edge ring needed).
-        let do_emit = DRAW_LEGACY_RIBBONS
-            && connection_layer != 0
-            && self.pipelines.emit_edges.is_some()
-            && bg.emit_edges.is_some()
-            && bg.emit_edges_uniform.is_some()
-            && self.resources.edge_buffers.is_some();
-        let pipe_emit = self.pipelines.emit_edges.as_ref();
-        let emit_bg = bg.emit_edges.as_ref();
-        let emit_u_bg = bg.emit_edges_uniform.as_ref();
-        let edge_bufs = self.resources.edge_buffers.as_ref();
-
         // Phase 3: write stimulation uniform. Pre-extract stim resources so the
         // borrow checker can split self.pipelines / self.resources borrows.
         let stim_pending = self.stim_pending.take();
@@ -3024,43 +2631,6 @@ impl SimBackend for GpuBackend {
                 cp.dispatch_workgroups_indirect(&sim.dispatch_args, 0);
             }
 
-            // V2 Phase D: emit one active-edge per firing neuron AFTER scatter.
-            // Skipped entirely when the connection layer is off.
-            if do_emit {
-                if let (Some(pe), Some(ebg), Some(eubg), Some(eb)) =
-                    (pipe_emit, emit_bg, emit_u_bg, edge_bufs)
-                {
-                    // Update the per-tick edge uniform + zero the per-frame counter.
-                    let eu = EdgeUniforms {
-                        tick: self.tick,
-                        n,
-                        k: self.config.k as u32,
-                        seed_lo: self.config.seed_lo(),
-                        grid_dim: self
-                            .resources
-                            .grid_buffers
-                            .as_ref()
-                            .map(|g| g.grid_dim)
-                            .unwrap_or(1),
-                        modulus: edge_modulus,
-                        sample_stride: 1, // emit per firing neuron (ring caps the budget)
-                        _pad: 0,
-                    };
-                    queue.write_buffer(&eb.edge_uniform, 0, bytemuck::bytes_of(&eu));
-                    queue.write_buffer(&eb.edge_emitted, 0, bytemuck::cast_slice(&zero));
-                    // Dispatch one thread per neuron; threads past spike_count early-out.
-                    let emit_groups = n.div_ceil(64).max(1);
-                    let mut cp = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                        label: Some("emit_edges"),
-                        timestamp_writes: None,
-                    });
-                    cp.set_pipeline(pe);
-                    cp.set_bind_group(0, ebg, &[]);
-                    cp.set_bind_group(1, eubg, &[]);
-                    cp.dispatch_workgroups(emit_groups, 1, 1);
-                }
-            }
-
             // Flip double-buffer parity: next tick integrate reads what scatter
             // just wrote, and scatter writes the buffer integrate just consumed.
             self.parity ^= 1;
@@ -3081,35 +2651,15 @@ impl SimBackend for GpuBackend {
         {
             enc.copy_buffer_to_buffer(&sim.spike_count, 0, &sim.stats_staging, 0, 4);
             enc.copy_buffer_to_buffer(&sim.max_abs_current, 0, &sim.stats_staging, 4, 4);
-            // V2 Phase D: stage edge_emitted (no silent caps). Only when active.
-            if do_emit {
-                if let Some(eb) = edge_bufs {
-                    enc.copy_buffer_to_buffer(&eb.edge_emitted, 0, &eb.edge_emitted_staging, 0, 4);
-                }
-            }
         }
 
         queue.submit([enc.finish()]);
 
         #[cfg(not(target_arch = "wasm32"))]
         let (last_spikes, max_abs) = read_stats(device, &sim.stats_staging);
-        // V2 Phase D: read edge_emitted into a temp here (immutable borrows of
-        // device + edge_bufs still live); assign to self below after they drop.
-        #[cfg(not(target_arch = "wasm32"))]
-        let edges_emitted = if do_emit {
-            edge_bufs
-                .map(|eb| read_u32(device, &eb.edge_emitted_staging))
-                .unwrap_or(0)
-        } else {
-            0
-        };
-        #[cfg(target_arch = "wasm32")]
-        let edges_emitted = 0u32;
         #[cfg(target_arch = "wasm32")]
         let (last_spikes, max_abs) = (0u32, 0u32);
         self.max_abs_current_hw = self.max_abs_current_hw.max(max_abs);
-        // V2 Phase D: surface the emit count (0 when the layer is off).
-        self.edges_emitted_last = edges_emitted;
 
         // V2 Phase A: advance the metrics throttle by this batch, then drive the
         // metrics reduction + non-blocking readback state machine. This re-borrows
@@ -3172,74 +2722,6 @@ impl SimBackend for GpuBackend {
     }
 }
 
-/// Extract 6 frustum planes from a column-major MVP matrix (Gribb-Hartmann).
-/// Returns [[a,b,c,d]; 6] where ax+by+cz+d >= 0 is inside. Each plane is
-/// UNNORMALIZED (sufficient for sign tests). Planes: left, right, bottom, top, near, far.
-fn extract_frustum_planes(m: &[f32; 16]) -> [[f32; 4]; 6] {
-    // Column-major: m[col*4 + row]. Row vectors of the matrix for plane extraction.
-    // Row 0: m[0],m[4],m[8],m[12]
-    // Row 1: m[1],m[5],m[9],m[13]
-    // Row 2: m[2],m[6],m[10],m[14]
-    // Row 3: m[3],m[7],m[11],m[15]
-    let row0 = [m[0], m[4], m[8], m[12]];
-    let row1 = [m[1], m[5], m[9], m[13]];
-    let row2 = [m[2], m[6], m[10], m[14]];
-    let row3 = [m[3], m[7], m[11], m[15]];
-
-    let add = |a: [f32; 4], b: [f32; 4]| [a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3]];
-    let sub = |a: [f32; 4], b: [f32; 4]| [a[0] - b[0], a[1] - b[1], a[2] - b[2], a[3] - b[3]];
-
-    // Left:   row3 + row0
-    // Right:  row3 - row0
-    // Bottom: row3 + row1
-    // Top:    row3 - row1
-    // Near:   row3 + row2
-    // Far:    row3 - row2
-    [
-        add(row3, row0), // left
-        sub(row3, row0), // right
-        add(row3, row1), // bottom
-        sub(row3, row1), // top
-        add(row3, row2), // near
-        sub(row3, row2), // far
-    ]
-}
-
-/// Read near-LOD profiler stats from the staging buffer (blocks once per frame).
-#[cfg(not(target_arch = "wasm32"))]
-fn read_near_lod_stats(device: &wgpu::Device, staging: &wgpu::Buffer) -> NearLodStats {
-    let slice = staging.slice(..);
-    let (tx, rx) = std::sync::mpsc::channel();
-    slice.map_async(wgpu::MapMode::Read, move |r| {
-        let _ = tx.send(r);
-    });
-    let _ = device.poll(wgpu::PollType::Wait {
-        submission_index: None,
-        timeout: None,
-    });
-    if rx.recv().is_err() {
-        return NearLodStats::default();
-    }
-    let data = slice.get_mapped_range();
-    let words: &[u32] = bytemuck::cast_slice(&*data);
-    if words.len() < 6 {
-        drop(data);
-        staging.unmap();
-        return NearLodStats::default();
-    }
-    let stats = NearLodStats {
-        emitted_neuron_instances: words[0],
-        neuron_overflow: words[1],
-        emitted_synapse_instances: words[2],
-        synapse_overflow: words[3],
-        visible_neuron_candidates: words[4],
-        visible_synapse_candidates: words[5],
-    };
-    drop(data);
-    staging.unmap();
-    stats
-}
-
 /// One-shot stats readback: map the 8-byte staging buffer, return
 /// (spike_count, max_abs_current). Blocks on poll — acceptable once per batch.
 #[cfg(not(target_arch = "wasm32"))]
@@ -3259,30 +2741,6 @@ fn read_stats(device: &wgpu::Device, staging: &wgpu::Buffer) -> (u32, u32) {
     let data = slice.get_mapped_range();
     let words: &[u32] = bytemuck::cast_slice(&data);
     let out = (words[0], words[1]);
-    drop(data);
-    staging.unmap();
-    out
-}
-
-/// V2 Phase D: read a single u32 from a 4-byte staging buffer (blocks on poll;
-/// once per batch, acceptable — instrumentation only). Used for edge_emitted.
-#[cfg(not(target_arch = "wasm32"))]
-fn read_u32(device: &wgpu::Device, staging: &wgpu::Buffer) -> u32 {
-    let slice = staging.slice(..);
-    let (tx, rx) = std::sync::mpsc::channel();
-    slice.map_async(wgpu::MapMode::Read, move |r| {
-        let _ = tx.send(r);
-    });
-    let _ = device.poll(wgpu::PollType::Wait {
-        submission_index: None,
-        timeout: None,
-    });
-    if rx.recv().is_err() {
-        return 0;
-    }
-    let data = slice.get_mapped_range();
-    let words: &[u32] = bytemuck::cast_slice(&data);
-    let out = if words.is_empty() { 0 } else { words[0] };
     drop(data);
     staging.unmap();
     out
@@ -3397,7 +2855,7 @@ mod tests {
         assert_eq!(settings.heterogeneity, 15.0);
         assert_eq!(settings.morph_resting_opacity, 16.0);
         assert_eq!(settings.signal_source, 0);
-        assert_eq!(settings.connection_layer, 18);
+        assert_eq!(settings.connection_layer, 1);
         assert_eq!(settings.color_by, 19);
         assert_eq!(settings.neuron_visibility, 20);
         assert_eq!(settings.surface, 21);

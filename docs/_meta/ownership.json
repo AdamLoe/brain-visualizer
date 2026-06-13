@@ -34,13 +34,13 @@
     },
     {
       "id": "gpu-rendering",
-      "summary": "render LOD scheme (far additive glow billboards, live per-neuron morphology pass, retired near-sphere/cylinder behind DRAW_LEGACY_*), the depth-tested alpha active-opacity layer (active=firing tubes/somas occlude the additive resting layer; active_opacity/inactive_opacity_floor knobs), frustum-cull→indirect-draw, manifold surface render, HDR/bloom, visual mode enums (color_by/neuron_visibility/signal_source/surface)",
+      "summary": "render scheme (far additive glow billboards, live per-neuron morphology pass), the depth-tested alpha active-opacity layer (active=firing tubes/somas occlude the additive resting layer; active_opacity/inactive_opacity_floor knobs), morphology compaction and indirect draws, manifold surface render, HDR/bloom, visual mode enums (color_by/neuron_visibility/signal_source/surface)",
       "owner": "architecture/gpu-rendering.md",
       "references": ["architecture/gpu-backend.md", "architecture/active-edges.md", "architecture/manifold.md", "architecture/simulation.md"]
     },
     {
       "id": "active-edges",
-      "summary": "the retired active-edge ribbon subsystem (EdgeEvent emit-on-spike, ring buffer + budget, GPU-side Bezier ribbon geometry); kept but guarded off by DRAW_LEGACY_RIBBONS — morphology superseded it",
+      "summary": "the retired active-edge ribbon subsystem; deleted from runtime code after morphology superseded it, with git history as the archive",
       "owner": "architecture/active-edges.md",
       "references": ["architecture/gpu-rendering.md", "architecture/gpu-backend.md", "architecture/connectivity.md"]
     },

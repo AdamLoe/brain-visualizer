@@ -58,9 +58,9 @@ stages.
 | Intake/bootstrap | Done | Manifest, docs router, overview, global orchestration rules, plan lifecycle, and pasted critique read. | Dispatch planning agents. |
 | Planning | Done | Eight child draft plan docs persisted under `docs/plans/orchestrator/` after splitting Stream C. | Activate first implementation wave. |
 | Plan review | Done | High-level review recommended staging A, splitting C, serializing B1/B2, and clarifying D1/D2. | Apply plan review edits and activate first wave. |
-| Implementation | In progress | D2 remaining responsiveness work is implemented and gated: startup and structural rebuild prep use the worker payload path, with high-N/frame-counter smoke evidence. | Continue only decision-gated or separately active waves. |
+| Implementation | Done | C2 legacy render/dead-code amnesty is implemented and gated after C1; legacy render/dev surfaces are removed and settings compatibility is preserved. | Prepare final closeout. |
 | Work review | Done for wave 1 | Review-work pass found one smoke artifact gap and fixed it; no remaining blocking findings. | Commit wave 1. |
-| Closeout | In progress | Consolidated gates passed except real-adapter smoke remains environment-dependent. | Commit wave 1 and report next waves. |
+| Closeout | In progress | Consolidated gates for C2 passed; real-adapter smoke remains environment-dependent for the broader hub. | Commit C2 and report remaining hub status. |
 
 ## Streams
 
@@ -70,7 +70,7 @@ stages.
 | B1 | Settings/metrics/schema contracts | Implemented | Contract tests, tombstone hardening, uniform size checks, estimated labels, docs migration landed; cargo test, npm test, and typecheck passed. | Include in work review/final commit. | None observed. |
 | B2 | Simulation correctness gates | Implemented | Strict adapter helper, synchronized fixed-point overflow stress, Rust/WGSL tick-wrap gates, and docs migration landed; local strict run uses llvmpipe, so it cannot prove the no-adapter failure branch on this machine. | Include in work review/final commit. | Real no-adapter strict-path proof still needs an environment without llvmpipe. |
 | C1 | CPU backend deletion | Shipped | CPU runtime modules/exports, browser worker/renderer paths, CPU build feature/deps, CPU example/e2e expectations, and live/parked docs were removed; stale saved CPU configs normalize to GPU. | None. | None. |
-| C2 | Legacy render/dead-code amnesty | Active after C1 | Owner chose to remove legacy/dead code and references. | Dispatch after C1 so build/backend assumptions are settled. | Must preserve settings tombstone compatibility. |
+| C2 | Legacy render/dead-code amnesty | Shipped | Removed legacy render/dev surfaces after C1, normalized persisted inactive connection-layer values to active/recent, and preserved settings tombstones. | None. | None. |
 | D1 | Morphology segment scaling | Shipped | Chunked morphology resources, per-chunk compaction/draw, docs migration, cargo test, and render_check landed in `593b7d3`. | Use as the settled upload boundary for D2 worker payload integration. | Real high-N browser/GPU smoke remains environment-dependent. |
 | D2 | Rebuild responsiveness | Shipped | Startup worker prep, structural settings/generator routing, staged prepared upload, and high-N/frame-counter Playwright smoke passed; real-hardware throughput remains environment-dependent. | None for non-decision-gated D2. | Real hardware performance evidence still needs a real adapter lane. |
 | E | Visual outcome and region coherence | Shipped | Internal opt-in anterior/posterior prototype landed in `b7fbc66`; default hash-random assignment remains unchanged; cargo test passed. | Manual visual/dynamics review before any default promotion. | No screenshot/clip captured because the prototype is internal-only. |
@@ -127,6 +127,7 @@ stages.
 - 2026-06-12: A0/A1 implementation dispatched to agent `019ebd90-8abc-77e2-a6c4-e34eec6a0fa9` (`Goodall`); typecheck, npm test, and focused smoke passed with no-adapter skip.
 - 2026-06-12: D2 wave 1 implementation dispatched to agent `019ebd9f-b6ba-7d81-9639-2fc5d3810d26` (`Rawls`); typecheck and npm test passed.
 - 2026-06-12: First-wave work review dispatched to agent `019ebda6-92f7-7811-879f-0c07e88f3313` (`McClintock`); smoke artifact fix applied.
+- 2026-06-13: C2 legacy render/dead-code amnesty implemented directly in this chat; required Rust, render, web, build, and search gates passed.
 
 ## Gate Evidence
 

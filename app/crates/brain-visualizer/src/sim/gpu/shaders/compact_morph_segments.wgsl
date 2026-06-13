@@ -1,6 +1,6 @@
 // compact_morph_segments.wgsl — active/recent morphology segment compaction.
 //
-// Replaces the all-segment morphology tube draw with a GPU compaction stage:
+// Replaces the former whole-geometry morphology tube draw with a GPU compaction stage:
 // a compute pass scans every MorphSegment in the currently bound segment chunk,
 // derives the segment's ACTIVITY OWNER
 // using the EXACT SAME rule as render_morphology.wgsl::vs_main, reads

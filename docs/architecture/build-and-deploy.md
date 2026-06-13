@@ -114,7 +114,6 @@ substitute for browser WebGPU numbers on real hardware.**
 | `sim_check.rs` | `cargo run --release --example sim_check` | GPU dynamics: non-zero spikes, excitability sweep (sleep→seizure), no NaN/overflow under seizure, i32 accumulator range. |
 | `soc_sweep.rs` | `cargo run --release --example soc_sweep` | Criticality sweep: i_ext parameter sweep + five brain-state acceptance bands. |
 | `render_check.rs` | `cargo run -p brain-visualizer --example render_check` | Render pipeline: offscreen render to 512×512 texture, non-black pixels, distinct region colours, stimulation response, morphology draw, bloom path, zero Naga shader-compile errors. |
-| `near_lod_check.rs` | `cargo run --release --example near_lod_check` | Near-LOD retirement: instance counts at close/far distance, clamp/overflow counters. |
 | `morph_view.rs` | `cargo run -p brain-visualizer --example morph_view` | Morphology renderer: renders the accepted-default review views to `/tmp/morph_{0,1,2,3}.rgba` plus JSON stats artifacts for manual/defaults inspection; asserts non-black pixels. |
 
 ## Test gates

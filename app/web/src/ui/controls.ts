@@ -203,13 +203,11 @@ export type ScalerAction =
  * It never changes tier.  Tier-changing is always an explicit user action.
  *
  * The doc's priority order for reducing cost before cutting N:
- *   1. Disable near-LOD (cull cost)
- *   2. Reduce render resolution (future: scale canvas DPR)
- *   3. Reduce N
+ *   1. Reduce render resolution (future: scale canvas DPR)
+ *   2. Reduce N
  * In this implementation N is the only knob available without a full restart
- * (near-LOD and resolution reduction are Phase 7 optional cost centres).
- * The shrink action is still labelled shrink_n so Phase 7 can slot in higher-
- * priority actions before it.
+ * (resolution reduction is a future optional cost centre). The shrink action is
+ * still labelled shrink_n so a higher-priority action can slot in before it.
  */
 export function scalerDecide(
   p95Ms: number,

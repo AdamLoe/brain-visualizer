@@ -134,8 +134,7 @@ export class Camera {
 
   // --- Matrix + vector outputs (rebuilt each frame) ---
 
-  /** Current camera distance from the target (world units).
-   *  Used by Phase 4 near-LOD to decide which LOD level to activate. */
+  /** Current camera distance from the target (world units). */
   cameraDistance(): number {
     return this.distance;
   }

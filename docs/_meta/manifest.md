@@ -48,10 +48,9 @@ Consult before declaring a commit done. "If you changed X → update Y."
 | `crates/brain-visualizer/src/connectivity/*` (hash, spatial grid, `target`/`weight`, the heavy-tailed `ReachParams`/`long_offset_component` long-range branch + `salt::REACH_*`), `hash.wgsl`, and the WGSL `target_neuron` twin in `scatter.wgsl` (`long_range_frac`/`max_reach` in `ConnectUniforms`) | `architecture/connectivity.md`, `decisions/connectivity.md`, regenerate/verify the determinism gates |
 | `integrate.wgsl`, `scatter.wgsl`, `stimulate.wgsl` (LIF math, heterogeneity, weight norm, input modes) | `architecture/simulation.md`, `decisions/dynamics.md` |
 | `crates/brain-visualizer/src/sim/backend.rs` (`SimBackend`, `SimConfig`, `TickStats`), the `VisualSettings` Float32Array contract | `architecture/simulation.md`, `architecture/web-frontend.md`, `architecture/dev-panel.md` (the settings index) |
-| `crates/brain-visualizer/src/sim/gpu/mod.rs` (frame graph, pass ordering, `DRAW_LEGACY_*`, readback) | `architecture/gpu-backend.md`; `architecture/gpu-rendering.md` if a render pass changes |
+| `crates/brain-visualizer/src/sim/gpu/mod.rs` (frame graph, pass ordering, readback) | `architecture/gpu-backend.md`; `architecture/gpu-rendering.md` if a render pass changes |
 | `crates/brain-visualizer/src/sim/gpu/{pipelines,resources}.rs` (buffers, pipelines, bind groups) | `architecture/gpu-backend.md` |
-| `crates/brain-visualizer/src/sim/gpu/shaders/render_*.wgsl`, `bloom.wgsl`, `frustum_cull.wgsl`, `draw_indirect.wgsl` | `architecture/gpu-rendering.md`, `decisions/rendering.md` |
-| `crates/brain-visualizer/src/sim/gpu/shaders/{emit_edges,render_ribbon}.wgsl` (retired ribbon path) | `architecture/active-edges.md` |
+| `crates/brain-visualizer/src/sim/gpu/shaders/render_*.wgsl`, `bloom.wgsl` | `architecture/gpu-rendering.md`, `decisions/rendering.md` |
 | Removed/added backend runtime paths or backend availability policy | `architecture/cpu-backend.md`, `decisions/backends.md` |
 | `web/src/main.ts`, `camera.ts`, `controls.ts`, `renderer.ts`, `types.ts` | `architecture/web-frontend.md`, `decisions/interaction.md` |
 | `web/src/ui/dev-panel.ts`, `settings.ts`, `setting-metadata.ts` (persistence, impact table) | `architecture/dev-panel.md`, `decisions/dev-tooling.md` |
@@ -78,7 +77,6 @@ spot-checks these against code:
   (as integers over `REACH_FRAC_DEN`) into the `ConnectUniforms` `long_range_frac`/`max_reach`
   slots (Rust `resources.rs` ↔ WGSL `scatter.wgsl`, still 32 B).
 - The packed `last_spike` masks and the locked hash constants (Rust ↔ WGSL).
-- The `DRAW_LEGACY_*` guard flags (which passes are live vs retired).
 - `DEFAULT_CONFIG` scale and LS key (`web/src/core/types.ts → DEFAULT_CONFIG, CONFIG_LS_KEY`); current key `bv2_config_v2`.
 - `SETTINGS_LS_KEY` and `MORPH_CONFIG_LS_KEY` (`web/src/core/settings.ts`, `web/src/core/morph-config.ts`); current keys `bv2_settings_v2` / `bv2_morph_v2`.
 

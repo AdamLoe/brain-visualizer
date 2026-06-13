@@ -292,13 +292,6 @@ export const COLOR_BY_OPTIONS = [
 
 export const COLOR_BY_LABELS = COLOR_BY_OPTIONS.map((option) => option.label);
 
-// ── Apply-handler callbacks (provided by main.ts) ─────────────────────────────
-// V2 Phase B — wired in main.ts after boot().
-
-export interface ApplyHandlers {
-  onBrainReset: () => void;
-}
-
 // ── UX overhaul: SimHandlers (provided by main.ts via setSimHandlers) ────────
 
 /** Sim-control callbacks set via setSimHandlers(). UX round 2. */
@@ -423,9 +416,6 @@ export class DevPanel {
     neuronVisibility: HTMLSpanElement;
     connectionLayer:  HTMLSpanElement;
   } | null = null;
-
-  // V2 Phase B: apply handlers (kept for API compat; brain-reset pending UI removed UX round 2).
-  private applyHandlers: ApplyHandlers | null = null;
 
   // UX overhaul: sim handlers for Network tab controls.
   private simHandlers: SimHandlers | null = null;
@@ -619,18 +609,6 @@ export class DevPanel {
   // V2 Phase B: clean up subscriptions (call if the panel is ever removed).
   destroy(): void {
     this._unsubSettings();
-  }
-
-  // V2 Phase B: wire the brain-reset callbacks (kept for API compat; UX round 2
-  // removes the pending-UI but the handler slot is kept in case callers still wire it).
-  setApplyHandlers(handlers: ApplyHandlers): void {
-    this.applyHandlers = handlers;
-  }
-
-  // V2 Phase B: called by main.ts after a brain reset completes (now a no-op; UX round 2).
-  clearPendingBrainReset(): void {
-    // No-op: brain-reset pending UI removed in UX round 2.
-    void this.applyHandlers; // suppress unused warning
   }
 
   // ── Private: open/close internals ─────────────────────────────────────────
@@ -1465,17 +1443,14 @@ export class DevPanel {
     root.appendChild(this._sep("Morphology Visibility"));
 
     // connectionLayer: 0=Off (skips all morphology work including compute+tubes+somas),
-    // 1=Active/recent only (default: compacted GPU draw of recently-lit tubes + somas),
-    // 2=Resting debug (debug placeholder — currently behaves like 1; flip
-    //   DRAW_LEGACY_ALL_SEGMENTS in pipelines.rs to enable full all-segment draw).
+    // 1=Active/recent only (default: compacted GPU draw of recently-lit tubes + somas).
     this._selectRow(root, {
       key: "connectionLayer",
       label: "Connections",
-      tooltip: "Morphology rendering mode. Off: no morphology work (fastest). Active/recent: draw only segments near a spike (default). Resting debug: shows all resting segments — requires recompiling with DRAW_LEGACY_ALL_SEGMENTS=true; otherwise behaves like Active/recent.",
+      tooltip: "Morphology rendering mode. Off: no morphology work. Active/recent: draw only segments near a spike.",
       options: [
         { value: 0, label: "Off" },
         { value: 1, label: "Active/recent" },
-        { value: 2, label: "Resting debug" },
       ],
     }, s.connectionLayer, "live");
 
@@ -1658,11 +1633,11 @@ export class DevPanel {
     const d = this.debugViewFields;
 
     const NEURON_VIS_LABELS = ["All", "Active emphasis", "Active only"];
-    const CONN_LAYER_LABELS = ["Off", "Active/recent", "Resting debug"];
+    const CONN_LAYER_LABELS = ["Off", "Active/recent"];
 
     d.colorBy.textContent          = COLOR_BY_LABELS[s.colorBy]          ?? String(s.colorBy);
     d.neuronVisibility.textContent = NEURON_VIS_LABELS[s.neuronVisibility] ?? String(s.neuronVisibility);
-    d.connectionLayer.textContent  = CONN_LAYER_LABELS[s.connectionLayer]  ?? String(s.connectionLayer);
+    d.connectionLayer.textContent  = CONN_LAYER_LABELS[s.connectionLayer === 0 ? 0 : 1];
   }
 
   private _loadAcceptedDefaultBase(): void {

@@ -119,8 +119,8 @@ waiting for GPU-to-CPU copy to complete. The state is `MetricsReadState` in
 - **Corruption invariant:** **never call `copy_buffer_to_buffer` into
   `metrics_staging` while `Pending`**. The buffer is mapped/locked; writing into
   it is the documented bug. The `Idle` check before issuing a new reduction is
-  the guard. (The same pattern applies to `edge_emitted_staging`; the general
-  readback mechanism is shared — see [`gpu-backend.md`](gpu-backend.md).)
+  the guard. The general readback mechanism is shared — see
+  [`gpu-backend.md`](gpu-backend.md).
 
 ## parseMetrics and the JS Metrics interface
 

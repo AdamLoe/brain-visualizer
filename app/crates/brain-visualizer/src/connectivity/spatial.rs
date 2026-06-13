@@ -1,8 +1,7 @@
 //! Integer spatial hash grid over the cortical manifold.
 //!
-//! Serves three jobs across phases (architecture §"Spatial structures"):
-//! procedural local connectivity, cursor-stimulation lookup, and near-LOD
-//! culling. Phase 1 builds it once at startup (geometry is static).
+//! Serves procedural local connectivity and cursor-stimulation lookup. Phase 1
+//! builds it once at startup (geometry is static).
 //!
 //! Hot-path hygiene (architecture §10.1): cells are addressed by a **packed
 //! `u32` linear id**, never by string keys. Neuron membership is stored CSR-

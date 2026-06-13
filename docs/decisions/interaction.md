@@ -18,9 +18,9 @@
   suppressed while any button drag is active. Disabled on mobile (no
   stimulation, one-finger orbit, two-finger pinch zoom).
 - **Why.** Click-to-inspect (neuron selection, incoming/outgoing connections)
-  requires GPU id-buffer picking or CPU ray tests plus near-LOD
-  materialization — non-trivial complexity for a post-MVP feature. The experience
-  does not depend on it.
+  requires GPU id-buffer picking or CPU ray tests plus materializing enough
+  geometry for selection — non-trivial complexity for a post-MVP feature. The
+  experience does not depend on it.
 - **Applies to.** [`../architecture/web-frontend.md`](../architecture/web-frontend.md).
 - **Code anchors.** `web/src/render/camera.ts → Camera.onPointerMove`, `Camera.pan`;
   `web/src/main.ts → pointerdown/pointermove handlers, computeStimulation`,

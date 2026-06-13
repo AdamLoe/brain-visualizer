@@ -198,12 +198,11 @@ async fn run() {
     );
 
     // --- 10. Morphology check -----------------------------------------------
-    // The Phase-D ribbon is retired. The connection layer now drives the
-    // procedural neuron morphology pass (soma + dendrite tree + axon arbor +
-    // outward signal pulse). Turn it on (2 = structure + signal flow), render,
+    // The connection layer drives the procedural neuron morphology pass (soma +
+    // dendrite tree + axon arbor + outward signal pulse). Turn it on, render,
     // and assert the morphology pass compiled + drew (non-black) without panic.
-    println!("[render_check] morphology: enabling connection_layer=2, rendering forest …");
-    backend.set_connection_layer(2);
+    println!("[render_check] morphology: enabling connection_layer=1, rendering forest …");
+    backend.set_connection_layer(1);
     for _ in 0..50 {
         backend.tick(1, 0.55);
     }
@@ -225,10 +224,10 @@ async fn run() {
         "Morphology pass produced an all-black frame (morphology shader did not draw)"
     );
 
-    // Confirm connection_layer=1 (structure only) also renders without panic.
+    // Confirm rendering the active/recent layer again is stable.
     backend.set_connection_layer(1);
     backend.render(&color_view, &mvp, camera_right, camera_up, 100.0, 0.012);
-    println!("[render_check] morphology check PASS: forest drew (layer 2 + layer 1)");
+    println!("[render_check] morphology check PASS: active/recent forest drew");
 
     // --- 11. V2 Phase E: BLOOM check -----------------------------------------
     // Enable bloom (offscreen HDR + blur + composite path), keep a firing scene
@@ -289,9 +288,9 @@ async fn run() {
     // pass skip; (b) small/high active_opacity values measurably change the
     // frame, proving the shader alpha is continuous rather than 0-or-not-0;
     // (c) it composites correctly with bloom both off and on.
-    println!("[render_check] active-opacity: warming firing scene (connection_layer=2) …");
+    println!("[render_check] active-opacity: warming firing scene (connection_layer=1) …");
     backend.set_bloom_strength(0.0);
-    backend.set_connection_layer(2);
+    backend.set_connection_layer(1);
     for _ in 0..50 {
         backend.tick(1, 0.55);
     }
@@ -477,7 +476,7 @@ async fn run() {
         // 0.03); without this the recurrent drive runs away and ~15% of neurons
         // fire every tick, which is NOT the low-firing default the plan targets.
         bk.set_synaptic_scale(0.03);
-        bk.set_connection_layer(2); // active/recent morphology on
+        bk.set_connection_layer(1);
         bk.initialize(&config_low);
         bk.build_render_pipelines(color_format);
         bk.resize_render_targets(WIDTH, HEIGHT);
@@ -507,7 +506,7 @@ async fn run() {
         bk.render(&low_view, &mvp, camera_right, camera_up, 100.0, 0.012);
         let (settled_selected, total) = bk
             .read_active_segment_count()
-            .expect("morph buffers should exist with connection_layer=2");
+            .expect("morph buffers should exist with connection_layer=1");
         let settled_frac = settled_selected as f32 / total.max(1) as f32;
         println!(
             "[render_check] COMPACTION (low-firing default N={NLOW} K={KLOW}, \

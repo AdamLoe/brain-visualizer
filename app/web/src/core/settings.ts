@@ -38,7 +38,7 @@ export interface VisualizerSettings {
   morphRestingOpacity:      number;   // 15 opacity of non-active structure (0..1)
   // ── index 16–23: mode enums ──────────────
   signalSource:             number;   // 16 RESERVED/INERT — signal source removed; index kept for the Rust↔TS contract
-  connectionLayer:          number;   // 17 connection layer mode: 0=Off, 1=Active/recent only (default), 2=Resting debug (placeholder — behaves like 1 until DRAW_LEGACY_ALL_SEGMENTS is wired at runtime)
+  connectionLayer:          number;   // 17 connection layer mode: 0=Off, 1=Active/recent only (default)
   colorBy:                  number;   // 18 color-by mode
   neuronVisibility:         number;   // 19 neuron visibility mode
   surface:                  number;   // 20 surface display mode
@@ -69,8 +69,7 @@ export const DEFAULT_SETTINGS: VisualizerSettings = {
   heterogeneity:            0.50,
   morphRestingOpacity:      0.0,   // Morphology: resting structure hidden by default (0=only pulses)
   signalSource:             0,
-  // Morphology connection layer: 0=Off (no morphology work), 1=Active/recent only (default),
-  // 2=Resting debug (placeholder — DRAW_LEGACY_ALL_SEGMENTS const controls this at compile time).
+  // Morphology connection layer: 0=Off (no morphology work), 1=Active/recent only (default).
   connectionLayer:          1,
   colorBy:                  6,
   neuronVisibility:         0,
@@ -89,7 +88,7 @@ export const DEFAULT_SETTINGS: VisualizerSettings = {
 /** User-facing settings persisted in localStorage (beauty knobs). */
 interface SavedPublic {
   glowTau:               number;
-  connectionLayer:       number;   // off / active_only / active+fade
+  connectionLayer:       number;   // off / active_recent
   colorBy:               number;
   neuronVisibility:      number;
 }
@@ -131,7 +130,7 @@ function settingsToSaved(s: VisualizerSettings): SavedVisualizerSettings {
     version: 5,
     public: {
       glowTau:           s.glowTau,
-      connectionLayer:   s.connectionLayer,
+      connectionLayer:   normalizeConnectionLayer(s.connectionLayer),
       colorBy:           s.colorBy,
       neuronVisibility:  s.neuronVisibility,
     },
@@ -164,7 +163,7 @@ function mergeOver(base: VisualizerSettings, saved: SavedVisualizerSettings): Vi
     ...base,
     // public
     glowTau:              p.glowTau              ?? base.glowTau,
-    connectionLayer:      p.connectionLayer       ?? base.connectionLayer,
+    connectionLayer:      normalizeConnectionLayer(p.connectionLayer ?? base.connectionLayer),
     colorBy:              p.colorBy               ?? base.colorBy,
     neuronVisibility:     p.neuronVisibility      ?? base.neuronVisibility,
     // dev
@@ -226,6 +225,9 @@ export function setSetting<K extends keyof VisualizerSettings>(
   value: VisualizerSettings[K],
 ): void {
   current = { ...current, [key]: value };
+  if (key === "connectionLayer") {
+    current.connectionLayer = normalizeConnectionLayer(Number(value));
+  }
   saveSettings(current);
   notify();
 }
@@ -233,6 +235,7 @@ export function setSetting<K extends keyof VisualizerSettings>(
 /** Replace the full settings payload, persist once, and notify subscribers once. */
 export function replaceSettings(next: VisualizerSettings): void {
   current = { ...next };
+  current.connectionLayer = normalizeConnectionLayer(current.connectionLayer);
   saveSettings(current);
   notify();
 }
@@ -252,6 +255,10 @@ export function resetSettings(): void {
 
 function notify(): void {
   for (const fn of subscribers) fn(current);
+}
+
+function normalizeConnectionLayer(value: number): number {
+  return value === 0 ? 0 : 1;
 }
 
 // ─── Flat-array serialisation ────────────────────────────────────────────────
@@ -278,7 +285,7 @@ export function toFloat32Array(s: VisualizerSettings): Float32Array {
   a[14] = s.heterogeneity;
   a[15] = s.morphRestingOpacity;    // Morphology: resting opacity (0..1)
   a[16] = 0; // index 16: reserved_zero (signalSource removed)
-  a[17] = s.connectionLayer;
+  a[17] = normalizeConnectionLayer(s.connectionLayer);
   a[18] = s.colorBy;
   a[19] = s.neuronVisibility;
   a[20] = DEFAULT_SETTINGS.surface; // index 20: hidden surface path retired; default-written

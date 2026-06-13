@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-12
+last_updated:  2026-06-13
 ---
 
 # Dev Panel
@@ -14,7 +14,7 @@ presets, and storage diagnostics — without cluttering the public UI.
 
 - `DevPanel` class, open/close triggers, tab layout — `web/src/ui/dev-panel.ts → DevPanel`
 - Hidden review preset payloads — `web/src/ui/dev-panel.ts → HIDDEN_REVIEW_PRESETS`
-- `SysInfo` and `ApplyHandlers` / `SimHandlers` callback interfaces — `web/src/ui/dev-panel.ts`
+- `SysInfo` and `SimHandlers` callback interfaces — `web/src/ui/dev-panel.ts`
 - Setting-impact classification system and colored dot rendering — `web/src/core/setting-metadata.ts → SETTING_IMPACT`
 - `VisualizerSettings` interface, persistence, `toFloat32Array` serialisation — `web/src/core/settings.ts → VisualizerSettings`
 - The localStorage schema and merge-over-defaults contract — `web/src/core/settings.ts → loadSettings, mergeOver`
@@ -64,14 +64,16 @@ Float32Array index 9 is tombstoned as `reserved_zero`. `bloomStrength` was also
 removed from the panel and persistence surface; Float32Array index 10 is
 tombstoned as `reserved_zero`.
 
-`connectionLayer` (index 17, default 1) is a 3-mode enum surfaced as a
+`connectionLayer` (index 17, default 1) is a 2-mode enum surfaced as a
 labeled "Connections" dropdown in the "Morphology Visibility" section:
 
 | Value | Label | Behaviour |
 |---|---|---|
 | 0 | Off | Skips all morphology work — compaction compute, tube passes, soma passes |
 | 1 | Active/recent | Draws only segments near a spike (DEFAULT) |
-| 2 | Resting debug | Full resting morphology; currently requires a build with `DRAW_LEGACY_ALL_SEGMENTS`; otherwise behaves like mode 1 |
+
+Persisted values above `1` are normalized to `1` for compatibility with old
+saves. The old resting-debug mode is not exposed and is not a runtime mode.
 
 The tab also contains a "Morphology Lighting" section that renders the
 `MORPH_DESCRIPTORS` rows with `group === "lighting"` via
@@ -164,10 +166,6 @@ The fields and indices are kept only to preserve the Rust<->TypeScript
 scaler is deferred — see
 [`../plans/future_roadmap.md`](../plans/future_roadmap.md) and
 [`scaling.md`](scaling.md).
-
-The `brain-reset` pending-dot and Apply button exist in the API
-(`ApplyHandlers`, `setApplyHandlers`, `clearPendingBrainReset`) but are
-currently no-ops — kept for callers that still wire them.
 
 ## Hidden review presets
 

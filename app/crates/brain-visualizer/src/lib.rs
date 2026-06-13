@@ -482,7 +482,7 @@ mod wasm_entry {
             Ok(())
         }
 
-        /// Staged startup: allocate near-LOD and active-edge resources.
+        /// Staged startup compatibility stage; retired resource allocators are gone.
         pub fn startup_allocate_lod_edge_resources(&mut self) -> Result<(), JsValue> {
             let state = self.pending_network.as_ref().ok_or_else(|| {
                 JsValue::from_str("[gpu] startup_allocate_lod_edge_resources before manifold build")

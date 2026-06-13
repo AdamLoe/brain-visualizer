@@ -27,14 +27,14 @@ app/                         Workspace root — Cargo.toml here is the workspace
         scaler.rs            Adaptive scaler (within-tier feedback).
         morphology.rs        Per-neuron morphology geometry (MorphSegment), the live visual.
         gpu/                 Live GPU backend.
-          mod.rs             GpuBackend: frame graph, pass ordering, readback, DRAW_LEGACY_* guards.
+          mod.rs             GpuBackend: frame graph, pass ordering, readback.
           pipelines.rs       Pipeline + bind-group-layout construction.
           resources.rs       Persistent buffers, bind groups, dirty flags.
-          shaders/*.wgsl     Compute (integrate, scatter, stimulate, metrics, emit_edges,
-                             frustum_cull, write_scatter_dispatch) + render (far, sphere,
-                             cylinder, manifold, morphology, ribbon, bloom, draw_indirect).
+          shaders/*.wgsl     Compute (integrate, scatter, stimulate, metrics,
+                             compact_morph_segments, write_scatter_dispatch) + render
+                             (far, manifold, morphology, bloom).
     examples/                Offline host-verification harnesses (sim_check,
-                             soc_sweep, render_check, near_lod_check, morph_view), run via
+                             soc_sweep, render_check, morph_view), run via
                              `cargo run --example <name>`.
     tests/                   Rust integration tests: wgsl_hash_determinism,
                              wgsl_target_determinism, gpu_sim_dynamics.

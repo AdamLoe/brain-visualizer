@@ -50,7 +50,7 @@ pub struct GpuCaps {
     pub max_dispatch_threads_x: u64,
     /// Max items a flat scan/bin pass can cover before chunking is required.
     pub max_scan_items: u64,
-    /// Max near-LOD instances per draw (clamped to dispatch + perf budget).
+    /// Retired render-cap slot kept out of the public settings contract.
     pub max_near_instances: u64,
     /// Whether timestamp queries are available for per-pass GPU timing (§8).
     pub timestamp_available: bool,

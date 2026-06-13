@@ -62,7 +62,7 @@ const SOMA_RADIUS_FLASH: f32 = 0.16;
 const BRAIN_REST_PINK: vec3<f32> = vec3<f32>(1.0, 0.18, 0.54);
 const BRAIN_ACTIVE_BLUE: vec3<f32> = vec3<f32>(0.08, 0.56, 1.0);
 
-// UX fix (near-LOD / shadow line): close-up billboard size ramp. Below
+// Close-up billboard size ramp. Below
 // NEAR_RADIUS_DIST world units from the camera a neuron's billboard radius grows
 // smoothly toward NEAR_RADIUS_MAX× so it reads as a soft round orb when zoomed
 // in, instead of shrinking to a dot. At/above NEAR_RADIUS_DIST the scale is 1.0
@@ -221,11 +221,10 @@ fn vs_main(
     let base = u.neuron_visual_radius;
     let center = vec3<f32>(pos_x[neuron_id], pos_y[neuron_id], pos_z[neuron_id]);
 
-    // UX fix (near-LOD / shadow line): the soft billboards are now the body visual
-    // at ALL camera distances (the faceted near-LOD sphere is retired). Without a
+    // The soft billboards are the body visual at all camera distances. Without a
     // near boost a world-unit radius shrinks to a tiny dot when the camera dives
     // into the cloud. Gently grow the radius as the camera approaches so zoomed-in
-    // neurons read as large soft round orbs (not pinpricks), while staying flat
+    // neurons read as large soft round orbs, while staying flat
     // (no boost) at normal/far distances so the validated look is unchanged.
     // near_scale ramps 1→NEAR_RADIUS_MAX as cam_dist falls below NEAR_RADIUS_DIST.
     let cam_dist_c = length(center - u.camera_pos);
@@ -241,7 +240,7 @@ fn vs_main(
 
     // Fade gray contribution to zero for neurons close to the camera so they
     // don't accumulate into a foggy background when the camera is inside.
-    // UX fix (near-LOD / shadow line): widen + smooth the ramp. The old sharp
+    // Widen + smooth the ramp. The old sharp
     // 0.05..0.20 linear band put a hard-edged "bubble" of suppressed resting glow
     // around the camera that read as a faint ring/line when flying through the
     // cloud. Use a wider range and smoothstep so the resting glow fades in

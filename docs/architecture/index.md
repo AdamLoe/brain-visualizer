@@ -18,8 +18,8 @@ changed over time. Load only the doc that matches your task; follow its
 | Need | Read |
 |---|---|
 | The per-tick compute frame graph + render-pass ordering, buffer/pipeline lifecycle, indirect dispatch, async readback | [`gpu-backend.md`](gpu-backend.md) |
-| Render LOD scheme: far glow billboards, live morphology pass, retired near-sphere/cylinder, bloom, visual mode enums | [`gpu-rendering.md`](gpu-rendering.md) |
-| The retired active-edge ribbon subsystem (kept, guarded off; morphology superseded it) | [`active-edges.md`](active-edges.md) |
+| Render scheme: far glow billboards, live morphology pass, bloom, visual mode enums | [`gpu-rendering.md`](gpu-rendering.md) |
+| Deleted active-edge ribbon subsystem history; morphology superseded it | [`active-edges.md`](active-edges.md) |
 
 ## Frontend & tooling
 

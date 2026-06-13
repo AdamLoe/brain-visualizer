@@ -1,9 +1,6 @@
 //! GPU resource ownership boundary (architecture §5 "frame graph and resource
 //! lifecycle"). Phase 2 allocates the real storage buffers, builds the bind
 //! group layouts + bind groups, and uploads the initial silent-start state.
-//! Phase 4 adds near-LOD (frustum cull + indirect draw + sphere/cylinder render)
-//! resources.
-//!
 //! The rAF loop must never recreate buffers/bind groups/targets. Only the rare
 //! structural-change methods here allocate.
 
@@ -12,15 +9,6 @@ use crate::connectivity::spatial::SpatialGrid;
 use crate::manifold::RegionKind;
 use crate::sim::backend::{initial_last_spike, SimConfig};
 use wgpu::util::DeviceExt;
-
-// ─── Phase 4 defaults ────────────────────────────────────────────────────────
-
-/// Default max neuron instances in the near-LOD append buffer.
-pub const DEFAULT_MAX_NEAR_INSTANCES: u32 = 32_768;
-/// Default max synapse instances in the near-LOD append buffer.
-pub const DEFAULT_MAX_SYNAPSE_INSTANCES: u32 = 262_144;
-/// Default K_NEAR: synapses materialized per visible neuron in near-LOD.
-pub const DEFAULT_K_NEAR: u32 = 8;
 
 /// The per-neuron SoA storage buffers (chunked). Phase 2 allocates the device
 /// buffers; for N ≤ 16M each field is a single chunk.
@@ -80,80 +68,6 @@ pub struct SimBuffers {
     pub metrics_staging: wgpu::Buffer,
     /// Metrics reduction uniform (current_tick, n, voltage range, …).
     pub metrics_uniform: wgpu::Buffer,
-}
-
-// ─── V2 Phase D: active-edge event pipeline ───────────────────────────────────
-
-/// Hard allocation cap for the persistent edge ring buffer. The ACTIVE ring
-/// modulus = min(max_active_visual_edges, EDGE_CAP) is a uniform; changing the
-/// setting changes the modulus only — never reallocates.
-pub const EDGE_CAP: u32 = 4096;
-
-/// V2 Phase D: one active-edge event. 48 bytes, std430, 16-aligned. Field order
-/// MUST match `EdgeEvent` in emit_edges.wgsl / render_ribbon.wgsl verbatim
-/// (#1 corruption source — do not reorder).
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct EdgeEvent {
-    pub src_pos: [f32; 3],
-    pub birth_tick: u32,
-    pub tgt_pos: [f32; 3],
-    pub weight_sign: f32,
-    pub curve_seed: u32,
-    pub _pad0: u32,
-    pub _pad1: u32,
-    pub _pad2: u32,
-}
-
-/// V2 Phase D: emit_edges compute uniform — layout MUST match `EdgeUniforms` in
-/// emit_edges.wgsl.
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct EdgeUniforms {
-    pub tick: u32,
-    pub n: u32,
-    pub k: u32,
-    pub seed_lo: u32,
-    pub grid_dim: u32,
-    pub modulus: u32,
-    pub sample_stride: u32,
-    pub _pad: u32,
-}
-
-/// V2 Phase D: ribbon render uniform — layout MUST match `RibbonUniforms` in
-/// render_ribbon.wgsl.
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct RibbonUniforms {
-    pub mvp: [f32; 16],
-    pub camera_right: [f32; 3],
-    pub tick: u32,
-    pub camera_up: [f32; 3],
-    pub lifetime: f32,
-    pub width: f32,
-    pub curve_lift: f32,
-    pub pulse_speed: f32,
-    pub modulus: u32,
-    pub connection_layer: u32,
-    pub _pad0: u32,
-    pub _pad1: u32,
-    pub _pad2: u32,
-}
-
-/// V2 Phase D: persistent edge ring buffers (allocated ONCE; never per-frame).
-pub struct EdgeBuffers {
-    /// EdgeEvent ring (EDGE_CAP entries). STORAGE (rw in emit, ro in render).
-    pub edge_buffer: wgpu::Buffer,
-    /// Monotonic write index (atomic u32). Reset only in initialize().
-    pub edge_write_index: wgpu::Buffer,
-    /// Per-frame emit counter (atomic u32; zeroed before each emit dispatch).
-    pub edge_emitted: wgpu::Buffer,
-    /// emit_edges uniform (uploaded each tick the layer is on).
-    pub edge_uniform: wgpu::Buffer,
-    /// ribbon render uniform (uploaded each frame the layer is on).
-    pub ribbon_uniform: wgpu::Buffer,
-    /// Staging buffer for non-blocking edge_emitted readback (MAP_READ | COPY_DST).
-    pub edge_emitted_staging: wgpu::Buffer,
 }
 
 // ─── Morphology: procedural neuron geometry render pipeline ───────────────────
@@ -445,114 +359,8 @@ pub struct BloomUniforms {
     pub _pad: f32,
 }
 
-/// Phase 4 near-LOD render uniform.
-/// Layout must match `NearUniforms` in render_sphere.wgsl / render_cylinder.wgsl.
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct NearRenderUniforms {
-    pub mvp: [f32; 16],
-    pub camera_pos: [f32; 3],
-    pub sphere_radius: f32,
-    pub lod_alpha: f32,
-    pub _pad: [f32; 3],
-}
-
-/// Phase 4 frustum cull uniform.
-/// Layout must match `FrustumUniforms` in frustum_cull.wgsl.
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct FrustumCullUniforms {
-    /// 6 planes × vec4 = 24 f32 = 96 bytes.
-    pub planes: [[f32; 4]; 6],
-    pub camera_pos: [f32; 3],
-    pub max_synapse_dist: f32,
-    pub current_tick: u32,
-    pub n: u32,
-    pub _pad: [u32; 2],
-}
-
-/// Phase 4 near-LOD connect uniforms (shared between cull_neurons/cull_synapses).
-/// Layout must match `NearConnectUniforms` in frustum_cull.wgsl.
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct NearConnectUniforms {
-    pub n: u32,
-    pub k_near: u32,
-    pub seed_lo: u32,
-    pub grid_dim: u32,
-    pub max_near_instances: u32,
-    pub max_synapse_instances: u32,
-    pub _pad: [u32; 2],
-}
-
-/// Phase 4 indirect write uniforms.
-/// Layout must match `IndirectUniforms` in draw_indirect.wgsl.
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct IndirectWriteUniforms {
-    pub sphere_index_count: u32,
-    pub cylinder_index_count: u32,
-    pub max_near_instances: u32,
-    pub max_synapse_instances: u32,
-}
-
-/// Phase 4: near-LOD GPU buffers (allocated ONCE at startup; cleared per frame).
-pub struct NearLodBuffers {
-    /// Append buffer for NeuronInstance structs (32 B each).
-    pub neuron_instances: wgpu::Buffer,
-    /// Append buffer for SynapseInstance structs (32 B each).
-    pub synapse_instances: wgpu::Buffer,
-    /// Atomic counter for neuron append.
-    pub neuron_count: wgpu::Buffer,
-    /// Atomic counter for synapse append.
-    pub synapse_count: wgpu::Buffer,
-    /// Overflow profiler counters (unclamped excess).
-    pub neuron_overflow: wgpu::Buffer,
-    pub synapse_overflow: wgpu::Buffer,
-    /// DrawIndexedIndirectArgs buffers (5 × u32 = 20 B each).
-    pub neuron_draw_args: wgpu::Buffer,
-    pub synapse_draw_args: wgpu::Buffer,
-    /// Profiler: total (unclamped) visible counts after write_indirect.
-    pub neuron_visible: wgpu::Buffer,
-    pub synapse_visible: wgpu::Buffer,
-    /// Frustum cull uniform (uploaded each frame).
-    pub frustum_uniform: wgpu::Buffer,
-    /// Near-LOD connect uniform (static after init).
-    pub near_connect_uniform: wgpu::Buffer,
-    /// Indirect-write uniform (static after init).
-    pub indirect_write_uniform: wgpu::Buffer,
-    /// Near-LOD render uniform (uploaded each frame).
-    pub near_render_uniform: wgpu::Buffer,
-    /// Static sphere vertex buffer (icosphere level-1, 12 verts × 24 B).
-    pub sphere_vb: wgpu::Buffer,
-    /// Static sphere index buffer (20 tris × 3 = 60 u16 indices).
-    pub sphere_ib: wgpu::Buffer,
-    pub sphere_index_count: u32,
-    /// Static cylinder vertex buffer (12 verts of 6-sided prism × 12 B).
-    pub cylinder_vb: wgpu::Buffer,
-    /// Static cylinder index buffer (12 tris × 3 = 36 u16 indices).
-    pub cylinder_ib: wgpu::Buffer,
-    pub cylinder_index_count: u32,
-    /// Staging buffer for async readback of near-LOD profiler counters (8 × u32).
-    pub profiler_staging: wgpu::Buffer,
-    /// Caps stored for bind-group / pipeline rebuild.
-    pub max_near_instances: u32,
-    pub max_synapse_instances: u32,
-}
-
-/// Phase 4 near-LOD profiler stats (read back once per frame from GPU).
-#[derive(Debug, Default, Clone, Copy)]
-pub struct NearLodStats {
-    pub visible_neuron_candidates: u32,
-    pub emitted_neuron_instances: u32,
-    pub neuron_overflow: u32,
-    pub visible_synapse_candidates: u32,
-    pub emitted_synapse_instances: u32,
-    pub synapse_overflow: u32,
-}
-
 /// Bind-group layouts shared by pipelines (phase 2 real handles + phase 3 render
-/// + phase 4 near-LOD).
+/// + morphology render passes).
 pub struct GpuLayouts {
     pub integrate_bgl: wgpu::BindGroupLayout,
     pub integrate_uniform_bgl: wgpu::BindGroupLayout,
@@ -566,31 +374,11 @@ pub struct GpuLayouts {
     pub render_manifold_bgl: wgpu::BindGroupLayout,
     /// Phase 3: stimulate compute bind-group layout.
     pub stimulate_bgl: wgpu::BindGroupLayout,
-    // ─── Phase 4 ────────────────────────────────────────────────────────────
-    /// Phase 4: frustum cull group 0: uniform + 5 neuron storages (pos_x/y/z,
-    /// last_spike, v) + 4 instance/count rw + 2 overflow atomics.
-    pub cull_bgl_group0: wgpu::BindGroupLayout,
-    /// Phase 4: frustum cull group 1: CSR grid + near-connect uniform.
-    pub cull_bgl_group1: wgpu::BindGroupLayout,
-    /// Phase 4: draw_indirect write group 0.
-    pub draw_indirect_bgl: wgpu::BindGroupLayout,
-    /// Phase 4: sphere render group 0 (uniform + neuron_instances).
-    pub render_sphere_bgl: wgpu::BindGroupLayout,
-    /// Phase 4: cylinder render group 0 (uniform + synapse_instances).
-    pub render_cylinder_bgl: wgpu::BindGroupLayout,
     // ─── V2 Phase A ───────────────────────────────────────────────────────────
     /// Metrics reduction group 0: last_spike(read) + v(read) + metrics_buf(rw).
     pub metrics_bgl: wgpu::BindGroupLayout,
     /// Metrics reduction group 1: metrics uniform.
     pub metrics_uniform_bgl: wgpu::BindGroupLayout,
-    // ─── V2 Phase D ───────────────────────────────────────────────────────────
-    /// emit_edges group 0: spike_list/spike_count/last_spike (r), CSR grid (r),
-    /// pos_x/y/z (r), edge_buffer (rw), edge_write_index (rw), edge_emitted (rw).
-    pub emit_edges_bgl: wgpu::BindGroupLayout,
-    /// emit_edges group 1: edge uniform.
-    pub emit_edges_uniform_bgl: wgpu::BindGroupLayout,
-    /// ribbon render group 0: edge_buffer (read storage) + ribbon uniform.
-    pub render_ribbon_bgl: wgpu::BindGroupLayout,
     // ─── Morphology ───────────────────────────────────────────────────────────
     /// morphology render group 0: one segment chunk (read) + last_spike (read) +
     /// morph uniform + chunk-local active_segment_indices (read, binding 6).
@@ -776,123 +564,6 @@ impl GpuLayouts {
             ],
         });
 
-        // ─── Phase 4: near-LOD layouts (SEPARATE from far-LOD, per phase-3 note) ─
-
-        // Cull group 0: binding 0 = frustum uniform; 1-5 = neuron SoA (read);
-        // 6,7 = instance append bufs (rw); 8,9 = atomic counters (rw);
-        // 10,11 = overflow atomic counters (rw).
-        let cull_cs_uniform = |binding: u32| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        };
-        let cull_cs_ro = |binding: u32| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        };
-        let cull_cs_rw = |binding: u32| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Storage { read_only: false },
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        };
-        let cull_bgl_group0 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("cull-bgl-g0"),
-            entries: &[
-                cull_cs_uniform(0), // frustum uniforms
-                cull_cs_ro(1),      // pos_x
-                cull_cs_ro(2),      // pos_y
-                cull_cs_ro(3),      // pos_z
-                cull_cs_ro(4),      // last_spike
-                cull_cs_ro(5),      // v
-                cull_cs_rw(6),      // neuron_instances (append)
-                cull_cs_rw(7),      // synapse_instances (append)
-                cull_cs_rw(8),      // neuron_count (atomic)
-                cull_cs_rw(9),      // synapse_count (atomic)
-                cull_cs_rw(10),     // neuron_overflow (atomic)
-                cull_cs_rw(11),     // synapse_overflow (atomic)
-            ],
-        });
-
-        // Cull group 1: CSR grid storages + near-connect uniform.
-        let cull_bgl_group1 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("cull-bgl-g1"),
-            entries: &[
-                cull_cs_ro(0),      // cell_of_neuron
-                cull_cs_ro(1),      // cell_start
-                cull_cs_ro(2),      // cell_neurons
-                cull_cs_uniform(3), // near_connect_uniform
-            ],
-        });
-
-        // draw_indirect group 0: 2 atomic counters (rw) + 2 draw-arg bufs (rw) +
-        // 2 profiler visible counters (rw) + 1 indirect-write uniform.
-        let draw_indirect_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("draw-indirect-bgl"),
-            entries: &[
-                cull_cs_rw(0),      // neuron_count (atomic)
-                cull_cs_rw(1),      // synapse_count (atomic)
-                cull_cs_rw(2),      // neuron_draw_args
-                cull_cs_rw(3),      // synapse_draw_args
-                cull_cs_rw(4),      // neuron_visible_count (profiler, atomic)
-                cull_cs_rw(5),      // synapse_visible_count (profiler, atomic)
-                cull_cs_uniform(6), // indirect-write params uniform
-            ],
-        });
-
-        // Sphere render group 0: near-render uniform + neuron_instances (read-only
-        // storage, vertex + fragment visible).
-        let near_vs_uniform = |binding: u32| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        };
-        let near_vs_ro = |binding: u32| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        };
-        let render_sphere_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("render-sphere-bgl"),
-            entries: &[
-                near_vs_uniform(0), // NearUniforms
-                near_vs_ro(1),      // neuron_instances
-            ],
-        });
-        let render_cylinder_bgl =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("render-cylinder-bgl"),
-                entries: &[
-                    near_vs_uniform(0), // NearUniforms
-                    near_vs_ro(1),      // synapse_instances
-                ],
-            });
-
         // ─── V2 Phase A: metrics reduction layouts ───────────────────────────
         // group 0: last_spike(read) + v(read) + metrics_buf(rw atomic).
         let metrics_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -909,39 +580,6 @@ impl GpuLayouts {
                 label: Some("metrics-uniform-bgl"),
                 entries: &[uniform(0)],
             });
-
-        // ─── V2 Phase D: active-edge layouts ─────────────────────────────────
-        // emit_edges group 0: 9 read storages + edge_buffer (rw) + 2 atomics (rw).
-        let emit_edges_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("emit-edges-bgl"),
-            entries: &[
-                storage(0, true),   // spike_list
-                storage(1, true),   // spike_count
-                storage(2, true),   // last_spike
-                storage(3, true),   // cell_of_neuron
-                storage(4, true),   // cell_start
-                storage(5, true),   // cell_neurons
-                storage(6, true),   // pos_x
-                storage(7, true),   // pos_y
-                storage(8, true),   // pos_z
-                storage(9, false),  // edge_buffer (rw)
-                storage(10, false), // edge_write_index (atomic rw)
-                storage(11, false), // edge_emitted (atomic rw)
-            ],
-        });
-        let emit_edges_uniform_bgl =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("emit-edges-uniform-bgl"),
-                entries: &[uniform(0)],
-            });
-        // ribbon render group 0: edge_buffer (read storage, VS) + ribbon uniform.
-        let render_ribbon_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("render-ribbon-bgl"),
-            entries: &[
-                render_vs_storage(0), // edge_buffer
-                render_vs_uniform(1), // RibbonUniforms
-            ],
-        });
 
         // ─── Morphology: render layout ────────────────────────────────────────
         // group 0: one segment chunk (read storage, VS) + last_spike (read
@@ -1030,19 +668,9 @@ impl GpuLayouts {
             render_far_bgl,
             render_manifold_bgl,
             stimulate_bgl,
-            // Phase 4
-            cull_bgl_group0,
-            cull_bgl_group1,
-            draw_indirect_bgl,
-            render_sphere_bgl,
-            render_cylinder_bgl,
             // V2 Phase A
             metrics_bgl,
             metrics_uniform_bgl,
-            // V2 Phase D
-            emit_edges_bgl,
-            emit_edges_uniform_bgl,
-            render_ribbon_bgl,
             // Morphology
             render_morphology_bgl,
             compact_morph_bgl,
@@ -1071,31 +699,11 @@ pub struct GpuBindGroups {
     pub render_manifold: Option<wgpu::BindGroup>,
     /// Phase 3: stimulate compute bind groups — two variants for I/I_next parity.
     pub stimulate: Option<[wgpu::BindGroup; 2]>,
-    // ─── Phase 4 ────────────────────────────────────────────────────────────
-    /// Phase 4: frustum-cull group 0 (frustum uniform + neuron SoA + instance bufs).
-    /// None until `init_near_lod_resources` has been called.
-    pub cull_group0: Option<wgpu::BindGroup>,
-    /// Phase 4: frustum-cull group 1 (CSR grid + near-connect uniform).
-    pub cull_group1: Option<wgpu::BindGroup>,
-    /// Phase 4: draw_indirect write bind group.
-    pub draw_indirect: Option<wgpu::BindGroup>,
-    /// Phase 4: sphere render bind group.
-    pub render_sphere: Option<wgpu::BindGroup>,
-    /// Phase 4: cylinder render bind group.
-    pub render_cylinder: Option<wgpu::BindGroup>,
     // ─── V2 Phase A ───────────────────────────────────────────────────────────
     /// Metrics reduction group 0 (last_spike + v + metrics_buf).
     pub metrics: wgpu::BindGroup,
     /// Metrics reduction group 1 (metrics uniform).
     pub metrics_uniform: wgpu::BindGroup,
-    // ─── V2 Phase D ───────────────────────────────────────────────────────────
-    /// emit_edges group 0 (spikes + grid + pos + edge ring). None until edge
-    /// buffers + neuron buffers are allocated.
-    pub emit_edges: Option<wgpu::BindGroup>,
-    /// emit_edges group 1 (edge uniform).
-    pub emit_edges_uniform: Option<wgpu::BindGroup>,
-    /// ribbon render group 0 (edge_buffer + ribbon uniform).
-    pub render_ribbon: Option<wgpu::BindGroup>,
     // ─── Morphology ───────────────────────────────────────────────────────────
     /// Per-segment-chunk morphology tube render and compaction bind groups.
     /// Empty until both morph buffers + neuron buffers are allocated.
@@ -1119,10 +727,6 @@ pub struct GpuResources {
     pub render_targets: Option<RenderTargets>,
     /// Phase 3: render-pass resources (manifold mesh + uniform buffers).
     pub render_resources: Option<RenderResources>,
-    /// Phase 4: near-LOD GPU buffers.
-    pub near_lod_buffers: Option<NearLodBuffers>,
-    /// V2 Phase D: persistent active-edge ring buffers.
-    pub edge_buffers: Option<EdgeBuffers>,
     /// Morphology: per-network procedural neuron geometry buffers.
     pub morph_buffers: Option<MorphBuffers>,
     /// Set whenever a buffer/texture is recreated; cleared by
@@ -1139,8 +743,6 @@ impl Default for GpuResources {
             bind_groups: None,
             render_targets: None,
             render_resources: None,
-            near_lod_buffers: None,
-            edge_buffers: None,
             morph_buffers: None,
             bind_groups_dirty: false,
         }
@@ -1459,285 +1061,6 @@ impl GpuResources {
             bloom_blur_h_uniform: bloom_uniform_buf("bloom-blur-h-uniform"),
             bloom_blur_v_uniform: bloom_uniform_buf("bloom-blur-v-uniform"),
             bloom_composite_uniform: bloom_uniform_buf("bloom-composite-uniform"),
-        });
-        self.bind_groups_dirty = true;
-    }
-
-    /// Initialise Phase 4 near-LOD GPU buffers (instance append, indirect draw,
-    /// sphere/cylinder geometry). Allocates ONCE; cleared per frame, never grown.
-    /// Derives caps from adapter limits; disables near-LOD when buffers won't fit.
-    pub fn init_near_lod_resources(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        config: &SimConfig,
-        grid: &SpatialGrid,
-    ) {
-        // Derive caps: check adapter limits via buffer-size limits.
-        // NeuronInstance = 32 B, SynapseInstance = 32 B.
-        let limits = device.limits();
-        let max_binding = limits.max_storage_buffer_binding_size as u64;
-
-        let max_near = (DEFAULT_MAX_NEAR_INSTANCES as u64).min(max_binding / 32) as u32;
-        let max_syn = (DEFAULT_MAX_SYNAPSE_INSTANCES as u64).min(max_binding / 32) as u32;
-
-        if max_near == 0 || max_syn == 0 {
-            // Adapter cannot support near-LOD buffers; leave near_lod_buffers None.
-            eprintln!("[near_lod] adapter cannot support near-LOD buffers, disabling");
-            self.near_lod_buffers = None;
-            return;
-        }
-
-        let append_usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC;
-        let atomic_usage = wgpu::BufferUsages::STORAGE
-            | wgpu::BufferUsages::COPY_DST
-            | wgpu::BufferUsages::COPY_SRC;
-        let indirect_usage = wgpu::BufferUsages::STORAGE
-            | wgpu::BufferUsages::INDIRECT
-            | wgpu::BufferUsages::COPY_DST;
-        let uniform_usage = wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST;
-
-        let neuron_instances = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("near_neuron_instances"),
-            size: (max_near as u64) * 32, // NeuronInstance = 32 B
-            usage: append_usage,
-            mapped_at_creation: false,
-        });
-        let synapse_instances = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("near_synapse_instances"),
-            size: (max_syn as u64) * 32, // SynapseInstance = 32 B
-            usage: append_usage,
-            mapped_at_creation: false,
-        });
-        let neuron_count = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("near_neuron_count"),
-            size: 4,
-            usage: atomic_usage,
-            mapped_at_creation: false,
-        });
-        let synapse_count = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("near_synapse_count"),
-            size: 4,
-            usage: atomic_usage,
-            mapped_at_creation: false,
-        });
-        let neuron_overflow = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("near_neuron_overflow"),
-            size: 4,
-            usage: atomic_usage,
-            mapped_at_creation: false,
-        });
-        let synapse_overflow = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("near_synapse_overflow"),
-            size: 4,
-            usage: atomic_usage,
-            mapped_at_creation: false,
-        });
-        // DrawIndexedIndirectArgs: 5 × u32 = 20 B.
-        let neuron_draw_args = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("near_neuron_draw_args"),
-            size: 20,
-            usage: indirect_usage,
-            mapped_at_creation: false,
-        });
-        let synapse_draw_args = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("near_synapse_draw_args"),
-            size: 20,
-            usage: indirect_usage,
-            mapped_at_creation: false,
-        });
-        // Profiler visible counts (written by draw_indirect shader).
-        let neuron_visible = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("near_neuron_visible"),
-            size: 4,
-            usage: atomic_usage,
-            mapped_at_creation: false,
-        });
-        let synapse_visible = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("near_synapse_visible"),
-            size: 4,
-            usage: atomic_usage,
-            mapped_at_creation: false,
-        });
-
-        // Frustum uniform (64 B: 6*16 + 16 + 16 = 128 B → 112 B in struct).
-        let frustum_uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("frustum_uniform"),
-            size: std::mem::size_of::<FrustumCullUniforms>() as u64,
-            usage: uniform_usage,
-            mapped_at_creation: false,
-        });
-
-        // Near connect uniform (static after init).
-        let near_connect_uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("near_connect_uniform"),
-            contents: bytemuck::bytes_of(&NearConnectUniforms {
-                n: config.n as u32,
-                k_near: DEFAULT_K_NEAR,
-                seed_lo: config.seed_lo(),
-                grid_dim: grid.dim,
-                max_near_instances: max_near,
-                max_synapse_instances: max_syn,
-                _pad: [0; 2],
-            }),
-            usage: uniform_usage,
-        });
-
-        // Build sphere (icosphere level-1): 12 verts × (pos + normal) = 12 × 24 B.
-        let (sphere_verts, sphere_indices) = build_icosphere();
-        let sphere_index_count = sphere_indices.len() as u32;
-        // Sphere VB: position + normal = 6 × f32 = 24 B/vert.
-        let sphere_vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("sphere_vb"),
-            contents: bytemuck::cast_slice(&sphere_verts),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        let sphere_ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("sphere_ib"),
-            contents: bytemuck::cast_slice(&sphere_indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-
-        // Build 6-sided prism cylinder: 12 verts × 12 B (pos only).
-        let (cyl_verts, cyl_indices) = build_cylinder_prism();
-        let cylinder_index_count = cyl_indices.len() as u32;
-        let cylinder_vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("cylinder_vb"),
-            contents: bytemuck::cast_slice(&cyl_verts),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        let cylinder_ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("cylinder_ib"),
-            contents: bytemuck::cast_slice(&cyl_indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-
-        // Indirect write uniform (static after init).
-        let indirect_write_uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("indirect_write_uniform"),
-            contents: bytemuck::bytes_of(&IndirectWriteUniforms {
-                sphere_index_count,
-                cylinder_index_count,
-                max_near_instances: max_near,
-                max_synapse_instances: max_syn,
-            }),
-            usage: uniform_usage,
-        });
-
-        // Near-render uniform (uploaded each frame).
-        let near_render_uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("near_render_uniform"),
-            size: std::mem::size_of::<NearRenderUniforms>() as u64,
-            usage: uniform_usage,
-            mapped_at_creation: false,
-        });
-
-        // Profiler staging: 6 × u32 (neuron_count, neuron_overflow, synapse_count,
-        // synapse_overflow, neuron_visible, synapse_visible).
-        let profiler_staging = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("near_lod_profiler_staging"),
-            size: 24, // 6 × u32
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        // Zero all counters via queue.write_buffer (not COPY_DST for instances,
-        // but the count/overflow bufs have COPY_DST so we zero them here).
-        let zero4 = [0u32];
-        queue.write_buffer(&neuron_count, 0, bytemuck::cast_slice(&zero4));
-        queue.write_buffer(&synapse_count, 0, bytemuck::cast_slice(&zero4));
-        queue.write_buffer(&neuron_overflow, 0, bytemuck::cast_slice(&zero4));
-        queue.write_buffer(&synapse_overflow, 0, bytemuck::cast_slice(&zero4));
-        queue.write_buffer(&neuron_visible, 0, bytemuck::cast_slice(&zero4));
-        queue.write_buffer(&synapse_visible, 0, bytemuck::cast_slice(&zero4));
-
-        self.near_lod_buffers = Some(NearLodBuffers {
-            neuron_instances,
-            synapse_instances,
-            neuron_count,
-            synapse_count,
-            neuron_overflow,
-            synapse_overflow,
-            neuron_draw_args,
-            synapse_draw_args,
-            neuron_visible,
-            synapse_visible,
-            frustum_uniform,
-            near_connect_uniform,
-            indirect_write_uniform,
-            near_render_uniform,
-            sphere_vb,
-            sphere_ib,
-            sphere_index_count,
-            cylinder_vb,
-            cylinder_ib,
-            cylinder_index_count,
-            profiler_staging,
-            max_near_instances: max_near,
-            max_synapse_instances: max_syn,
-        });
-        self.bind_groups_dirty = true;
-    }
-
-    /// V2 Phase D: allocate the persistent active-edge ring buffers (ONCE; never
-    /// per-frame, never reallocated when the modulus setting changes). Resets the
-    /// monotonic write index + clears the ring so stale slots render as clipped.
-    pub fn init_edge_resources(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        let edge_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("edge_buffer"),
-            size: (EDGE_CAP as u64) * std::mem::size_of::<EdgeEvent>() as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        // Clear the ring to zero (birth_tick 0 + zero positions → clipped verts).
-        let zero_ring = vec![0u8; (EDGE_CAP as usize) * std::mem::size_of::<EdgeEvent>()];
-        queue.write_buffer(&edge_buffer, 0, &zero_ring);
-
-        let counter_usage = wgpu::BufferUsages::STORAGE
-            | wgpu::BufferUsages::COPY_DST
-            | wgpu::BufferUsages::COPY_SRC;
-        let edge_write_index = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("edge_write_index"),
-            size: 4,
-            usage: counter_usage,
-            mapped_at_creation: false,
-        });
-        let edge_emitted = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("edge_emitted"),
-            size: 4,
-            usage: counter_usage,
-            mapped_at_creation: false,
-        });
-        let zero = [0u32];
-        queue.write_buffer(&edge_write_index, 0, bytemuck::cast_slice(&zero));
-        queue.write_buffer(&edge_emitted, 0, bytemuck::cast_slice(&zero));
-
-        let edge_uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("edge_uniform"),
-            size: std::mem::size_of::<EdgeUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let ribbon_uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ribbon_uniform"),
-            size: std::mem::size_of::<RibbonUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let edge_emitted_staging = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("edge_emitted_staging"),
-            size: 4,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        self.edge_buffers = Some(EdgeBuffers {
-            edge_buffer,
-            edge_write_index,
-            edge_emitted,
-            edge_uniform,
-            ribbon_uniform,
-            edge_emitted_staging,
         });
         self.bind_groups_dirty = true;
     }
@@ -2172,80 +1495,6 @@ impl GpuResources {
             (None, None, None)
         };
 
-        // ─── Phase 4: near-LOD bind groups ──────────────────────────────────────
-        let (cull_group0, cull_group1, draw_indirect_bg, render_sphere_bg, render_cylinder_bg) =
-            if let (Some(nlb), Some(gb)) = (&self.near_lod_buffers, &self.grid_buffers) {
-                let pos_x = chunk0(&nb.pos_x);
-                let pos_y = chunk0(&nb.pos_y);
-                let pos_z = chunk0(&nb.pos_z);
-
-                // Cull group 0.
-                let cg0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("cull-bg-g0"),
-                    layout: &layouts.cull_bgl_group0,
-                    entries: &[
-                        entry(0, &nlb.frustum_uniform),
-                        entry(1, pos_x),
-                        entry(2, pos_y),
-                        entry(3, pos_z),
-                        entry(4, last_spike),
-                        entry(5, v),
-                        entry(6, &nlb.neuron_instances),
-                        entry(7, &nlb.synapse_instances),
-                        entry(8, &nlb.neuron_count),
-                        entry(9, &nlb.synapse_count),
-                        entry(10, &nlb.neuron_overflow),
-                        entry(11, &nlb.synapse_overflow),
-                    ],
-                });
-                // Cull group 1.
-                let cg1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("cull-bg-g1"),
-                    layout: &layouts.cull_bgl_group1,
-                    entries: &[
-                        entry(0, &gb.cell_of_neuron),
-                        entry(1, &gb.cell_start),
-                        entry(2, &gb.cell_neurons),
-                        entry(3, &nlb.near_connect_uniform),
-                    ],
-                });
-                // Draw indirect group.
-                let dig = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("draw-indirect-bg"),
-                    layout: &layouts.draw_indirect_bgl,
-                    entries: &[
-                        entry(0, &nlb.neuron_count),
-                        entry(1, &nlb.synapse_count),
-                        entry(2, &nlb.neuron_draw_args),
-                        entry(3, &nlb.synapse_draw_args),
-                        entry(4, &nlb.neuron_visible),
-                        entry(5, &nlb.synapse_visible),
-                        entry(6, &nlb.indirect_write_uniform),
-                    ],
-                });
-                // Sphere render group.
-                let srg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("render-sphere-bg"),
-                    layout: &layouts.render_sphere_bgl,
-                    entries: &[
-                        entry(0, &nlb.near_render_uniform),
-                        entry(1, &nlb.neuron_instances),
-                    ],
-                });
-                // Cylinder render group.
-                let crg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("render-cylinder-bg"),
-                    layout: &layouts.render_cylinder_bgl,
-                    entries: &[
-                        entry(0, &nlb.near_render_uniform),
-                        entry(1, &nlb.synapse_instances),
-                    ],
-                });
-                (Some(cg0), Some(cg1), Some(dig), Some(srg), Some(crg))
-            } else {
-                (None, None, None, None, None)
-            };
-
         // ─── V2 Phase A: metrics reduction bind groups ───────────────────────
         let metrics = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("metrics-bg"),
@@ -2261,44 +1510,6 @@ impl GpuResources {
             layout: &layouts.metrics_uniform_bgl,
             entries: &[entry(0, &sim.metrics_uniform)],
         });
-
-        // ─── V2 Phase D: active-edge bind groups ─────────────────────────────
-        let (emit_edges, emit_edges_uniform, render_ribbon) = if let Some(eb) = &self.edge_buffers {
-            let pos_x = chunk0(&nb.pos_x);
-            let pos_y = chunk0(&nb.pos_y);
-            let pos_z = chunk0(&nb.pos_z);
-            let emit = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("emit-edges-bg"),
-                layout: &layouts.emit_edges_bgl,
-                entries: &[
-                    entry(0, &sim.spike_list),
-                    entry(1, &sim.spike_count),
-                    entry(2, last_spike),
-                    entry(3, &grid.cell_of_neuron),
-                    entry(4, &grid.cell_start),
-                    entry(5, &grid.cell_neurons),
-                    entry(6, pos_x),
-                    entry(7, pos_y),
-                    entry(8, pos_z),
-                    entry(9, &eb.edge_buffer),
-                    entry(10, &eb.edge_write_index),
-                    entry(11, &eb.edge_emitted),
-                ],
-            });
-            let emit_u = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("emit-edges-uniform-bg"),
-                layout: &layouts.emit_edges_uniform_bgl,
-                entries: &[entry(0, &eb.edge_uniform)],
-            });
-            let ribbon = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("render-ribbon-bg"),
-                layout: &layouts.render_ribbon_bgl,
-                entries: &[entry(0, &eb.edge_buffer), entry(1, &eb.ribbon_uniform)],
-            });
-            (Some(emit), Some(emit_u), Some(ribbon))
-        } else {
-            (None, None, None)
-        };
 
         // ─── Morphology: per-chunk tube render + compaction bind groups ──────
         let morph_segment_chunks = if let Some(mb) = &self.morph_buffers {
@@ -2367,19 +1578,9 @@ impl GpuResources {
             render_far,
             render_manifold,
             stimulate,
-            // Phase 4
-            cull_group0,
-            cull_group1,
-            draw_indirect: draw_indirect_bg,
-            render_sphere: render_sphere_bg,
-            render_cylinder: render_cylinder_bg,
             // V2 Phase A
             metrics,
             metrics_uniform,
-            // V2 Phase D
-            emit_edges,
-            emit_edges_uniform,
-            render_ribbon,
             // Morphology
             morph_segment_chunks,
             render_soma_spheres,
@@ -2395,89 +1596,9 @@ impl GpuResources {
         self.bind_groups = None;
         self.render_targets = None;
         self.render_resources = None;
-        self.near_lod_buffers = None;
-        self.edge_buffers = None;
         self.morph_buffers = None;
         self.bind_groups_dirty = false;
     }
-}
-
-// ─── Phase 4: geometry generators ────────────────────────────────────────────
-
-/// Build an icosphere (subdivision level 1) → 12 vertices, 20 triangles.
-/// Returns (vertices_f32, indices_u16) where each vertex is [px, py, pz, nx, ny, nz]
-/// (6 × f32 = 24 B) and indices are 3 × u16 per triangle (60 u16 = 120 B).
-/// The sphere is a unit sphere (radius 1); the VS scales per instance.
-pub fn build_icosphere() -> (Vec<f32>, Vec<u16>) {
-    // Golden ratio φ = (1 + √5) / 2 ≈ 1.618...
-    let phi = (1.0f32 + 5.0f32.sqrt()) / 2.0;
-
-    // 12 vertices of a regular icosahedron (normalized to unit sphere).
-    let raw: [[f32; 3]; 12] = [
-        [-1.0, phi, 0.0],
-        [1.0, phi, 0.0],
-        [-1.0, -phi, 0.0],
-        [1.0, -phi, 0.0],
-        [0.0, -1.0, phi],
-        [0.0, 1.0, phi],
-        [0.0, -1.0, -phi],
-        [0.0, 1.0, -phi],
-        [phi, 0.0, -1.0],
-        [phi, 0.0, 1.0],
-        [-phi, 0.0, -1.0],
-        [-phi, 0.0, 1.0],
-    ];
-    let mut verts: Vec<f32> = Vec::with_capacity(12 * 6);
-    for p in &raw {
-        let l = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt().max(1e-9);
-        let n = [p[0] / l, p[1] / l, p[2] / l];
-        verts.extend_from_slice(&[n[0], n[1], n[2], n[0], n[1], n[2]]);
-    }
-
-    // 20 faces of the icosahedron (from Wikipedia / standard winding CCW).
-    let indices: Vec<u16> = vec![
-        0, 11, 5, 0, 5, 1, 0, 1, 7, 0, 7, 10, 0, 10, 11, 1, 5, 9, 5, 11, 4, 11, 10, 2, 10, 7, 6, 7,
-        1, 8, 3, 9, 4, 3, 4, 2, 3, 2, 6, 3, 6, 8, 3, 8, 9, 4, 9, 5, 2, 4, 11, 6, 2, 10, 8, 6, 7, 9,
-        8, 1,
-    ];
-    assert_eq!(indices.len(), 60);
-    (verts, indices)
-}
-
-/// Build a 6-sided prism cylinder.
-/// - 12 vertices: 6 bottom ring + 6 top ring.
-/// - Bottom ring at Y=0, top ring at Y=1, radius=1 in XZ.
-/// - 12 triangles: 6 side quads (2 tris each) + 0 end caps (not needed for synapse lines).
-/// Vertex layout: [x, y, z] × 12 = 36 f32 = 144 B.
-/// Index layout: 36 u16 (12 tris × 3).
-pub fn build_cylinder_prism() -> (Vec<f32>, Vec<u16>) {
-    use std::f32::consts::PI;
-    let sides = 6u32;
-    let mut verts: Vec<f32> = Vec::with_capacity(12 * 3);
-    // Bottom ring (y=0), then top ring (y=1).
-    for ring in 0..2 {
-        let y = ring as f32;
-        for s in 0..sides {
-            let angle = (s as f32) * 2.0 * PI / (sides as f32);
-            verts.push(angle.cos()); // x
-            verts.push(y); // y
-            verts.push(angle.sin()); // z
-        }
-    }
-    // Indices: side quads only (no end caps).
-    // Bottom ring: indices 0..5, top ring: indices 6..11.
-    let mut indices: Vec<u16> = Vec::with_capacity(36);
-    for s in 0..sides {
-        let b0 = s as u16;
-        let b1 = ((s + 1) % sides) as u16;
-        let t0 = (s + sides) as u16;
-        let t1 = ((s + 1) % sides + sides) as u16;
-        // Two triangles per side quad (CCW).
-        indices.extend_from_slice(&[b0, b1, t0]);
-        indices.extend_from_slice(&[b1, t1, t0]);
-    }
-    assert_eq!(indices.len(), 36);
-    (verts, indices)
 }
 
 /// Allocate the device buffer(s) for a chunked field and upload `data`.
@@ -2616,7 +1737,6 @@ mod tests {
         r.destroy();
         assert!(r.neuron_buffers.is_none());
         assert!(r.render_targets.is_none());
-        assert!(r.near_lod_buffers.is_none());
     }
 
     #[test]
@@ -2624,39 +1744,6 @@ mod tests {
         assert_eq!(std::mem::size_of::<RenderUniforms>() % 16, 0);
         assert_eq!(std::mem::size_of::<ManifoldUniforms>() % 16, 0);
         assert_eq!(std::mem::size_of::<StimUniform>() % 16, 0);
-    }
-
-    #[test]
-    fn near_lod_uniform_sizes_aligned() {
-        assert_eq!(std::mem::size_of::<NearRenderUniforms>() % 16, 0);
-        assert_eq!(std::mem::size_of::<FrustumCullUniforms>() % 16, 0);
-        assert_eq!(std::mem::size_of::<NearConnectUniforms>() % 16, 0);
-        assert_eq!(std::mem::size_of::<IndirectWriteUniforms>() % 16, 0);
-    }
-
-    #[test]
-    fn icosphere_has_correct_geometry() {
-        let (verts, indices) = build_icosphere();
-        // 12 verts × 6 f32 = 72 f32
-        assert_eq!(verts.len(), 72);
-        // 20 tris × 3 = 60 u16
-        assert_eq!(indices.len(), 60);
-        // All verts should be on unit sphere (radius ≈ 1.0).
-        for v in verts.chunks(6) {
-            let r = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-            assert!((r - 1.0).abs() < 1e-5, "vertex not on unit sphere: r={r}");
-        }
-    }
-
-    #[test]
-    fn edge_event_layout_locked() {
-        // V2 Phase D: EdgeEvent must be exactly 48 bytes, 16-aligned, to match
-        // the WGSL std430 struct (src_pos+birth_tick | tgt_pos+weight_sign |
-        // curve_seed+3×pad). #1 corruption source.
-        assert_eq!(std::mem::size_of::<EdgeEvent>(), 48);
-        assert_eq!(std::mem::size_of::<EdgeEvent>() % 16, 0);
-        assert_eq!(std::mem::size_of::<EdgeUniforms>() % 16, 0);
-        assert_eq!(std::mem::size_of::<RibbonUniforms>() % 16, 0);
     }
 
     #[test]
@@ -2735,12 +1822,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn cylinder_prism_has_correct_geometry() {
-        let (verts, indices) = build_cylinder_prism();
-        // 12 verts × 3 f32 = 36 f32
-        assert_eq!(verts.len(), 36);
-        // 12 tris × 3 = 36 u16
-        assert_eq!(indices.len(), 36);
-    }
 }
