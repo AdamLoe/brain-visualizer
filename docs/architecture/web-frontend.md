@@ -21,6 +21,9 @@ avoid wasm-bindgen reentrancy panics.
   `web/src/gpu-build/network-build-worker.ts` — latest-wins worker preparation
   for network rebuild payloads; the worker owns a worker-local WASM instance and
   never requests WebGPU
+- `web/src/boot-overlay.ts` — pure startup-overlay label/band helpers
+  (`formatSubStageLabel`, `mapSubStageProgress`) used by `main.ts`, split out so
+  the boot-panel contract is unit-testable without loading `main.ts`
 - `web/index.html` — the immediate DOM/CSS startup overlay and full-viewport
   canvas shell
 - `web/src/render/camera.ts → Camera` — orbit/zoom/pan state machine; produces MVP matrix,
@@ -153,7 +156,10 @@ surface…", "Compiling render shaders…").
 within-stage percent (`Math.round(fraction * 100)`) to the stage label it writes
 to the bottom-right, so it reads e.g. `Prepare network payload 42%` and climbs to
 `100%` as that stage progresses — distinct from the overall bar percent on the
-bottom-left.
+bottom-left. The pure label/band math lives in `web/src/boot-overlay.ts`
+(`formatSubStageLabel`, `mapSubStageProgress`), split out of `main.ts` so the
+contract is unit-testable (`web/src/boot-overlay.test.ts`) without importing
+`main.ts` (which runs `boot()` and needs a DOM + WebGPU adapter at load).
 
 **Prepare-network-payload progress is measured.** The worker builds the payload
 inside a single synchronous WASM `prepare_network_payload` call (manifold →

@@ -25,8 +25,13 @@ import {
   morphConfigRequiresPreparedNetwork,
   settingsRequirePreparedNetwork,
 } from "./rebuild/rebuild-intent";
-import { NetworkBuildClient, type PreparedNetworkStatus } from "./gpu-build/network-build-client";
+import {
+  NetworkBuildClient,
+  type PreparedNetworkProgress,
+  type PreparedNetworkStatus,
+} from "./gpu-build/network-build-client";
 import type { PreparedNetworkPayload } from "./gpu-build/prepared-network";
+import { formatSubStageLabel, mapSubStageProgress } from "./boot-overlay";
 import {
   ZERO_STATS,
   clampNeuronCount,
@@ -114,6 +119,12 @@ interface BrainVisualizerTestHooks {
     seed?: number;
     regionAssignmentMode?: RegionAssignmentMode;
   }) => number;
+  // Test-only: subscribe to real worker payload-build progress ticks for the
+  // latest request. Additive proxy to NetworkBuildClient.onProgress so e2e can
+  // observe the worker -> client progress wiring without a GPU adapter.
+  __bvOnNetworkBuildProgress?: (
+    listener: ((progress: PreparedNetworkProgress) => void) | null,
+  ) => void;
 }
 
 // Cursor stimulation constants (BV10 / phase-3 spec).
@@ -424,6 +435,10 @@ async function boot(): Promise<void> {
     return requestPreparedNetwork("smoke");
   };
 
+  (window as unknown as BrainVisualizerTestHooks).__bvOnNetworkBuildProgress = (listener) => {
+    networkBuildClient.onProgress(listener);
+  };
+
   /**
    * Create (or recreate) the wasm GPU backend for the current config.
    * Startup uses the staged WASM API so the loading overlay can advance from
@@ -463,11 +478,9 @@ async function boot(): Promise<void> {
     // stage label (e.g. "Prepare network payload 42%") so the bottom-right label
     // shows that stage's own progress, not just the overall bar.
     const onSubStage = (label: string, fraction: number): void => {
-      const clamped = Math.max(0, Math.min(1, fraction));
-      const withinPercent = Math.round(clamped * 100);
       updateStartupOverlay({
-        stage: `${label} ${withinPercent}%`,
-        progress: stageBandStart + clamped * (stageBandEnd - stageBandStart),
+        stage: formatSubStageLabel(label, fraction),
+        progress: mapSubStageProgress(fraction, stageBandStart, stageBandEnd),
       });
     };
 
