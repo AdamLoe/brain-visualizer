@@ -133,7 +133,7 @@ adapter capacity from WebGPU limits. Those hardware-derived values can be much
 larger than 20k and should stay larger; downstream product surfaces clamp to
 `PRODUCT_MAX_N` separately.
 
-Old saved browser config keeps its schema version (`bv2_config_v1`), but saved
+Old saved browser config keeps its schema version (`bv2_config_v2`), but saved
 `n` values above `20_000` are clamped on load and on save. The visual/morph
 settings keys were not bumped for this cap.
 
@@ -149,7 +149,7 @@ settings keys were not bumped for this cap.
 
 - [`build-and-deploy.md`](build-and-deploy.md) — how to run the offline verification examples and cargo test
 - [`gpu-backend.md`](gpu-backend.md) — `reinitialize`, buffer lifecycle
-- [`cpu-backend.md`](cpu-backend.md) — CPU tier throughput characteristics
+- [`cpu-backend.md`](cpu-backend.md) — retired CPU backend boundary
 - [`connectivity.md`](connectivity.md) — why N×K drives memory/compute cost
 - [`web-frontend.md`](web-frontend.md) — `restartWithBackend`, AppConfig persistence
 - [`../decisions/scaling.md`](../decisions/scaling.md)

@@ -829,7 +829,7 @@ async function boot(): Promise<void> {
     profiler.setConfig(cfg.backend, cfg.tier, cfg.n, cfg.k);
   });
   (window as unknown as { brainControls: Controls }).brainControls = controls;
-  // Expose restartWithBackend for console-driven backend switching (UX round 2).
+  // Expose restartWithBackend for console-driven GPU restarts.
   (window as unknown as { _restartWithBackend: typeof restartWithBackend })._restartWithBackend = restartWithBackend;
 
   // 9. Wire DOM click handlers — UX overhaul: speed/tier/brain-state removed from

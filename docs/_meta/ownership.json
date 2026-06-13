@@ -100,7 +100,7 @@
     },
     {
       "id": "dec-data-layout",
-      "summary": "packed last_spike word, fixed-point scale S=2^12 + overflow policy, CPU scatter atomics",
+      "summary": "packed last_spike word, fixed-point scale S=2^12 + overflow policy, GPU scatter accumulation layout",
       "owner": "decisions/data-layout.md",
       "references": []
     },

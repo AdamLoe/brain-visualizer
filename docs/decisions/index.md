@@ -10,8 +10,8 @@ constrains.
 | Need | Read |
 |---|---|
 | From-scratch / point-LIF / no graphics engine; SNN as the engine; beauty-first ~10k-scale | [`scope.md`](scope.md) |
-| Two interchangeable backends, toggle UX, full-restart-same-seed switch, CPU coordinator worker, CPU parked for V2 | [`backends.md`](backends.md) |
-| Packed `last_spike` word, fixed-point current scale (S=2^12) + overflow policy, CPU scatter atomics | [`data-layout.md`](data-layout.md) |
+| GPU-only runtime backend, deleted CPU/WebGL2 implementation, stale CPU config normalization | [`backends.md`](backends.md) |
+| Packed `last_spike` word, fixed-point current scale (S=2^12) + overflow policy, scatter accumulation layout | [`data-layout.md`](data-layout.md) |
 | Procedural no-edge-list connectivity, per-tier K, 32-bit hash (not u64 PCG) with golden vectors | [`connectivity.md`](connectivity.md) |
 | Self-organized criticality target, region topology + ambient drive, heterogeneity determinism, weight norm, input modes | [`dynamics.md`](dynamics.md) |
 | Procedurally folded brain surface, region assignment, per-neuron morphology geometry | [`manifold.md`](manifold.md) |

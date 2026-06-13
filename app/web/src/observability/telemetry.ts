@@ -22,7 +22,7 @@ export interface SessionStartEvent {
   name: "session_start";
   payload: {
     appVersion?: string;
-    backend: "gpu" | "cpu";
+    backend: "gpu";
   };
 }
 

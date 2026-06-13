@@ -89,6 +89,22 @@ describe("settings descriptors", () => {
     expect(saved.n).toBe(PRODUCT_MAX_N);
   });
 
+  test("stale CPU backend app config normalizes to GPU", () => {
+    installMemoryLocalStorage();
+    localStorage.setItem(CONFIG_LS_KEY, JSON.stringify({
+      version: 1,
+      n: DEFAULT_CONFIG.n,
+      k: DEFAULT_CONFIG.k,
+      tier: DEFAULT_CONFIG.tier,
+      backend: "cpu",
+      speed: DEFAULT_CONFIG.speed,
+      excitability: DEFAULT_CONFIG.excitability,
+      ticksPerSec: DEFAULT_CONFIG.ticksPerSec,
+    }));
+
+    expect(loadConfig().backend).toBe("gpu");
+  });
+
   test("duplicate generator axon curve control is hidden and default-only", () => {
     expect(MORPH_DESCRIPTORS.map((d) => d.jsonPath)).not.toContain("generator.axonCurveLift");
 

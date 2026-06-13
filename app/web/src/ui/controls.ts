@@ -1,7 +1,7 @@
 import "./controls.css";
 // Phase 5 — Controls & Brain States UI (BV12, BV14, BV15, BV16).
 // Replaces the Phase 1 stubs with real UI wiring, smooth excitability lerp,
-// backend-availability gating, and the adaptive scaler activation.
+// GPU restart wiring, and the adaptive scaler activation.
 
 import type {
   AppConfig,
@@ -123,7 +123,7 @@ export function setSpeed(preset: SpeedPreset, config: AppConfig): void {
 }
 
 // ── setBackend ────────────────────────────────────────────────────────────────
-// Triggers the full restart sequence when the backend is available.
+// Triggers the full GPU restart sequence for callers that still use the facade.
 export async function setBackend(
   kind: BackendKind,
   config: AppConfig,
