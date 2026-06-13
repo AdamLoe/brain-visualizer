@@ -27,11 +27,11 @@ avoid wasm-bindgen reentrancy panics.
   boot wiring is testable GPU-free; `main.ts.startGpuBackend` injects the WebGPU
   backend factory, network client, overlay updater, and frame-yield into it
 - `web/src/boot-overlay.ts` — pure startup-overlay label/band helpers
+  (`formatSubStageLabel`, `mapSubStageProgress`) used by `main.ts`, split out so
+  the boot-panel contract is unit-testable without loading `main.ts`
 - `web/src/boot-timings.ts` — `window.__bvBootTimings` recorder, end-of-boot
   `console.table` summary, and the dev-only >2s stall watchdog (`evaluateStall`,
   `startBootWatchdog`)
-  (`formatSubStageLabel`, `mapSubStageProgress`) used by `main.ts`, split out so
-  the boot-panel contract is unit-testable without loading `main.ts`
 - `web/index.html` — the immediate DOM/CSS startup overlay and full-viewport
   canvas shell
 - `web/src/render/camera.ts → Camera` — orbit/zoom/pan state machine; produces MVP matrix,
