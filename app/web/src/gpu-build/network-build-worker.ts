@@ -82,6 +82,27 @@ workerScope.onmessage = (event: MessageEvent<WorkerIn>) => {
   void prepare(event.data.request);
 };
 
+/** Parse the morphology stats JSON and log its MorphTimer sub-phase ms. Best
+ * effort — a parse failure must never break the build, so it is swallowed. */
+function logPayloadTimings(statsJson: string): void {
+  try {
+    const stats = JSON.parse(statsJson) as { timings?: Record<string, number> };
+    const t = stats.timings;
+    if (!t) return;
+    console.log(
+      `[worker] payload build ms: setup=${fmt(t.setup_ms)} incoming=${fmt(t.incoming_ms)} ` +
+        `dendrite=${fmt(t.dendrite_ms)} axon=${fmt(t.axon_ms)} ` +
+        `finalize=${fmt(t.finalize_ms)} total=${fmt(t.total_ms)}`,
+    );
+  } catch {
+    // ignore — observability only
+  }
+}
+
+function fmt(ms: number | undefined): string {
+  return typeof ms === "number" ? ms.toFixed(1) : "?";
+}
+
 async function prepare(request: PreparedNetworkRequest): Promise<void> {
   try {
     wasmReady ??= init().then(() => undefined);
@@ -136,6 +157,12 @@ async function prepare(request: PreparedNetworkRequest): Promise<void> {
       morphConfigJson: request.morphConfigJson,
     };
     validatePreparedNetworkPayload(payload);
+    // Observability: surface the MorphTimer sub-phase ms (setup/incoming/
+    // dendrite/axon) the WASM build already computed, so a slow payload phase is
+    // visible in the worker console (and, via __bvBootTimings on the main thread,
+    // in the end-of-boot summary). The worker is pure CPU — these are the real
+    // seconds the "Prepare network payload" stage spends.
+    logPayloadTimings(payload.statsJson);
     workerScope.postMessage(
       { type: "ready", payload } satisfies WorkerOut,
       preparedNetworkTransferList(payload),

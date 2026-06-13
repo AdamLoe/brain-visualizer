@@ -33,6 +33,12 @@ import {
 import type { PreparedNetworkPayload } from "./gpu-build/prepared-network";
 import { runGpuStartup, type StagedBackendLike } from "./boot-sequencer";
 import {
+  logBootSummary,
+  recordBootTiming,
+  startBootWatchdog,
+  type BootWatchdog,
+} from "./boot-timings";
+import {
   ZERO_STATS,
   clampNeuronCount,
   loadConfig,
@@ -187,6 +193,9 @@ interface StagedGpuBackendConstructor {
 }
 
 const BOOT_STARTED_AT_MS = performance.now();
+/** The live dev-only boot stall watchdog (module-scoped so both the "Ready"
+ * path and the top-level boot().catch can clear its interval). */
+let activeBootWatchdog: BootWatchdog | null = null;
 let startupState: StartupState = {
   status: "loading",
   stage: "Starting…",
@@ -236,6 +245,29 @@ function clampProgress(progress: number): number {
   return Math.max(0, Math.min(100, progress));
 }
 
+/** Parse the morphology stats JSON and record its MorphTimer sub-phase ms into
+ * __bvBootTimings (prefixed so they group under the payload stage). Best effort:
+ * a bad/empty stats string is silently ignored — observability must not break
+ * boot. */
+function recordPayloadSubPhaseTimings(statsJson: string): void {
+  try {
+    const stats = JSON.parse(statsJson) as { timings?: Record<string, number> };
+    const t = stats.timings;
+    if (!t) return;
+    const phases: Array<[string, keyof typeof t]> = [
+      ["payload: incoming view", "incoming_ms"],
+      ["payload: dendrite", "dendrite_ms"],
+      ["payload: axon", "axon_ms"],
+    ];
+    for (const [label, key] of phases) {
+      const ms = t[key];
+      if (typeof ms === "number") recordBootTiming(label, ms);
+    }
+  } catch {
+    // ignore — observability only
+  }
+}
+
 function nextAnimationFrame(): Promise<void> {
   return new Promise((resolve) => {
     requestAnimationFrame(() => resolve());
@@ -243,6 +275,29 @@ function nextAnimationFrame(): Promise<void> {
 }
 
 async function boot(): Promise<void> {
+  // Boot observability: record per-step wall-clock ms into __bvBootTimings.
+  // `markPhaseA(name)` records the time since the previous mark, attributing it
+  // to the step that just finished. Phase-B (boot-sequencer) stages and the
+  // worker payload sub-phases feed the same array via recordBootTiming.
+  let phaseAMark = performance.now();
+  const markPhaseA = (stage: string): void => {
+    const now = performance.now();
+    recordBootTiming(stage, now - phaseAMark);
+    phaseAMark = now;
+  };
+  // DEV-only stall watchdog: warn if the overlay step (label + %) is unchanged
+  // for > 2s, the product signal that "a boot step taking > 2s is wrong". Cheap
+  // (one interval); stopped at "Ready". `import.meta.env.DEV` is true under Vite
+  // dev / vitest and false in production builds. Read defensively because the
+  // project's tsconfig doesn't pull in `vite/client`'s ImportMeta typing.
+  const viteEnv = (import.meta as unknown as { env?: { DEV?: boolean } }).env;
+  if (viteEnv?.DEV) {
+    activeBootWatchdog = startBootWatchdog(() => ({
+      label: startupState.stage,
+      percent: Math.round(startupState.progress),
+    }));
+  }
+
   updateStartupOverlay({ stage: "Loading WASM module...", progress: 8 });
   let startupFrameCounter = 0;
   let startupRafHandle = 0;
@@ -261,12 +316,14 @@ async function boot(): Promise<void> {
   // — overlaps the main-thread renderer init and the GPU handshake. The main
   // module's WASM bytes are already cached, so the worker's fetch is a cache hit.
   const networkBuildClient = new NetworkBuildClient();
+  markPhaseA("Load WASM module");
   updateStartupOverlay({ stage: "Checking browser isolation...", progress: 20 });
 
   // 2. COOP/COEP check.
   const isolated = (globalThis as { crossOriginIsolated?: boolean })
     .crossOriginIsolated === true;
   log_cross_origin_isolation(isolated);
+  markPhaseA("Check browser isolation");
   updateStartupOverlay({ stage: "Loading saved configuration...", progress: 28 });
 
   // 3. Mobile detection — apply full mobile profile (Phase 7 / BV spec):
@@ -288,6 +345,7 @@ async function boot(): Promise<void> {
     console.log("[main] mobile detected → Low tier (N=10k K=16, 0.75×DPR)");
     saveConfig(config); // persist the mobile-forced profile so it survives reload
   }
+  markPhaseA("Load saved configuration");
   updateStartupOverlay({
     stage: `Preparing canvas for N=${config.n} K=${config.k}...`,
     progress: 38,
@@ -300,6 +358,7 @@ async function boot(): Promise<void> {
   resizeCanvas(canvas, mobile ? 0.75 : 1.0);
   const renderer = new Renderer(canvas);
   await renderer.init();
+  markPhaseA("Prepare canvas + renderer");
   updateStartupOverlay({ stage: "Wiring interaction controls...", progress: 46 });
 
   // 5. Camera + input.
@@ -502,8 +561,14 @@ async function boot(): Promise<void> {
         );
         appliedMorphConfigJson = payload.morphConfigJson;
         lastSettingsSnapshot = getSettings();
+        // Observability: fold the worker's MorphTimer sub-phase ms (already in
+        // the payload stats) into the boot summary so the dominant payload phase
+        // is itemized (incoming/dendrite/axon) — the seconds the user sees as the
+        // "Prepare network payload" stage, now broken down.
+        recordPayloadSubPhaseTimings(payload.statsJson);
       },
       log: (message) => console.log(message),
+      recordTiming: (stage, ms) => recordBootTiming(stage, ms),
     });
 
     if (result.error !== null) {
@@ -951,6 +1016,12 @@ async function boot(): Promise<void> {
         const totalMs = performance.now() - BOOT_STARTED_AT_MS;
         updateStartupOverlay({ status: "ready", stage: "Ready", progress: 100 });
         console.log(`[main] first GPU frame rendered after ${totalMs.toFixed(1)}ms`);
+        // Boot is done: stop the stall watchdog and emit the one clean
+        // __bvBootTimings summary table (Phase-A + Phase-B + payload sub-phases).
+        recordBootTiming("First GPU frame", totalMs - phaseAMark);
+        activeBootWatchdog?.stop();
+        activeBootWatchdog = null;
+        logBootSummary();
       } else if (!deferredPipelinesBuilt) {
         // Boot-load overhaul (A1): compile the deferred render pipelines (bloom +
         // true-opacity *_active morphology variants) one frame AFTER the first
@@ -1028,6 +1099,7 @@ async function boot(): Promise<void> {
     rafHandle = requestAnimationFrame(rafLoop);
   }
 
+  markPhaseA("Wire interaction controls");
   updateStartupOverlay({ stage: "Starting animation loop...", progress: 52 });
   cancelAnimationFrame(startupRafHandle);
   frameCounter = startupFrameCounter;
@@ -1088,6 +1160,8 @@ function resizeCanvas(canvas: HTMLCanvasElement, dprScale = 1.0): void {
 
 boot().catch((e) => {
   console.error("[main] boot failed:", e);
+  activeBootWatchdog?.stop();
+  activeBootWatchdog = null;
   const message = e instanceof Error ? e.message : String(e);
   updateStartupOverlay({
     status: "failed",

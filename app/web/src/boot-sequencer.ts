@@ -81,6 +81,10 @@ export interface RunGpuStartupArgs {
   ): void;
   /** Logger (defaults to console.log). */
   log?(message: string): void;
+  /** Record a `{ stage, ms }` boot timing (defaults to a no-op). Each Phase-B
+   * stage reports its wall-clock duration here so it lands in the end-of-boot
+   * `__bvBootTimings` summary alongside Phase-A and worker sub-phase timings. */
+  recordTiming?(stage: string, ms: number): void;
 }
 
 export interface RunGpuStartupResult {
@@ -116,6 +120,7 @@ export async function runGpuStartup(
     stagePreparedPayload,
   } = args;
   const log = args.log ?? ((m: string) => console.log(m));
+  const recordTiming = args.recordTiming ?? (() => {});
 
   let stagedBackend: StagedBackendLike | null = null;
   let rawBackend: unknown = null;
@@ -270,6 +275,7 @@ export async function runGpuStartup(
     const ms = performance.now() - started;
     updateOverlay({ stage: stage.name, progress: stageBandEnd });
     log(`[startup] ${stage.name}: ${ms.toFixed(1)}ms`);
+    recordTiming(stage.name, ms);
     return stagedBackend !== null;
   };
 

@@ -2256,6 +2256,45 @@ pub fn generate(
     source_types: &[u8],
     reach: connectivity::ReachParams,
 ) -> Morphology {
+    generate_with_progress(
+        positions,
+        grid,
+        k,
+        seed_lo,
+        params,
+        source_types,
+        reach,
+        None,
+    )
+}
+
+/// Same as [`generate`], but invokes an optional `progress(fraction 0..1)`
+/// callback as the heavy per-neuron build advances. `fraction` is LOCAL to the
+/// morphology build (0 when it starts, 1 when done); the caller maps it into the
+/// overall payload band (morphology occupies the boot overlay's 0.25..0.85, the
+/// dominant phase — measured ~470ms at 6k/K16 on a fast box, but seconds on a
+/// slow CPU / higher N, which is exactly when the bar must keep moving).
+///
+/// Emits are THROTTLED: the per-neuron loop reports at most ~64 times across all
+/// N (every `n/64` neurons), never once per iteration — each emit crosses
+/// WASM→JS and posts a worker message, so per-iteration emits would flood the
+/// channel. `&dyn Fn` keeps wasm/js_sys out of this native-compiled path.
+#[allow(clippy::too_many_arguments)]
+pub fn generate_with_progress(
+    positions: &[[f32; 3]],
+    grid: &SpatialGrid,
+    k: usize,
+    seed_lo: u32,
+    params: &MorphologyParams,
+    source_types: &[u8],
+    reach: connectivity::ReachParams,
+    progress: Option<&dyn Fn(f32)>,
+) -> Morphology {
+    let emit_frac = |frac: f32| {
+        if let Some(cb) = progress {
+            cb(frac);
+        }
+    };
     let n = positions.len();
     let setup_start = MorphTimer::start();
     assert_eq!(
@@ -2318,6 +2357,9 @@ pub fn generate(
         &cell_of_neuron,
     );
     let incoming_ms = incoming_start.elapsed_ms();
+    // The incoming-view scan (build_incoming_view) is ~10% of the local band;
+    // the per-neuron dendrite+axon loop below is the rest (0.10..1.0).
+    emit_frac(0.10);
     let mut dendrite_ms = 0.0f32;
     let mut axon_ms = 0.0f32;
 
@@ -2325,7 +2367,16 @@ pub fn generate(
     // handled by GPU segment chunking, so the budget no longer changes with N.
     let decor_group_budget = effective_decor_group_max(n, params.dendrite_decor_group_max);
 
+    // Throttle: emit progress at most ~64 times across the whole per-neuron loop
+    // (every `progress_step` neurons), never once per iteration. At 6k/K16 the
+    // loop is ~420ms, so steps land ~6ms apart on a fast box and stay well under
+    // the <2s/<1.5s no-silent-gap contract even on a much slower CPU.
+    let progress_step = (n / 64).max(1);
+
     for i in 0..n {
+        if progress.is_some() && i % progress_step == 0 {
+            emit_frac(0.10 + 0.90 * (i as f32 / n as f32));
+        }
         let soma = positions[i];
         let id = i as u32;
 
@@ -2747,6 +2798,7 @@ pub fn generate(
         axon_ms += axon_start.elapsed_ms();
     }
 
+    emit_frac(1.0);
     let finalize_start = MorphTimer::start();
 
     if dropped > 0 {

@@ -41,7 +41,12 @@ network.
 
 ## Surface generation pipeline
 
-The six-step pipeline runs synchronously in `crates/brain-visualizer/src/manifold/mod.rs → Manifold::generate`:
+The six-step pipeline runs synchronously in `crates/brain-visualizer/src/manifold/mod.rs → Manifold::generate`.
+For boot observability there is a `Manifold::generate_with_progress(params,
+progress)` variant that fires a `progress(fraction 0..1)` callback at each
+internal step boundary (icosphere → gyrify → placement → regions → grid); the
+payload builder maps that onto the boot overlay's `0.00..0.15` band so the bar
+moves during the manifold build. `Manifold::generate` delegates with `None`.
 
 1. **Icosphere subdivision** (`crates/brain-visualizer/src/manifold/icosphere.rs → icosphere`): starts
    from a 12-vertex/20-face base icosahedron and subdivides `levels` times, each
@@ -138,7 +143,23 @@ for ambient drive. **Do not reorder the `RegionKind` variants** without updating
 `crates/brain-visualizer/src/sim/morphology.rs → generate` builds a flat list of
 `MorphSegment` records, one per line segment, at `initialize()` time. The
 generator is driven by `MorphologyParams` and emits a matching `MorphologyStats`
-profile so review artifacts can read facts without scraping logs. The shipped
+profile so review artifacts can read facts without scraping logs.
+
+**Boot sub-progress + timing.** Morphology is the dominant payload phase (boot
+band `0.25..0.85`). `generate_with_progress(.., progress)` threads a
+`progress(fraction 0..1)` callback from inside the per-neuron loop, **throttled
+to ~64 emits across all N** (every `n/64` neurons — never one per iteration,
+since each emit crosses WASM→JS and posts a worker message). `generate` delegates
+with `None`. The `MorphologyStats.timings` (`MorphologyTimings`:
+setup/incoming/dendrite/axon/finalize/total ms) are surfaced to the browser: the
+worker logs them and `main.ts` folds incoming/dendrite/axon into
+`window.__bvBootTimings`. Measured local baseline at the 6k/K16 default
+(`cargo run --example time_network_payload --release`, no GPU adapter — the
+worker build is pure CPU so it times offline): morphology total ~0.4–0.8s, of
+which the **axon arbor build dominates** (~75%), dendrite ~15%, the
+`build_incoming_view` connectivity scan ~7%. No phase exceeds 2s at this scale on
+a typical box; the `seen_targets` dedup scan is **not** hot here, so it was left
+unchanged (it is on the bit-exact connectivity-determinism path). The shipped
 default is `MorphologyParams::locked_default`; a dev-panel-supplied
 `MorphologyConfig` layers its generator fields over that locked default via
 `crates/brain-visualizer/src/sim/morphology.rs → GeneratorConfig::apply_to` /

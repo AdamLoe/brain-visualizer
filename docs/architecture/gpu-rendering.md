@@ -87,6 +87,13 @@ Morphology geometry is generated at network build time and uploaded as chunked
 uses `active_segment_indices[instance_index]` to map compacted instances back to
 chunk-local segments; there is no `instance_index == segment_index` debug path.
 
+The CPU generation of this geometry (`morphology::generate_with_progress`) is the
+heavy "Prepare network payload" boot phase and now reports continuous
+sub-progress + `MorphologyTimings` to the boot overlay — see
+[`manifold.md`](manifold.md#neuron-morphology-geometry) and
+[`web-frontend.md`](web-frontend.md) for the per-phase ms and the
+`window.__bvBootTimings` / stall-watchdog observability.
+
 The compaction predicate mirrors the shader's traveling-packet activity. It
 keeps only segments whose packet band is about to light, lit, or recently lit,
 then writes a chunk-local `DrawIndirectArgs`. Both additive and active tube

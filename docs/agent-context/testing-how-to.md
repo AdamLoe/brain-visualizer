@@ -28,6 +28,16 @@ Run `cargo` from `app/` (workspace root) and `npm` from `app/web/`.
 - **`cargo run -p brain-visualizer --example morph_view`** — native artifact/review harness:
   regenerates the accepted-default morphology views and writes the current `/tmp/morph_*`
   stats artifacts for manual/defaults verification.
+- **`cargo run -p brain-visualizer --example time_network_payload --release`** —
+  times the "Prepare network payload" boot phase at the 6k/K16 default and prints
+  per-phase wall-clock ms (folding manifold, source types, morphology TOTAL +
+  the MorphTimer breakdown setup/incoming/dendrite/axon/finalize, soma spheres),
+  plus an emit-cadence check on `prepare_with_progress` (count, monotonicity, max
+  gap between emits). **This is the local verification for the boot-stall fix:**
+  the worker payload build is GPU-free (no WebGPU device), so the exact phase
+  that parks the overlay can be measured on this no-adapter box. Use it to prove
+  no payload phase exceeds ~2s of silent work and to spot which morphology
+  sub-phase owns the time before touching it.
 - **`npm run typecheck`** — `tsc --noEmit` over `web/`.
 - **`npm test`** — vitest unit tests (e.g. `web/controls.test.ts`).
 - **`npm run build`** — production-equivalent `wasm-pack build` + TypeScript check +

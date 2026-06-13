@@ -77,12 +77,30 @@ impl PreparedNetworkBuild {
                 cb(label, frac);
             }
         };
-        let manifold = crate::build_manifold_with_region_assignment(&config, region_assignment);
+        // Boot-overlay band map (fractions are monotone over the whole payload
+        // build): manifold 0.00..0.15, source types ..0.25, morphology 0.25..0.85
+        // (the heavy phase — now reports continuous sub-progress so the overlay
+        // never parks silently), soma spheres ..1.0. The four NAMED boundaries
+        // below stay at their original fractions; the sub-phase callbacks only
+        // fill the gaps BETWEEN them so the % keeps climbing.
+        const MANIFOLD_BAND: (f32, f32) = (0.0, 0.15);
+        const MORPH_BAND: (f32, f32) = (0.25, 0.85);
+        let map_band = |band: (f32, f32), local: f32| band.0 + (band.1 - band.0) * local;
+
+        let manifold_progress =
+            |local: f32| emit("Folding manifold", map_band(MANIFOLD_BAND, local));
+        let manifold = crate::build_manifold_with_region_assignment_progress(
+            &config,
+            region_assignment,
+            progress.map(|_| &manifold_progress as &dyn Fn(f32)),
+        );
         emit("Folding manifold", 0.15);
         let source_types =
             crate::sim::morphology::build_source_types(config.seed_lo(), &manifold.neuron_regions);
         emit("Assigning source types", 0.25);
-        let morph = crate::sim::morphology::generate(
+        let morph_progress =
+            |local: f32| emit("Growing morphology", map_band(MORPH_BAND, local));
+        let morph = crate::sim::morphology::generate_with_progress(
             &manifold.neuron_positions,
             &manifold.spatial_grid,
             config.k,
@@ -90,6 +108,7 @@ impl PreparedNetworkBuild {
             &params,
             &source_types,
             reach,
+            progress.map(|_| &morph_progress as &dyn Fn(f32)),
         );
         emit("Growing morphology", 0.85);
         let spheres = crate::sim::morphology::emit_soma_spheres(

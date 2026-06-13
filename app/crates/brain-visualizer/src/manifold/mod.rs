@@ -94,7 +94,26 @@ impl ManifoldParams {
 impl Manifold {
     /// Generate the full manifold. Deterministic for a given `ManifoldParams`.
     pub fn generate(params: &ManifoldParams) -> Self {
+        Self::generate_with_progress(params, None)
+    }
+
+    /// Same as [`generate`], but invokes an optional `progress(fraction 0..1)`
+    /// callback at each internal step boundary. `fraction` is local to the
+    /// manifold build (0 at the start, 1 when done); the caller maps it into the
+    /// overall payload band (manifold occupies the boot overlay's 0.0..0.15).
+    /// `&dyn Fn` so the wasm bridge can wrap a `js_sys::Function` while native
+    /// callers (tests, examples) pass `None` — no wasm dependency leaks here.
+    pub fn generate_with_progress(
+        params: &ManifoldParams,
+        progress: Option<&dyn Fn(f32)>,
+    ) -> Self {
+        let emit = |frac: f32| {
+            if let Some(cb) = progress {
+                cb(frac);
+            }
+        };
         let ico = icosphere::icosphere(params.subdivisions);
+        emit(0.2);
         let fold_field = gyrify::FoldField::new(params.gyrify, params.seed);
         let base_vertices: Vec<[f32; 3]> = ico
             .vertices
@@ -104,14 +123,18 @@ impl Manifold {
             .collect();
         let vertices = gyrify::gyrify_with_field(&base_vertices, &fold_field);
         let faces = ico.faces;
+        emit(0.5);
 
         let neuron_positions = place_neurons(params.n, params.seed, &fold_field);
+        emit(0.7);
         let neuron_regions = regions::assign_regions_with_mode(
             &neuron_positions,
             ANTERIOR_POSTERIOR_AXIS,
             params.region_assignment,
         );
+        emit(0.85);
         let spatial_grid = SpatialGrid::build(&neuron_positions, params.grid_dim);
+        emit(1.0);
 
         Manifold {
             vertices,

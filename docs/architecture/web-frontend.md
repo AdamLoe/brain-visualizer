@@ -27,6 +27,9 @@ avoid wasm-bindgen reentrancy panics.
   boot wiring is testable GPU-free; `main.ts.startGpuBackend` injects the WebGPU
   backend factory, network client, overlay updater, and frame-yield into it
 - `web/src/boot-overlay.ts` — pure startup-overlay label/band helpers
+- `web/src/boot-timings.ts` — `window.__bvBootTimings` recorder, end-of-boot
+  `console.table` summary, and the dev-only >2s stall watchdog (`evaluateStall`,
+  `startBootWatchdog`)
   (`formatSubStageLabel`, `mapSubStageProgress`) used by `main.ts`, split out so
   the boot-panel contract is unit-testable without loading `main.ts`
 - `web/index.html` — the immediate DOM/CSS startup overlay and full-viewport
@@ -166,20 +169,55 @@ bottom-left. The pure label/band math lives in `web/src/boot-overlay.ts`
 contract is unit-testable (`web/src/boot-overlay.test.ts`) without importing
 `main.ts` (which runs `boot()` and needs a DOM + WebGPU adapter at load).
 
-**Prepare-network-payload progress is measured.** The worker builds the payload
-inside a single synchronous WASM `prepare_network_payload` call (manifold →
-source-types → morphology → soma spheres). That call takes an optional
-`(phase_label, fraction)` progress callback and fires it at each phase boundary
-(manifold `0.15` → source-types `0.25` → morphology `0.85` → soma `1.0`;
-morphology is the heavy phase, hence the wide jump). The worker `postMessage`s
-each tick as an additive `{type:"progress", sequence, stage:"prepare-payload",
-phase, fraction}` message (carrying the request `sequence` so latest-wins drops
-stale ticks); `NetworkBuildClient.onProgress` relays it to `onSubStage`, which
-maps the real fraction onto the stage band. Because the worker thread is blocked
-inside the sync WASM call but the *main* thread is not, those messages repaint
-the overlay between phases, so `Prepare network payload N%` climbs with real
-work and never stalls at a fake ceiling. `waitForPreparedNetwork` still snaps to
-`100%` on completion as a safety.
+**Prepare-network-payload progress is measured and continuous.** The worker
+builds the payload inside a single synchronous WASM `prepare_network_payload`
+call (manifold → source-types → morphology → soma spheres). That call takes an
+optional `(phase_label, fraction)` progress callback. The four named phase
+boundaries are still monotone (manifold `0.15` → source-types `0.25` →
+morphology `0.85` → soma `1.0`), but the two long phases now also report
+**continuous sub-progress that fills the gaps between those boundaries**, so the
+bar never parks silently:
+- The manifold build (`Manifold::generate_with_progress`,
+  band `0.00..0.15`) emits at its internal step boundaries (icosphere → gyrify →
+  placement → regions → grid).
+- The morphology build (`morphology::generate_with_progress`, band
+  `0.25..0.85`, the **dominant** phase) emits from inside the per-neuron loop,
+  **throttled to ~64 emits across all N** (every `n/64` neurons, never one per
+  iteration — each emit crosses WASM→JS and posts a worker message). At the
+  6k/K16 default this phase is ~0.4–0.8s on a fast box, but seconds on a slow CPU
+  or higher N — which is exactly when the continuous fraction keeps the bar
+  moving (no consecutive-emit gap exceeds ~70ms in the harness).
+
+The worker `postMessage`s each tick as an additive `{type:"progress", sequence,
+stage:"prepare-payload", phase, fraction}` message (carrying the request
+`sequence` so latest-wins drops stale ticks); `NetworkBuildClient.onProgress`
+relays it to `onSubStage`, which maps the real fraction onto the stage band.
+Because the worker thread is blocked inside the sync WASM call but the *main*
+thread is not, those messages repaint the overlay continuously, so `Prepare
+network payload N%` climbs with real work and never stalls.
+`waitForPreparedNetwork` still snaps to `100%` on completion as a safety.
+
+**No synthetic within-step %.** A stage appends a within-step `NN%` to its label
+*only* when it carries a real progress fraction — the GPU-acquire sub-stages and
+the now-continuous payload phase (both via `onSubStage`/`formatSubStageLabel`).
+Every other stage shows its bare label; there is no fabricated creep. The overall
+bar still advances per stage (that is real cumulative-weight progress, not a fake
+within-step percent). Enforced by `web/src/boot-sequencer-label-contract.test.ts`.
+
+**Boot timing observability (`window.__bvBootTimings`).** `web/src/boot-timings.ts`
+owns a structured `{ stage, ms }[]` on `window.__bvBootTimings` covering Phase-A
+`main.ts` steps (`markPhaseA`), Phase-B `boot-sequencer` stages (via the
+`recordTiming` arg, which also logs `[startup] <stage>: <ms>ms`), the worker
+payload sub-phases (`payload: incoming view / dendrite / axon`, parsed from the
+payload stats `timings`), and `First GPU frame`. At "Ready" `logBootSummary()`
+emits one `console.table`. A **dev-only stall watchdog** (`startBootWatchdog`,
+gated on `import.meta.env.DEV`) polls the overlay every 500ms and
+`console.warn`s once if a step's label AND percent are unchanged for > 2s — the
+product signal that "a boot step taking > 2s is wrong". The pure stall decision
+is `evaluateStall` (unit-tested in `web/src/boot-timings.test.ts`). The watchdog
+is cleared at "Ready" and on the boot failure path. Real GPU-stage timings
+(acquire / pipeline-compile / first-frame) can only be confirmed on hardware with
+an adapter — the user pastes `window.__bvBootTimings` from a real device.
 
 **Progress-listener lifecycle (stuck-at-0% fix).** The startup payload request
 is fired *before* the GPU-acquire stage so the warmed worker overlaps the GPU

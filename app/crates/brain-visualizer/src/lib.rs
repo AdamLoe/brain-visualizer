@@ -34,6 +34,19 @@ pub fn build_manifold_with_region_assignment(
     Manifold::generate(&params)
 }
 
+/// Same as [`build_manifold_with_region_assignment`] but threads an optional
+/// `progress(fraction 0..1)` callback through the manifold build so the boot
+/// overlay's 0.0..0.15 band advances continuously instead of sitting silent.
+pub fn build_manifold_with_region_assignment_progress(
+    config: &SimConfig,
+    region_assignment: RegionAssignmentMode,
+    progress: Option<&dyn Fn(f32)>,
+) -> Manifold {
+    let params =
+        ManifoldParams::new(config.n, config.seed_lo()).with_region_assignment(region_assignment);
+    Manifold::generate_with_progress(&params, progress)
+}
+
 /// Region split summary (Input, Association, Output) — used for startup logging
 /// and as a host-testable sanity surface.
 pub fn region_split(manifold: &Manifold) -> (usize, usize, usize) {
