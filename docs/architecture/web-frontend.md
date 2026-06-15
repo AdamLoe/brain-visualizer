@@ -6,32 +6,25 @@ last_updated:  2026-06-13
 
 # Web Frontend
 
-The TypeScript app shell that drives everything visible in the browser. Its one
-job is to own the rAF loop, broker all input events, and hold the single live
-reference to `WasmGpuBackend` — routing every mutation through that loop to
-avoid wasm-bindgen reentrancy panics.
+The TypeScript app shell owns the rAF loop, brokers browser input, and holds the
+single live `WasmGpuBackend` reference — routing every mutation through that loop
+to avoid wasm-bindgen reentrancy panics.
 
 ## What it owns
 
-- `web/src/main.ts` — boot sequence, startup overlay state, rAF loop (`rafLoop`), pending resize/stim
-  plumbing, worker-prepared network rebuild wiring, `RebuildCoordinator` wiring
-  for settings/morphology rebuild mutations, `startGpuBackend`,
-  `restartWithBackend`, `computeStimulation`, `raySphereIntersect`
+- `web/src/main.ts` — boot sequence, startup overlay state, rAF loop (`rafLoop`),
+  pending resize/stim plumbing, worker-prepared rebuild wiring, and cursor
+  stimulation helpers (`computeStimulation`, `raySphereIntersect`)
 - `web/src/gpu-build/network-build-client.ts → NetworkBuildClient` and
   `web/src/gpu-build/network-build-worker.ts` — latest-wins worker preparation
   for network rebuild payloads; the worker owns a worker-local WASM instance and
   never requests WebGPU
-- `web/src/boot-sequencer.ts → runGpuStartup` — the staged GPU-backend startup
-  orchestration (the `stages` table, `runStage`, `onSubStage`, and the
-  early-attached payload-progress listener), extracted from `main.ts` so the real
-  boot wiring is testable GPU-free; `main.ts.startGpuBackend` injects the WebGPU
-  backend factory, network client, overlay updater, and frame-yield into it
+- `web/src/boot-sequencer.ts → runGpuStartup` — staged GPU-backend startup,
+  weighted progress, payload-progress buffering, and GPU-free boot tests
 - `web/src/boot-overlay.ts` — pure startup-overlay label/band helpers
-  (`formatSubStageLabel`, `mapSubStageProgress`) used by `main.ts`, split out so
-  the boot-panel contract is unit-testable without loading `main.ts`
-- `web/src/boot-timings.ts` — `window.__bvBootTimings` recorder, end-of-boot
-  `console.table` summary, and the dev-only >2s stall watchdog (`evaluateStall`,
-  `startBootWatchdog`)
+  (`formatSubStageLabel`, `mapSubStageProgress`)
+- `web/src/boot-timings.ts` — `window.__bvBootTimings`, boot summary logging,
+  and dev-only stall watchdog (`evaluateStall`, `startBootWatchdog`)
 - `web/index.html` — the immediate DOM/CSS startup overlay and full-viewport
   canvas shell
 - `web/src/render/camera.ts → Camera` — orbit/zoom/pan state machine; produces MVP matrix,
@@ -46,12 +39,9 @@ avoid wasm-bindgen reentrancy panics.
   (`loadConfig`, `saveConfig`)
 - `web/src/ui/hud.ts → CornerHud` — public HUD shell (layout and update cadence);
   metric internals are owned by [`profiling.md`](profiling.md)
-- `crates/brain-visualizer/src/lib.rs` — the wasm_bindgen entry surface:
-  `WasmGpuBackend.create` / `create_staged` lifecycle, the JS-facing tick/render/settings API,
-  the &mut reentrancy discipline (the data contracts that cross —
-  `VisualSettings`, `SimConfig`/`TickStats` — are owned by
-  [`simulation.md`](simulation.md) and [`dev-panel.md`](dev-panel.md); this
-  doc owns the *bridge mechanics*)
+- `crates/brain-visualizer/src/lib.rs` — `WasmGpuBackend` wasm_bindgen entry
+  surface and JS-facing tick/render/settings API; this doc owns bridge mechanics,
+  not the `VisualSettings` or `SimConfig`/`TickStats` data contracts
 - The natural silent-start invariant: there is no intro code anywhere in the
   frontend; see [Natural start](#natural-start) below
 
@@ -78,8 +68,9 @@ before any backend call, pending DOM work is flushed in order:
    `gpuBackend.update_settings()` or `set_morphology_config(json)`
 4. `pendingStim` → `gpuBackend.stimulate()`
 
-Network N/K/seed and region-assignment-mode changes no longer call
-`gpuBackend.reinitialize()` from rAF. `main.ts` snapshots the current
+Network N/K/seed and region-assignment-mode changes go through
+worker-prepared payloads instead of direct `gpuBackend.reinitialize()` calls
+from rAF. `main.ts` snapshots the current
 `VisualSettings` Float32Array, morphology JSON, and
 `AppConfig.regionAssignmentMode`, assigns a monotonic sequence, and sends the request to
 `NetworkBuildClient`. The worker returns a flat `PreparedNetworkPayload`:
@@ -115,175 +106,54 @@ through `WasmGpuBackend.render_frame()`.
 
 `web/index.html` includes a fixed `#startup-overlay` in the initial HTML, so the
 browser paints a loading surface before the TypeScript module and wasm init do
-any heavy work. The overlay is a strict **three-row** panel: a title row
-(`#startup-title`), a progress bar (`#startup-progress-track` /
-`#startup-progress-bar`, turquoise→gold gradient), and a single meta row
-(`#startup-meta`) with the percent on the left (`#startup-percent`) and the
-current stage label on the right (`#startup-stage`, ellipsized). `main.ts`
-updates `window.__bvStartup` and the overlay through coarse page stages, then
-through the measured backend stages. `updateStartupOverlay` now accepts only
-`{ status?, stage?, progress? }`; the former diagnostic fields (`detail`,
-`stageIndex`/`totalStages`, per-stage `timings`, `backendMs`, the elapsed/frames
-DOM writes) were dropped along with their DOM nodes. `StartupState` keeps
-`status`, `stage`, `progress`, `frames`, `startedAtMs`, `elapsedMs`;
-`__bvFrameCounter` and `__bvStartup.status` remain the E2E hooks. On success the
+any heavy work. The overlay is intentionally product-facing: title, progress,
+percent, and current stage only. `web/src/main.ts → updateStartupOverlay` accepts
+`{ status?, stage?, progress? }`, updates `window.__bvStartup`, and keeps
+`__bvFrameCounter` / `__bvStartup.status` available as E2E hooks. On success the
 overlay fades out after the first GPU frame; on backend failure it stays visible
-with the error in the stage row and `failed` in the percent slot.
+with the error in the stage row and `failed` in the percent slot. Detailed timing
+state lives in `web/src/boot-timings.ts`, not in overlay DOM.
 
-`boot()` starts a lightweight startup `requestAnimationFrame` loop before
-`init()` so tests and users can see `window.__bvFrameCounter` advance while wasm
-and backend work is pending. GPU startup begins as soon as config/canvas and the
-pending-flag queues exist, while the remaining HUD/dev-panel/control wiring
-continues during async WebGPU adapter/device acquisition. The real app `rafLoop`
-replaces the lightweight loop later, but it sees `gpuBackend === null` until the
-staged backend has completed every startup stage. This prevents the rAF loop
-from touching half-built GPU resources.
+`web/src/main.ts → boot` starts a lightweight startup rAF before `init()` so the
+frame counter advances while wasm and backend work are pending. GPU startup then
+delegates to `web/src/boot-sequencer.ts → runGpuStartup`, which starts the
+network-build worker early, overlaps payload preparation with WebGPU acquisition,
+and uses `WasmGpuBackend.create_staged()` plus explicit `startup_*` calls. The
+real app `rafLoop` can run during startup, but `gpuBackend` remains null until
+every staged resource step has completed; this keeps the rAF-owned backend
+discipline intact.
 
-The staged path starts a network-build worker request before device acquisition,
-then uses `WasmGpuBackend.create_staged()` followed by explicit `startup_*`
-calls: wait for the prepared payload, validate/stage it with
-`startup_begin_prepared_network`, upload neuron/grid buffers, upload render mesh,
-finalize render allocation, upload morphology buffers, refresh bind groups/reset
-state, compile render pipelines, and create render targets. `main.ts` awaits one
-animation frame before each stage so the browser repaints between the compile-
-heavy blocks.
+`runGpuStartup` owns the weighted backend-stage table, progress-listener
+lifecycle, frame-yield points, and latest buffered worker-progress fraction. The
+pure label/band helpers live in `web/src/boot-overlay.ts →
+formatSubStageLabel, mapSubStageProgress`, and the continuous worker-payload
+fractions come from `crates/brain-visualizer/src/sim/gpu/mod.rs →
+PreparedNetworkBuild::prepare_with_progress` through
+`crates/brain-visualizer/src/lib.rs → prepare_network_payload` and
+`web/src/gpu-build/network-build-client.ts → NetworkBuildClient.onProgress`.
+Only real progress fractions add a within-stage percent label; stages without a
+sub-stage callback show their bare label.
 
-**Sub-stage progress weighting.** The `[54%, 96%]` band is no longer split into
-equal slices. Each stage carries a `weight`, and the band is divided by
-cumulative weight so the GPU-acquire, render-compile, and network-payload stages
-own the majority (acquire+core pipelines `0.34`, prepare network payload `0.18`,
-compile render pipelines `0.16`, create render targets `0.07`, the rest
-`0.02`–`0.05`). Weights are normalized by their sum, so the table need not total
-exactly `1.0`. Within those heavy stages the bar would otherwise freeze; a
-one-way Rust→WASM→TS sub-stage callback `(label, fraction)` reports intra-stage
-progress that `onSubStage` maps onto the current stage's band, so the label and
-bar advance continuously ("Requesting GPU adapter… / device… / Configuring
-surface…", "Compiling render shaders…").
-
-**Within-stage percent in the label.** `onSubStage(label, fraction)` appends the
-within-stage percent (`Math.round(fraction * 100)`) to the stage label it writes
-to the bottom-right, so it reads e.g. `Prepare network payload 42%` and climbs to
-`100%` as that stage progresses — distinct from the overall bar percent on the
-bottom-left. The pure label/band math lives in `web/src/boot-overlay.ts`
-(`formatSubStageLabel`, `mapSubStageProgress`), split out of `main.ts` so the
-contract is unit-testable (`web/src/boot-overlay.test.ts`) without importing
-`main.ts` (which runs `boot()` and needs a DOM + WebGPU adapter at load).
-
-**Prepare-network-payload progress is measured and continuous.** The worker
-builds the payload inside a single synchronous WASM `prepare_network_payload`
-call (manifold → source-types → morphology → soma spheres). That call takes an
-optional `(phase_label, fraction)` progress callback. The four named phase
-boundaries are still monotone (manifold `0.15` → source-types `0.25` →
-morphology `0.85` → soma `1.0`), but the two long phases now also report
-**continuous sub-progress that fills the gaps between those boundaries**, so the
-bar never parks silently:
-- The manifold build (`Manifold::generate_with_progress`,
-  band `0.00..0.15`) emits at its internal step boundaries (icosphere → gyrify →
-  placement → regions → grid).
-- The morphology build (`morphology::generate_with_progress`, band
-  `0.25..0.85`, the **dominant** phase) emits from inside the per-neuron loop,
-  **throttled to ~64 emits across all N** (every `n/64` neurons, never one per
-  iteration — each emit crosses WASM→JS and posts a worker message). At the
-  6k/K16 default this phase is ~0.4–0.8s on a fast box, but seconds on a slow CPU
-  or higher N — which is exactly when the continuous fraction keeps the bar
-  moving (no consecutive-emit gap exceeds ~70ms in the harness).
-
-The worker `postMessage`s each tick as an additive `{type:"progress", sequence,
-stage:"prepare-payload", phase, fraction}` message (carrying the request
-`sequence` so latest-wins drops stale ticks); `NetworkBuildClient.onProgress`
-relays it to `onSubStage`, which maps the real fraction onto the stage band.
-Because the worker thread is blocked inside the sync WASM call but the *main*
-thread is not, those messages repaint the overlay continuously, so `Prepare
-network payload N%` climbs with real work and never stalls.
-`waitForPreparedNetwork` still snaps to `100%` on completion as a safety.
-
-**No synthetic within-step %.** A stage appends a within-step `NN%` to its label
-*only* when it carries a real progress fraction — the GPU-acquire sub-stages and
-the now-continuous payload phase (both via `onSubStage`/`formatSubStageLabel`).
-Every other stage shows its bare label; there is no fabricated creep. The overall
-bar still advances per stage (that is real cumulative-weight progress, not a fake
-within-step percent). Enforced by `web/src/boot-sequencer-label-contract.test.ts`.
-
-**Boot timing observability (`window.__bvBootTimings`).** `web/src/boot-timings.ts`
-owns a structured `{ stage, ms }[]` on `window.__bvBootTimings` covering Phase-A
-`main.ts` steps (`markPhaseA`), Phase-B `boot-sequencer` stages (via the
-`recordTiming` arg, which also logs `[startup] <stage>: <ms>ms`), the worker
-payload sub-phases (`payload: incoming view / dendrite / axon`, parsed from the
-payload stats `timings`), and `First GPU frame`. At "Ready" `logBootSummary()`
-emits one `console.table`. A **dev-only stall watchdog** (`startBootWatchdog`,
-gated on `import.meta.env.DEV`) polls the overlay every 500ms and
-`console.warn`s once if a step's label AND percent are unchanged for > 2s — the
-product signal that "a boot step taking > 2s is wrong". The pure stall decision
-is `evaluateStall` (unit-tested in `web/src/boot-timings.test.ts`). The watchdog
-is cleared at "Ready" and on the boot failure path. Real GPU-stage timings
-(acquire / pipeline-compile / first-frame) can only be confirmed on hardware with
-an adapter — the user pastes `window.__bvBootTimings` from a real device.
-
-**Progress-listener lifecycle (stuck-at-0% fix).** The startup payload request
-is fired *before* the GPU-acquire stage so the warmed worker overlaps the GPU
-handshake. The worker therefore emits its `prepare-payload` ticks while
-"Acquire GPU + core pipelines" is still the active stage. The progress listener
-is attached **up front** (right after the startup request, before the acquire
-stage) and the latest fraction is buffered; the "Prepare network payload" stage
-replays that buffered fraction when it becomes active. Previously the listener
-was attached only inside that stage's `run()` (after acquire), so on a fast GPU
-where the worker finished during acquire every tick was dropped (no listener
-yet) and the label sat at `0%` then jumped to `100%` — observed on real hardware
-as a stall at "Prepare network payload 0%". The staged-boot orchestration now
-lives in `web/src/boot-sequencer.ts` (`runGpuStartup`), which `main.ts`
-delegates to, so the real `runStage`/`onSubStage`/`onProgress` wiring is exercised
-GPU-free by `web/src/boot-sequencer.test.ts` (a fake staged backend + a real
-`NetworkBuildClient` driven on a controllable timeline, covering both the
-worker-still-generating and worker-finished-during-acquire orderings). On a box
-with no real GPU the worker often finishes before any tick lands, so the label
-can still jump straight to `100%`; the real intermediate climb shows on GPU
-hardware and is asserted by the integration test. The acquire/
-compile sub-stage callback is installed both as an optional
-`create_staged(...)` argument (acquire sub-stages) and via
-`backend.set_progress_callback(...)` (compile sub-stages); both are additive and
-optional, so a stale-vs-regenerated `.d.ts` can't break boot. The legacy
-`WasmGpuBackend.create()` monolith remains as a compatibility fallback (it
-installs no callback and builds all pipelines up front). The real startup
-manifold/morphology CPU payload is prepared by the same worker path used by
-structural rebuilds; that worker is constructed and **warmed** (its own WASM
-instance kicked off via a `warm` message) immediately after the main module's
-`init()`, so the worker instantiate overlaps the renderer init + GPU handshake
-instead of serializing in front of the first `prepare`.
-
-**Deferred render pipelines.** Boot only compiles the render pipelines the first
-frame draws (`startup_build_render_pipelines` → `build_render_core_pipelines`).
-The 3 bloom pipelines and the true-opacity `*_active` morphology variants are
-compiled one frame *after* the first rendered frame: the rAF loop calls
-`gpuBackend.build_deferred_render_pipelines()` on the frame after
-`firstReadyFrameSeen`. `render_full` guards every bloom/active access with
-`is_some()`, so the first frame paints correctly without them (bloom is opt-in
-and default-off; the active layer briefly falls back to the additive look). See
-[`gpu-backend.md`](gpu-backend.md) and [`../decisions/rendering.md`](../decisions/rendering.md).
+`web/src/boot-timings.ts` owns `window.__bvBootTimings`, `recordBootTiming`,
+`logBootSummary`, `evaluateStall`, and the dev-only `startBootWatchdog`. Timing
+rows are collected for console/dev inspection, while the overlay remains compact
+status UI. After the first rendered frame, `rafLoop` calls
+`gpuBackend.build_deferred_render_pipelines()` so bloom and active morphology
+variants compile off the boot-critical path; `render_full` guards deferred
+pipeline access until those pipelines exist. See [`gpu-backend.md`](gpu-backend.md)
+and [`../decisions/rendering.md`](../decisions/rendering.md).
 
 ## Wasm call boundary
 
-Three categories of backend call, each with a different cost profile:
-
-| Call | When | Notes |
-|------|------|-------|
-| `gpuBackend.render_frame(mvp, right, up, eye, dist)` | Every frame | Cheap JS→wasm boundary; GPU work happens inside |
-| `gpuBackend.tick(ticks, excitability)` | Every frame (time-based accumulator) | Submits compute passes; returns spike count |
-| `gpuBackend.update_settings(Float32Array)` | On settings change | Pushes `VisualSettings` uniform; one per change event |
-| `gpuBackend.set_morphology_config(json)` | On morphology config apply | Separate JSON path for the dev-panel morphology config; the backend diffs and runs the narrowest update. Distinct from the Float32Array — see below |
-| `gpuBackend.apply_prepared_network(flat payload...)` | On worker-prepared N/K/seed rebuild | Validates the versioned flat typed-array payload, reconstructs Rust manifold/grid/morphology structs, then performs main-thread WebGPU upload/resource creation |
-| `gpuBackend.startup_begin_prepared_network(flat payload...)` | Startup only | Validates the worker payload and stores it as staged startup state; later `startup_*` calls own WebGPU upload |
-| `gpuBackend.startup_*()` | Startup only | Staged network/resource creation. JS yields one animation frame between calls; `startup_build_render_pipelines` compiles only the core (first-frame) pipelines. The instance is not assigned to the rAF-owned `gpuBackend` until complete. |
-| `gpuBackend.set_progress_callback(cb)` | Startup only | Installs the `(label, fraction)` sub-stage progress callback used by the compile-heavy stage. |
-| `gpuBackend.build_deferred_render_pipelines()` | One frame after first render | Compiles the deferred bloom + `*_active` morphology pipelines off the boot critical path. Idempotent. |
-
-`render_frame` receives the MVP matrix and billboard axes from `Camera`; it does
-not read back any GPU state. The struct contract for `VisualSettings` and the
-tick return value live in `crates/brain-visualizer/src/lib.rs`; cross-link to
-[`simulation.md`](simulation.md) for the sim-side contract. This doc owns the
-*bridge mechanics* (call ordering, pending-flag discipline, reentrancy rules);
-the data-layout contracts for `VisualSettings` and `SimConfig`/`TickStats` are
-owned by [`dev-panel.md`](dev-panel.md) and [`simulation.md`](simulation.md)
-respectively.
+The JS-facing backend surface is owned by
+`crates/brain-visualizer/src/lib.rs → WasmGpuBackend`. The hot-frame calls are
+`tick` and `render_frame`; startup and structural rebuilds use the staged
+`create_staged` / `startup_*` / prepared-network methods; settings and
+morphology apply paths use `update_settings` and `set_morphology_config`. This
+doc owns the *bridge mechanics* (call ordering, pending-flag discipline,
+reentrancy rules). The data-layout contracts for `VisualSettings` and
+`SimConfig`/`TickStats` are owned by [`dev-panel.md`](dev-panel.md) and
+[`simulation.md`](simulation.md) respectively.
 
 The morphology config travels a **separate** channel from the Float32Array:
 `crates/brain-visualizer/src/lib.rs → WasmGpuBackend::set_morphology_config` takes
@@ -323,8 +193,8 @@ sets `_targetExcitability`; `tickExcitability()` advances `_currentExcitability`
 toward the target at `EXCITABILITY_LERP = 0.08` per frame. The smoothed value is
 passed to `gpuBackend.tick()` each frame.
 
-Speed is now a time-based accumulator (`targetTicksPerSec`, set by the dev
-panel) rather than the older `SpeedPreset` frame-count multiplier. `ticksThisFrame`
+Speed uses a time-based accumulator (`targetTicksPerSec`, set by the dev
+panel) rather than the legacy `SpeedPreset` frame-count multiplier. `ticksThisFrame`
 in `controls.ts` still exists for backward compat but the main rAF loop uses the
 accumulator path exclusively.
 
@@ -341,60 +211,45 @@ is available on mobile too.
 ## Renderer (canvas + device acquisition)
 
 `web/src/render/renderer.ts → Renderer.init()` is intentionally passive: it logs
-readiness but does not acquire the WebGPU adapter/device, configure the canvas,
-or create fallback WebGL2/2D contexts. `WasmGpuBackend.create_staged()` (or the
-legacy `create()` fallback) is the only live startup path that acquires the
-browser WebGPU device and surface. `Renderer.render()` is a no-op before backend
-readiness; the startup overlay owns visible feedback. The HDR render target
-lives inside the wasm backend, not in the TS wrapper.
+readiness but does not acquire WebGPU or fallback canvas contexts.
+`WasmGpuBackend.create_staged()` (or the legacy `create()` fallback) is the only
+startup path that claims the browser WebGPU device and surface. `Renderer.render()`
+is a no-op before backend readiness; the startup overlay owns visible feedback.
 
 ## Types and DEFAULT_CONFIG
 
-`web/src/core/types.ts → DEFAULT_CONFIG` boots at `n=6_000, k=16,
-regionAssignmentMode="hash-random", excitability=0.10, ticksPerSec=30` — the
-high-scale beauty baseline where the network is calm enough for propagation to
-be visible. The product neuron-count cap is
-`PRODUCT_MAX_N = 20_000`; `loadConfig()` and `saveConfig()` clamp persisted or
-incoming `n` through `clampNeuronCount()`, so old saved high-N localStorage
-payloads cannot exceed the current product cap. Tier presets and the per-tier N
-bounds are in `web/src/ui/controls.ts → TIER_PRESETS`, `N_MIN`, `N_MAX`;
-tier→N/K logic belongs to [`scaling.md`](scaling.md).
+`web/src/core/types.ts → DEFAULT_CONFIG` is the authoritative boot scale and
+runtime-default snapshot. `PRODUCT_MAX_N`, `clampNeuronCount()`, `loadConfig()`,
+and `saveConfig()` enforce the product neuron-count cap for persisted or incoming
+`n`, so old high-N localStorage payloads cannot exceed the current cap. Tier
+presets and the per-tier N bounds are in `web/src/ui/controls.ts →
+TIER_PRESETS`, `N_MIN`, `N_MAX`; tier→N/K logic belongs to
+[`scaling.md`](scaling.md).
 
 ## AppConfig persistence
 
 The user-chosen runtime knobs in `AppConfig` are persisted to localStorage so a
-reload restores the last-used network — they were previously lost on every reload.
+reload restores the last-used network.
 `web/src/core/types.ts → loadConfig`, `saveConfig`, `resetConfig` own this; the key is
-`bv2_config_v2`. The shape deliberately mirrors the dev-panel settings pattern
-([`dev-panel.md`](dev-panel.md)): a versioned key, a version gate that falls back
-to `DEFAULT_CONFIG` on mismatch/parse-error/missing key, a field-by-field
-`?? base` merge over defaults, a hard clamp of saved `n` to `PRODUCT_MAX_N`, and
-a `try/catch` so a blocked localStorage (private browsing, quota) degrades
-silently.
+`web/src/core/types.ts → CONFIG_LS_KEY` (`bv2_config_v2`). The loader uses a
+version gate, merge-over-defaults, `n` clamping, and silent storage failure
+handling, matching the dev-panel persistence pattern.
 
-**Persisted fields:** `n`, `k`, `tier`, `backend`, `regionAssignmentMode`,
-`speed`, `excitability`, `ticksPerSec`. The only live backend value is `"gpu"`; stale saved
-`backend: "cpu"` values are normalized by `loadConfig()` so old localStorage
-payloads cannot break startup. Unknown `regionAssignmentMode` strings normalize
-to `"hash-random"` so stale prototype saves cannot promote an unrecognized mode.
-**Not persisted:** `seed` (a fixed constant) and any runtime counters.
+The persisted subset is defined by `web/src/core/types.ts → SavedConfig`. The
+only live backend value is `"gpu"`; stale saved backend values are normalized by
+`loadConfig()` so old localStorage payloads cannot break startup. Unknown
+`regionAssignmentMode` strings normalize to the default so stale prototype saves
+cannot promote an unrecognized mode. `seed` remains a fixed constant, and runtime
+counters are not persisted.
 
 Wiring:
 
-- **Boot** — `web/src/main.ts → boot` seeds `config` from `loadConfig()` (not
-  `DEFAULT_CONFIG` directly). The mobile profile override is applied **after**
-  load and then re-saved, so the forced low-tier profile survives a reload.
-- **On mutation** — every active `AppConfig` field change saves: tier/speed
-  setters and the `Controls` class methods in `web/src/ui/controls.ts` call
-  `saveConfig`, and the dev-panel N/K rebuild path in `main.ts` saves after
-  mutating `config.n`/`config.k`.
-- **Excitability** — the live control is the dev-panel excitability slider; its
-  `onExcitability` handler in `main.ts` writes `config.excitability` and saves.
-  At boot, `web/src/ui/controls.ts → seedExcitability` primes both the current
-  and target of the excitability lerp from `config.excitability`, so a restored
-  value applies immediately with no ramp from the default. (`setBrainState` —
-  the named-state buttons removed in the UX overhaul — is dormant, like
-  `scalerDecide`.)
+`web/src/main.ts → boot` seeds `config` from `loadConfig()`, applies/saves the
+mobile profile override, and wires mutation handlers to `saveConfig`. The
+dev-panel excitability handler saves `config.excitability`; at boot,
+`web/src/ui/controls.ts → seedExcitability` primes both the current and target
+of the excitability lerp so a restored value applies immediately. `setBrainState`
+and `scalerDecide` are retained compatibility paths, not active DOM controls.
 
 ## Natural start
 

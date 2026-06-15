@@ -26,32 +26,12 @@
   stimulation experiments, or when a real mesh can be streamed without bundling
   a large asset.
 
-## First realism pass targets silhouette, structured folds, and folded placement
-
-- **Decision.** The first realism pass improves the whole-brain silhouette,
-  hemispheres/fissure, and cortical folds together, and neuron placement follows
-  the folded outer radius. Regions remain hash-shuffled and non-anatomical.
-- **Why.** Surface-only folds are hard to read when the optional surface is off;
-  the neuron cloud has to carry the product's first impression. Keeping regions
-  random avoids bundling a propagation/ambient-drive behavior change into a
-  visual shape pass.
-- **Applies to.** [`../architecture/manifold.md`](../architecture/manifold.md),
-  [`../architecture/web-frontend.md`](../architecture/web-frontend.md).
-- **Code anchors.** `crates/brain-visualizer/src/manifold/gyrify.rs →
-  FoldField`; `crates/brain-visualizer/src/manifold/mod.rs →
-  brain_outer_radius, folded_outer_radius, place_neurons`;
-  `crates/brain-visualizer/src/manifold/regions.rs → assign_regions`.
-- **Tradeoffs.** Folded placement changes spatial-grid occupancy and local
-  connectivity density, so host tests and artifact metrics are part of the
-  contract. The accepted pass kept `max_surface` and `max_neuron` below the
-  frontend stimulation sphere radius.
-
 ## Region assignment by hash-shuffle, not spatial blocking
 
-- **Decision.** Input (30%), Association (40%), and Output (30%) regions are
-  assigned by default by shuffling neuron indices with a deterministic integer
-  hash and slicing the result, producing a spatially random (non-contiguous)
-  assignment. A bounded internal prototype mode can instead use the
+- **Decision.** Input, association, and output regions are assigned by default by
+  shuffling neuron indices with a deterministic integer hash and slicing the
+  result, producing a spatially random non-contiguous assignment. A bounded
+  internal prototype mode can instead use the
   anterior-posterior axis with deterministic jitter to bias input posterior and
   output anterior, but it is opt-in and exposed only as a hidden dev-panel
   Network-tab checkbox for side-by-side review.
@@ -59,11 +39,14 @@
   `ANTERIOR_POSTERIOR_AXIS` is now available only as a review prototype because
   promoting it would change the startup visual/dynamics story. Keeping the
   toggle in the hidden dev panel gives reviewers a persistent side-by-side
-  switch without making the prototype a product default. The hash-shuffle
-  achieves the correct proportions with stable, reproducible results across any
-  neuron count. The biological anterior–posterior gradient is expressed in the
-  default build through the connectivity feed-forward bias owned by the
-  simulation.
+  switch without making the prototype a product default. The hash-shuffle keeps
+  stable, reproducible proportions across neuron counts; the split/default
+  contract is gated by `cargo test` through
+  `region_split_approx_30_40_30`,
+  `default_region_assignment_mode_is_hash_random`, and
+  `prototype_region_assignment_mode_is_opt_in`. The biological
+  anterior-posterior gradient is expressed in the default build through the
+  connectivity feed-forward bias owned by the simulation.
 - **Applies to.** [`../architecture/manifold.md`](../architecture/manifold.md)
 - **Code anchors.** `crates/brain-visualizer/src/manifold/regions.rs →
   RegionAssignmentMode, assign_regions, assign_regions_with_mode`;
@@ -88,11 +71,9 @@
   Each greedy step after the trunk adds the globally-best `(leaf, attach-point)`
   edge (which may split a non-trunk edge into a shared internal node), and a
   local ancestor-window pass relaxes internal nodes while holding the soma root,
-  descriptor first fork, and leaf sockets fixed.
-  This replaces the earlier hand-tuned "shared trunk + 2-5 cluster branches +
-  terminal twigs" three-tier fan. The dendrite tree, source-type bytes from
-  region+seed, deterministic sockets, cubic-Bezier emission, per-branch `path_len`,
-  and named segment budgets with slack are all retained.
+  descriptor first fork, and leaf sockets fixed. The dendrite tree, source-type
+  bytes from region+seed, deterministic sockets, per-branch `path_len`, and
+  named segment budgets with slack are retained.
 - **Why.** A fixed trunk→cluster→twig fan reads as a flat spray with no organic
   shared structure; the Prim+relax grammar grows real shared trunks that fork
   smoothly toward targets, so the arbor reads as a root/tree. Determinism is
@@ -108,20 +89,19 @@
 - **Tradeoffs.** Internal trunk/fork edges carry the source id (shared paths stay
   source-lit); only leaf edges carry the real target id. Single-target arbors now
   pay the same descriptor-trunk overhead as fan-out arbors so the near-soma shape
-  is consistent. The 48-byte
-  `MorphSegment` layout remains the hard Rust ↔ WGSL contract — the tree ships
-  inside it, with `radius_a`/`radius_b` carrying width and no new fields. The
-  generator is also ~5× slower to initialize than the old fan (see the known
-  limitation below).
+  is consistent. The 48 B `MorphSegment` layout remains the hard Rust ↔ WGSL
+  contract — gated by `cargo test` through `segment_layout_is_48_bytes` — so the
+  tree ships inside it without new fields.
 
 ## Branch smoothness uses bounded straight subdivision, not curved shader geometry
 
 - **Decision.** Branch and long-range path smoothness is controlled by bounded
   subdivision knobs that change how many straight `MorphSegment` subsegments are
   emitted per generated hop. The shader still draws straight tapered tubes; no
-  curved geometry segment type is added.
+  curved geometry segment type exists.
 - **Why.** More polyline samples make turns progress gradually while preserving
-  the existing 48-byte `MorphSegment` layout and render shader contract.
+  the existing 48 B `MorphSegment` layout and render shader contract, gated by
+  `cargo test` through `segment_layout_is_48_bytes`.
 - **Applies to.** [`../architecture/manifold.md`](../architecture/manifold.md),
   [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md)
 - **Code anchors.** `crates/brain-visualizer/src/sim/morphology.rs →
@@ -143,10 +123,9 @@
 ## Incoming dendrites from real reverse sockets, not decorative local trees
 
 - **Decision.** Dendrites are generated from the target neuron's real incoming
-  socket groups. The morphology builder stores every non-self raw
-  `(source_id, synapse_index, target_id)` incoming synapse, aggregates duplicate
-  `(source,target,socket)` records by weight for visible groups, and draws every
-  unique group at the default N=1200/K=16 scale. Dendrite geometry is
+  socket groups. The morphology builder stores every non-self raw incoming
+  synapse, aggregates duplicate source/target/socket records by weight for
+  visible groups, and draws each unique group at product scale. Dendrite geometry is
   target-owned (`kind = 0`, `neuron_id = target_id`) but organized as
   soma-surface root collars, close first forks, and source-specific terminal
   leaves instead of one long shared stem per bucket. Shared internal roots/forks
@@ -159,12 +138,12 @@
 - **Applies to.** [`../architecture/manifold.md`](../architecture/manifold.md),
   [`../architecture/connectivity.md`](../architecture/connectivity.md),
   [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md).
-- **Tradeoffs.** Shared roots/forks have multiple presynaptic owners, so v1
-  leaves them structurally target-owned and not presynaptically active. Only
+- **Tradeoffs.** Shared roots/forks have multiple presynaptic owners, so the
+  current design leaves them structurally target-owned and not presynaptically active. Only
   source-specific leaves can pulse from the presynaptic source via existing
   `target_id`. Dense future scales must lower K or add an explicit cap policy;
-  hidden visual sampling is not allowed. The older dead primary-min/span config
-  fields were removed rather than revived; the live control vocabulary is
+  hidden visual sampling is not allowed. Dead primary-min/span config fields are
+  not part of the live control vocabulary, which is
   socket placement plus root count, fork distance, curve tightness, branch
   thickness, taper, and group spacing.
 - **Code anchors.** `crates/brain-visualizer/src/sim/morphology.rs →
@@ -173,31 +152,27 @@
 ## Area-preserving √-width over literal-linear weight→width
 
 - **Decision.** Branch radius encodes signal-carrying capacity via
-  `radius = R_trunk · √(subtree_weight / total_weight)` for root/internal nodes,
-  computed bottom-up after the tree is built (inhibitory weights enter as
-  `unsigned_abs().max(1)`, floored at `R_trunk · twig_radius_fraction`). Terminal
-  leaf nodes are set to the twig floor. The descriptor trunk carries 100% at full
-  radius; each fork sheds its children's weight share.
+  the bottom-up area-preserving width rule in `generate` for root/internal
+  nodes. Terminal leaf nodes are set to the twig floor. The descriptor trunk
+  starts at full radius; each fork sheds its children's weight share.
 - **Why.** Area-preserving √ scaling (Murray/Rall) keeps shared trunks visually
   substantial while still letting thin twigs read. The locked
-  `axon_root_radius_fraction` is `0.90` so the primary trunk reads as a real
-  trunk against the soma; terminal leaves go to the floor so single-target and
-  low-degree arbors still taper instead of becoming constant-width hoses. The
-  literal-linear "90% weight → 90% width" model the owner first proposed was
-  rejected as too wispy — it collapses low-weight twigs to near-invisible
-  threads and makes the trunk look anemic.
+  `axon_root_radius_fraction` keeps the primary trunk substantial against the
+  soma; terminal leaves go to the floor so single-target and low-degree arbors
+  still taper instead of becoming constant-width hoses. Literal-linear
+  weight-fraction width was rejected as too wispy.
 - **Applies to.** [`../architecture/manifold.md`](../architecture/manifold.md)
 - **Code anchors.** `crates/brain-visualizer/src/sim/morphology.rs → generate`
-  (width pass), `connectivity::weight`.
+  (width pass); `crates/brain-visualizer/src/connectivity/mod.rs → weight`.
 - **Alternatives considered.** Literal-linear weight fraction (rejected: wispy).
 - **Tradeoffs.** Width is static — baked once at generation from synaptic weight;
   there is no runtime width path.
 
 ## Soft fork-degree penalty over a hard child cap
 
-- **Decision.** The 2-3-children-per-fork tendency is a *soft* `tree_score_degree`
-  term in the attach score (penalty monotonic in a node's current child count),
-  not a hard cap. Relaxation then spreads siblings into fork-like geometry.
+- **Decision.** Fork-degree control is a *soft* `tree_score_degree` term in the
+  attach score, not a hard cap. Relaxation then spreads siblings into fork-like
+  geometry.
 - **Why.** A soft penalty keeps the generator a single greedy pass with no
   synthetic-split bookkeeping, and lets occasional higher-degree forks happen
   where the geometry wants them rather than forcing artificial intermediate
@@ -205,19 +180,17 @@
 - **Applies to.** [`../architecture/manifold.md`](../architecture/manifold.md)
 - **Code anchors.** `crates/brain-visualizer/src/sim/morphology.rs → generate`
   (attach score), `MorphologyParams::tree_score_degree`.
-- **Revisit when.** If review shows trunks visibly spraying 5+ ways, the known
-  fallback is to convert `tree_score_degree` into a hard cap that synthesizes
-  intermediate split nodes. The `cluster_count_histogram` (fork-degree, index
-  5 = "5+") is the signal to watch.
+- **Revisit when.** If review shows trunks visibly spraying too many children,
+  the known fallback is to convert `tree_score_degree` into a hard cap that
+  synthesizes intermediate split nodes. `MorphologyStats::cluster_count_histogram`
+  is the signal to watch.
 
 ## Adaptive edge subdivision over a single flat global subsegment count
 
-- **Decision.** Edge tessellation is length- and curvature-aware:
-  `adaptive_subsegments(edge_len, curvature, is_long_range, params)` returns
-  `clamp(ceil(edge_len / max_len) + round(curvature · curvature_subsegment_boost),
-  min_subsegments, edge_subsegments_max)`, with a *smaller* `max_len`
-  (`long_range_max_segment_length`) for long-range hops than for local edges. The
-  old flat `edge_subsegments` is kept only as a legacy/floor knob.
+- **Decision.** Edge tessellation is length- and curvature-aware through
+  `adaptive_subsegments`, with long-range hops using a smaller max segment
+  length than local edges. The legacy flat `edge_subsegments` is kept only as a
+  legacy/floor knob.
 - **Why.** A single global subsegment count over-tessellates short local edges and
   under-samples long fibers, where a travelling pulse needs enough spatial samples
   to read as motion rather than a blinking span. Driving the count from already
@@ -225,21 +198,17 @@
   seed-reproducible while putting detail where curvature/length actually need it.
 - **Applies to.** [`../architecture/manifold.md`](../architecture/manifold.md).
 - **Code anchors.** `crates/brain-visualizer/src/sim/morphology.rs →
-  adaptive_subsegments, MorphologyParams` (the `max_segment_length` /
-  `long_range_max_segment_length` / `curvature_subsegment_boost` /
-  `edge_subsegments_max` / `min_subsegments` fields).
+  adaptive_subsegments, MorphologyParams`.
 - **Tradeoffs.** Per-edge segment counts now vary, so the buffer cap is sized for
   the worst case (`EDGE_SUBSEGMENTS_MAX`, and waypoint hops) rather than a flat
   multiply.
 
 ## Long-range axons route through deterministic bowed waypoints
 
-- **Decision.** A leaf axon whose parent→socket chord exceeds
-  `long_range_chord_cells · grid.cell_size` is emitted as `waypoints.len() + 1`
-  bowed Bezier hops through 1–3 deterministic intermediate waypoints, each bowed
-  outward from the brain centroid plus a salt-seeded lateral detour, instead of one
-  span. Target identity and weight are unchanged — waypoints are visual route
-  geometry only.
+- **Decision.** A leaf axon whose parent-to-socket chord exceeds the configured
+  long-range distance threshold is emitted through deterministic bowed waypoints
+  instead of one span. Target identity and weight are unchanged — waypoints are
+  visual route geometry only.
 - **Why.** A single giant span reads as an unphysical wire crossing empty space;
   intermediate bowed waypoints make long axons read as biological projections
   curving around the volume.
@@ -248,8 +217,9 @@
 - **Code anchors.** `crates/brain-visualizer/src/sim/morphology.rs →
   long_range_waypoints, LONG_RANGE_MAX_WAYPOINTS, MorphologyParams` (the
   `long_range_*` fields).
-- **Tradeoffs.** Long leaves cost more segments (multiple hops); the per-target
-  budget absorbs this via `(LONG_RANGE_MAX_WAYPOINTS + 1) · EDGE_SUBSEGMENTS_MAX`.
+- **Tradeoffs.** Long leaves cost more segments; the per-target budget is sized
+  from the waypoint and subsegment max constants rather than from the live slider
+  values.
 
 ## Classify "visually long" by world distance, not a connectivity flag
 
@@ -287,22 +257,20 @@
   emit_incoming_dendrites, effective_decor_group_max, DENDRITE_DECOR_GROUP_MAX,
   salt` (`DENDRITE_BRANCHLET`/`DENDRITE_TWIG`/`DENDRITE_TWIG_CURL`);
   `crates/brain-visualizer/src/sim/gpu/resources.rs → morph_segment_chunk_layout`.
-- **Tradeoffs.** Three decoration controls are dev-panel-exposed
-  (`dendriteBranchletCount`, `dendriteTwigCount`, `dendriteDecorGroupMax`,
-  runtime-clamped); the remaining decoration params stay locked.
+- **Tradeoffs.** The decoration controls exposed through
+  `web/src/core/morph-config.ts → MORPH_DESCRIPTORS` are runtime-clamped; the
+  remaining decoration params stay locked.
 
 ## Known limitation: high-N init cost and segment-cap growth (graceful-degrade guard deferred)
 
-- **Decision.** The Prim+relax generator ships without a "degrade gracefully at
-  high N" guard; the default tier (N≈1200/K≈16) is the supported target.
-- **Why.** The per-neuron init cost is ~5× the old fan — roughly 57ms → 281ms at
-  N=1200/K=16 — because each arbor runs an O(leaves × nodes) greedy attach plus
-  per-attach relaxation, and the per-arbor segment allocation cap grew ~1.5×.
-  High-N tiers therefore initialize slowly and approach GPU buffer limits. The
-  guard was scoped out to keep the rewrite to the generator alone; the cost is
-  acceptable at default scale and the team chose to ship rather than block on it.
+- **Decision.** The Prim+relax generator ships without a high-N graceful-degrade
+  guard; the default product tier is the supported target.
+- **Why.** Each arbor runs a greedy attach plus per-attach relaxation, and the
+  per-arbor segment allocation cap grows with fanout and branch detail. High-N
+  tiers can therefore initialize slowly and approach GPU buffer limits. The
+  guard is deferred because the default scale remains the product target.
 - **Applies to.** [`../architecture/manifold.md`](../architecture/manifold.md),
-  [`scaling.md`](scaling.md)
+  [`../architecture/scaling.md`](../architecture/scaling.md)
 - **Code anchors.** `crates/brain-visualizer/src/sim/morphology.rs → generate,
   segment_cap`.
 - **Revisit when.** A high-N tier becomes a target — then add the deferred
@@ -325,25 +293,31 @@
 
 ## Soma body as a separate MorphSphereInstance buffer, not a MorphSegment kind
 
-- **Decision.** Soma bodies are drawn via a dedicated `MorphSphereInstance` buffer (48 B, 16-aligned; one per neuron), emitted by `emit_soma_spheres` from existing neuron positions plus the host-side `ProcessRoot` descriptor. They are rendered by a separate `render_soma_spheres` sub-pass that reuses the same `last_spike` and `morph_uniform` buffers as the tube pass. `MorphSegment` remains the branch-only (48 B) contract; no `kind = 2` soma primitive was added to it.
-- **Why.** Adding a `kind = 2` soma variant to `MorphSegment` (Q4=A from the plan) would either change the 48 B layout (breaking the Rust ↔ WGSL size assert) or repurpose fields like `b` as radius-only data in a non-obvious way. A separate buffer (Q4=C) keeps the branch contract clean, isolates the sphere geometry from the tube vertex shader, and lets the two sub-passes reuse shared uniforms without encoding the soma/branch distinction in a mixed struct.
+- **Decision.** Soma bodies are drawn via a dedicated `MorphSphereInstance`
+  buffer, emitted by `emit_soma_spheres` from existing neuron positions plus the
+  host-side `ProcessRoot` descriptor. They are rendered by a separate
+  `render_soma_spheres` sub-pass that reuses the same `last_spike` and
+  `morph_uniform` buffers as the tube pass. `MorphSegment` remains the
+  branch-only contract and carries no soma primitive.
+- **Why.** Adding a soma variant to `MorphSegment` would either change the 48 B
+  layout (gated by `cargo test` through `segment_layout_is_48_bytes`) or
+  repurpose fields like `b` as radius-only data in a non-obvious way. A separate
+  buffer keeps the branch contract clean, isolates the sphere geometry from the
+  tube vertex shader, and lets the two sub-passes reuse shared uniforms without
+  encoding the soma/branch distinction in a mixed struct. The soma instance's 48
+  B layout is gated by `cargo test` through `sphere_instance_layout_is_48_bytes`.
 - **Applies to.** [`../architecture/manifold.md`](../architecture/manifold.md), [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md)
-- **Alternatives considered.** Keeping soma as the far-glow billboard only (Q4=B) — no layout change, but no true 3D body; a visible soma sphere body was the v0.3.0 deployment target.
-- **Tradeoffs.** Two separate storage buffers and bind groups instead of one; the sphere bind group uses slots 3/4/5 to avoid WGSL name clashes with tube slots 0/1/2 in the shared shader module. The soma instance was widened in place to carry one dominant root direction and pull strength, avoiding a third soma deformation bind group.
+- **Alternatives considered.** Keeping soma as the far-glow billboard only — no layout change, but no true 3D body.
+- **Tradeoffs.** Separate storage buffers and bind groups instead of one; the sphere bind group uses distinct binding slots to avoid WGSL name clashes with the tube bindings in the shared shader module. The soma instance carries one dominant root direction and pull strength, avoiding a third soma deformation bind group.
 - **Code anchors.** `crates/brain-visualizer/src/sim/morphology.rs → MorphSphereInstance / emit_soma_spheres`; `crates/brain-visualizer/src/sim/gpu/pipelines.rs → GpuPipelines` (`render_soma_spheres` field); `crates/brain-visualizer/src/sim/gpu/resources.rs → init_morph_resources`
 
 ## Morphology generator exposed for tuning; budgets/slack/salts stay protected
 
-- **Decision.** The generator shape fields of `MorphologyParams` (branch counts,
-  reach, socket placement, radius/taper fractions, the tree-grammar knobs —
-  `tree_score_*`, `relax_*`, the legacy floor `edge_subsegments` — plus three
-  bushy-decoration controls `dendriteBranchletCount` / `dendriteTwigCount` /
-  `dendriteDecorGroupMax`) are exposed as a tunable
-  `MorphologyConfig` to the hidden dev panel, layered over the locked default at
-  apply time. The four allocation/safety budgets (`dendrite_budget`,
-  `trunk_cluster_budget`, `terminal_twig_budget`, `cap_slack`) and the `salt::*`
-  hash constants are deliberately **not** exposed and are re-locked even when a
-  config is applied.
+- **Decision.** The generator shape fields of `MorphologyParams` are exposed as a
+  tunable `MorphologyConfig` to the hidden dev panel, layered over the locked
+  default at apply time. Allocation/safety budgets and the `salt::*` hash
+  constants are deliberately **not** exposed and are re-locked even when a config
+  is applied.
 - **Why.** The shape fields are exactly what a later visual-tuning pass needs to
   iterate on, and their ranges are bounded narrowly around the locked default so
   no slider can produce self-intersecting/inverted geometry. The budgets gate the

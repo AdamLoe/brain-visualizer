@@ -32,7 +32,8 @@
   current model.
 - **Why.** Point-LIF is the minimal model that produces threshold spiking,
   refractory dynamics, and criticality, and it costs one `v` per neuron — which is
-  what lets ~10k neurons run every frame on the GPU. Heterogeneity (per-neuron
+  what keeps the beauty-first default scale cheap enough to run every frame on
+  the GPU. Heterogeneity (per-neuron
   threshold/leak/refractory spread) already buys much of GLIF's diversity without
   the per-neuron extra state. Add GLIF only when a demo needs adaptation.
 - **Applies to.** [`../architecture/simulation.md`](../architecture/simulation.md).
@@ -40,12 +41,12 @@
 - **Revisit when.** A demonstration needs spike-frequency adaptation or bursting
   that heterogeneity + input modes cannot fake.
 
-## Beauty-first MVP scale: ~10k neurons, K=16 — justified by visible dynamics, not neuron count
+## Beauty-first default scale: N=6 000, K=16 — justified by visible dynamics, not neuron count
 
-- **Decision.** The default network is ~10k neurons with out-degree K=16. The
-  scale is chosen to make the *dynamics* legible and beautiful, not to maximize a
-  neuron-count headline. Bigger tiers exist but the MVP target is "you can see
-  individual cascades," not "N is large."
+- **Decision.** The page boots at `DEFAULT_CONFIG.n = 6_000` with out-degree
+  `k = 16`. That scale is chosen to make the *dynamics* legible and beautiful,
+  not to maximize a neuron-count headline. Bigger tiers exist, but the target
+  is still "you can see individual cascades," not "N is large."
 - **Why.** At this scale every neuron can be drawn with real morphology and every
   spike can propagate visibly within a frame budget, so the viewer reads cause and
   effect. Pushing N into the millions would force LOD aggregation that hides the
@@ -53,7 +54,7 @@
   product, the count is not.
 - **Applies to.** [`../architecture/simulation.md`](../architecture/simulation.md),
   [`../architecture/connectivity.md`](../architecture/connectivity.md) (K).
-- **Code anchors.** `crates/brain-visualizer/src/sim/backend.rs → SimConfig` (n, k defaults).
+- **Code anchors.** `web/src/core/types.ts → DEFAULT_CONFIG`.
 - **Tradeoffs.** Caps the "how big" bragging dimension in favor of the "how
   clear" one; the weight-normalization machinery (see [`dynamics.md`](dynamics.md))
   keeps dynamics comparable if K is later changed per tier.

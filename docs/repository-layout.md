@@ -11,6 +11,7 @@ source lives under `app/`. Doc code anchors are written relative to
 
 ```
 app/                         Workspace root — Cargo.toml here is the workspace manifest.
+  run.sh                     Small repo-local launcher/helper script.
   crates/brain-visualizer/   The Rust crate (compiles to WASM; pure logic also host-tested).
     Cargo.toml               Crate manifest: [lib] cdylib+rlib.
     src/
@@ -34,10 +35,11 @@ app/                         Workspace root — Cargo.toml here is the workspace
                              compact_morph_segments, write_scatter_dispatch) + render
                              (far, manifold, morphology, bloom).
     examples/                Offline host-verification harnesses (sim_check,
-                             soc_sweep, render_check, morph_view), run via
+                             soc_sweep, render_check, morph_view,
+                             time_network_payload), run via
                              `cargo run --example <name>`.
-    tests/                   Rust integration tests: wgsl_hash_determinism,
-                             wgsl_target_determinism, gpu_sim_dynamics.
+    tests/                   Rust integration tests: WGSL determinism, GPU
+                             dynamics/overflow/tick-wrap, and morphology coverage.
 
   web/                       TypeScript app + JS project root (run npm here).
     package.json             npm scripts (wasm/dev/build/test); package-lock.json.
@@ -49,6 +51,9 @@ app/                         Workspace root — Cargo.toml here is the workspace
         types.ts             AppConfig, tier presets, defaults.
         settings.ts          VisualSettings persistence + Float32Array contract.
         setting-metadata.ts  SETTING_IMPACT classification table.
+      gpu-build/             Worker-prepared startup/rebuild payload generation.
+      observability/         Browser telemetry contract + privacy gates.
+      rebuild/               Frontend rebuild coordination/state.
       render/
         camera.ts            Orbital camera + pointer tracking.
         renderer.ts          WebGPU device/canvas setup.
@@ -59,7 +64,9 @@ app/                         Workspace root — Cargo.toml here is the workspace
         hud.ts               Public corner HUD (CornerHud).
     public/
       coi-serviceworker.js   COOP/COEP shim for GitHub Pages (Vite publicDir).
-    e2e/                     Playwright specs (brain_visualizer.spec.ts).
+    e2e/                     Playwright specs + smoke artifacts (boot overlay,
+                             main browser flow, real-hardware smoke,
+                             rebuild responsiveness).
 
 docs/                        This documentation tree (agent-docs v1). See index.md.
 ```

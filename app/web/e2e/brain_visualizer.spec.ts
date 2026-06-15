@@ -310,6 +310,15 @@ test("controls: current public and simulation controls toggle without errors", a
     { timeout: 20_000 },
   );
 
+  const gpu = await checkWebGpu(page);
+  if (!gpu.hasAdapter) {
+    console.log(
+      "[SKIP-REASON] WebGPU adapter unavailable; controls assertions require " +
+        "startup to reach the interactive runtime.",
+    );
+    return;
+  }
+
   // Wait for the loop to start.
   await waitForFrames(page, 5);
 

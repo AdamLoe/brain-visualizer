@@ -23,7 +23,7 @@
   experience does not depend on it.
 - **Applies to.** [`../architecture/web-frontend.md`](../architecture/web-frontend.md).
 - **Code anchors.** `web/src/render/camera.ts → Camera.onPointerMove`, `Camera.pan`;
-  `web/src/main.ts → pointerdown/pointermove handlers, computeStimulation`,
+  `web/src/main.ts → boot, computeStimulation`,
   `raySphereIntersect`.
 - **Revisit when.** Neuron inspection is revived post-MVP.
 
@@ -50,9 +50,10 @@
   `index.html`, starts a lightweight rAF frame counter before wasm/backend work,
   and keeps visible failure state if WebGPU startup fails. Backend startup is
   driven through measured `WasmGpuBackend.create_staged` / `startup_*` stages,
-  with a browser frame yield between stages and a rolling timing list in the
-  overlay. The frontend fallback renderer does not acquire WebGPU, WebGL2, or 2D
-  canvas contexts during GPU startup.
+  with a browser frame yield between stages and structured boot timings recorded
+  in `window.__bvBootTimings`. The overlay itself remains product-facing status
+  UI, not a diagnostics surface. The frontend fallback renderer does not acquire
+  WebGPU, WebGL2, or 2D canvas contexts during GPU startup.
 - **Why.** Users should never see a blank or hung page while the heavy backend
   initializes, but the wasm backend must remain the single WebGPU surface owner.
   DOM/CSS feedback plus staged backend calls gives paintable, measured progress
@@ -62,21 +63,20 @@
 - **Applies to.** [`../architecture/web-frontend.md`](../architecture/web-frontend.md).
 - **Code anchors.** `web/index.html → #startup-overlay`;
   `web/src/main.ts → updateStartupOverlay, startGpuBackend`;
+  `web/src/boot-timings.ts → recordBootTiming, logBootSummary`;
   `crates/brain-visualizer/src/lib.rs → WasmGpuBackend::create_staged`;
   `web/src/render/renderer.ts → Renderer`.
 
-## Discrete speed presets (not a continuous slider)
+## Speed is target ticks/sec, not frame-count presets
 
-- **Decision.** Simulation speed is a small set of named rates (¼×, ½×, 1×, 2×
-  expressed as `targetTicksPerSec`) configured via the dev panel, not a
-  continuous scrub slider. The rAF loop uses a time-based accumulator to convert
-  the target rate to an integer tick count per frame.
-- **Why.** A few discrete presets cover the useful range (slow enough to watch
-  individual wavefronts; fast enough to compress time) with simpler UX than a
-  slider. The accumulator avoids the frame-count coupling of the older
-  `ticksThisFrame` modulo approach.
+- **Decision.** Simulation speed is a persisted numeric ticks/sec target
+  configured via the dev panel. The rAF loop uses a time-based accumulator to
+  convert the target rate to an integer tick count per frame.
+- **Why.** A target ticks/sec control is independent of browser frame rate and
+  avoids the frame-count coupling of the older `ticksThisFrame` modulo approach.
 - **Applies to.** [`../architecture/web-frontend.md`](../architecture/web-frontend.md).
 - **Code anchors.** `web/src/main.ts` (`targetTicksPerSec`, `tickAccumulator`);
+  `web/src/ui/dev-panel.ts → _buildNetworkTab`;
   `web/src/ui/controls.ts → ticksThisFrame` (legacy, kept for compat).
 
 ## Named brain-state presets are labels on the excitability axis
@@ -106,10 +106,8 @@
   fixes a bug where the user's scaling reset on every reload.
 - **Applies to.** [`../architecture/web-frontend.md`](../architecture/web-frontend.md),
   [`../architecture/scaling.md`](../architecture/scaling.md).
-- **Code anchors.** `web/src/core/types.ts → loadConfig`, `saveConfig`
-  (key `bv2_config_v2`); `web/src/core/types.ts → loadConfig` (stale CPU
-  backend saves normalize to GPU); `web/src/ui/controls.ts → setTier`,
-  `setSpeed`.
+- **Code anchors.** `web/src/core/types.ts → CONFIG_LS_KEY, loadConfig, saveConfig`;
+  `web/src/ui/controls.ts → setTier, setSpeed`.
 
 ## See also
 

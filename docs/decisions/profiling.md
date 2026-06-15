@@ -47,7 +47,7 @@
   is the mean fan-out, which equals the actual fan-out in the fixed-K wiring.
 - **Applies to.** [`../architecture/profiling.md`](../architecture/profiling.md),
   [`../architecture/simulation.md`](../architecture/simulation.md).
-- **Revisit when.** Heterogeneous fan-out is introduced (K varies per neuron),
+- **Revisit when.** Heterogeneous fan-out exists (K varies per neuron),
   in which case `spikes × K_mean` becomes an estimate and the GPU scatter pass
   would need a cheap per-spike accumulator instead.
 
@@ -76,6 +76,23 @@
 - **Applies to.** [`../architecture/profiling.md`](../architecture/profiling.md)
 - **Code anchors.** `crates/brain-visualizer/examples/morph_view.rs`;
   `crates/brain-visualizer/src/profiler.rs → Profiler`
+
+## Telemetry remains disabled unless an endpoint is configured
+
+- **Decision.** Browser telemetry has a typed contract and tests, but the
+  client sends nothing unless an endpoint is explicitly configured. Every send is
+  also gated by query/local/browser privacy opt-outs and a fixed payload
+  allowlist.
+- **Why.** Real-user startup and frame-health signals are useful only if they
+  are privacy-bounded and impossible to enable accidentally. Keeping the
+  transport inert by default lets tests protect event shape and sanitization now
+  without committing to a telemetry provider or retention policy.
+- **Applies to.** [`../architecture/profiling.md`](../architecture/profiling.md),
+  [`../architecture/build-and-deploy.md`](../architecture/build-and-deploy.md).
+- **Code anchors.** `web/src/observability/telemetry.ts → createTelemetryClient,
+  telemetryDisabledReason, buildTelemetryBody`; `web/src/observability/telemetry.test.ts`.
+- **Revisit when.** A telemetry endpoint, retention policy, and opt-in/opt-out
+  posture are chosen.
 
 ## See also
 

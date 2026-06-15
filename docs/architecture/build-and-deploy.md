@@ -16,10 +16,12 @@ serve with the correct cross-origin isolation headers for the browser runtime.
 - The cross-platform Rust crate: `cdylib` for WASM, `rlib` for host unit tests (`crates/brain-visualizer/Cargo.toml → [lib]`).
 - COOP/COEP header strategy: dev/preview server headers (`web/vite.config.ts → crossOriginIsolation`) and the static-host service-worker shim (`web/public/coi-serviceworker.js`).
 - The offline verification surface: the `crates/brain-visualizer/examples/` harnesses (see below).
-- The test gates: `cargo test -p brain-visualizer`,
-  `cargo run -p brain-visualizer --example render_check`,
-  `cargo run -p brain-visualizer --example morph_view`, vitest unit tests,
-  Playwright e2e, and the production bundle build (`web/package.json → scripts`).
+- The verification entry points: the manifest drift gates (`cargo test`,
+  `npm run typecheck`, `npm test`, `npm run test:e2e`) plus the focused
+  host/browser checks surfaced through Cargo examples and
+  `web/package.json → scripts` (`render_check`, `morph_view`,
+  `time_network_payload`, `test:e2e:smoke`, `test:e2e:responsiveness`,
+  `build`).
 - The `wasmHotRebuild` Vite plugin that watches `crates/brain-visualizer/src/**/*.rs` and `crates/brain-visualizer/Cargo.toml` during `dev` and triggers debounced `wasm-pack build --dev` + full browser reload (`web/vite.config.ts → wasmHotRebuild`).
 
 ## What it does NOT own
@@ -115,12 +117,13 @@ substitute for browser WebGPU numbers on real hardware.**
 | `soc_sweep.rs` | `cargo run --release --example soc_sweep` | Criticality sweep: i_ext parameter sweep + five brain-state acceptance bands. |
 | `render_check.rs` | `cargo run -p brain-visualizer --example render_check` | Render pipeline: offscreen render to 512×512 texture, non-black pixels, distinct region colours, stimulation response, morphology draw, bloom path, zero Naga shader-compile errors. |
 | `morph_view.rs` | `cargo run -p brain-visualizer --example morph_view` | Morphology renderer: renders the accepted-default review views to `/tmp/morph_{0,1,2,3}.rgba` plus JSON stats artifacts for manual/defaults inspection; asserts non-black pixels. |
+| `time_network_payload.rs` | `cargo run -p brain-visualizer --example time_network_payload --release` | Worker-prepared startup payload timing: prints per-phase wall-clock timings plus `prepare_with_progress` cadence so boot-overlay stalls can be triaged without a browser or WebGPU adapter. |
 
 ## Test gates
 
-Five verification surfaces are used regularly:
+The regular verification surfaces are:
 
-**`cargo test -p brain-visualizer`** — unit + integration tests on the host. Includes:
+**`cargo test`** — unit + integration tests on the host. Includes:
 - `crates/brain-visualizer/src/gpu_limits.rs` — `GpuCaps::derive` correctness against fixture inputs.
 - `crates/brain-visualizer/src/sim/scaler.rs` — `propose` shrink/grow/clamp logic.
 - `crates/brain-visualizer/tests/wgsl_hash_determinism.rs` — runs the production `hash.wgsl` under
@@ -142,9 +145,17 @@ Native wgpu tests skip locally when no adapter is available, with an explicit
 `SKIP ... no wgpu adapter/device` message. Set `BV_REQUIRE_WGPU_TESTS=1` (or run
 under `CI`) to make the same adapter/device failure hard-fail the test process.
 
+**`npm run typecheck`** — `tsc --noEmit` over `web/`. This is the standalone JS
+contract gate outside `npm run build`.
+
 **`cargo run -p brain-visualizer --example render_check`** — native production-render smoke gate for render, morphology, stimulation, and bloom.
 
 **`cargo run -p brain-visualizer --example morph_view`** — native review-artifact/defaults gate for the accepted-default morphology views and stats ledger.
+
+**`cargo run -p brain-visualizer --example time_network_payload --release`** —
+native startup-payload timing probe. It measures the worker-prepared boot phases
+and checks the `prepare_with_progress` emit cadence, so the boot overlay and
+payload-preparation stalls can be debugged on a no-adapter machine.
 
 **`npm test` (vitest)** — pure-logic TypeScript unit tests (`web/**/*.test.ts`).
 Runs in Node without a browser. Covers `scalerDecide`, `tickExcitability`,
@@ -153,11 +164,10 @@ and other pure functions.
 
 **`npm run build`** — production bundle gate (`wasm-pack` + `tsc --noEmit` + `vite build`). This is required for any change that can affect shipped WASM imports, bundle wiring, or first-load behavior.
 
-**`npm run test:e2e` (Playwright)** — browser integration tests
-(`web/e2e/brain_visualizer.spec.ts`). Covers: smoke/boot (WASM loads, no
-`recursive use of an object` panic), WebGPU adapter presence (gated: skips when
-no adapter), resize reentrancy regression, and controls correctness. Requires
-the dev server running on `localhost:5173`; set
+**`npm run test:e2e` (Playwright)** — browser integration tests across the
+whole `web/e2e/` suite, including the boot overlay contract, smoke/boot,
+WebGPU-adapter gating, resize reentrancy, controls, and rebuild responsiveness.
+Requires the dev server running on `localhost:5173`; set
 `USE_WEBSERVER=1` (`npm run test:e2e:server`) for Playwright to start it
 automatically. The port is hard-coded: Vite falls back to 5174+ when 5173 is
 already held by a stale `npm run dev`, and a manual e2e run would then point at
@@ -185,7 +195,7 @@ When the task is specifically about shipping/defaults/build behavior, also run
 - A new `crates/brain-visualizer/examples/` harness is added (update the table above).
 - The COOP/COEP strategy changes (e.g. GitHub Pages gains header support).
 - `wasm-pack` target or `web/vite.config.ts` worker format changes.
-- New test files are added to `crates/brain-visualizer/tests/` or `web/**/*.test.ts`.
+- New test files are added to `crates/brain-visualizer/tests/`, `web/**/*.test.ts`, or `web/e2e/*.spec.ts`.
 
 ## See also
 

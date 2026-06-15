@@ -1,14 +1,14 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-13
+last_updated:  2026-06-15
 ---
 
 # Active Edges
 
-The old active-edge ribbon subsystem is not part of the current renderer. Its
-emit shader, ribbon shader, event structs, ring buffers, bind groups, pipelines,
-and frame/tick branches were removed; git history is the archive.
+Active-edge ribbon rendering is not part of the current runtime. There is no
+live emit shader, ribbon shader, event struct, ring buffer, bind group, pipeline,
+or frame/tick branch for ribbon events; git history is the archive.
 
 The live connection visual is procedural morphology:
 `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl` draws
@@ -25,7 +25,7 @@ runtime surface. Current connection rendering facts live in
 
 ## Update When
 
-- A new active-edge runtime subsystem is introduced.
+- A new active-edge runtime subsystem exists.
 - Procedural morphology stops being the only connection visual.
 
 ## See Also

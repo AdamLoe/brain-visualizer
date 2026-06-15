@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-13
+last_updated:  2026-06-15
 ---
 
 # GPU Rendering
@@ -35,8 +35,8 @@ current docs must not describe those as dormant runtime surfaces.
 
 1. **Manifold surface** when `surface != 0`; clears color/depth and draws the
    dim brain shell.
-2. **Far billboard glow** for every neuron; additive, no depth, one six-vertex
-   quad per neuron. Close-camera radius ramping lives in `render_far.wgsl`.
+2. **Far billboard glow** for every neuron; additive, no depth, with the
+   close-camera radius ramping in `render_far.wgsl`.
 3. **Active/recent compaction** when `connection_layer != 0`; each morphology
    segment chunk writes `active_segment_indices` and `active_draw_args`.
 4. **Morphology tubes** when `connection_layer != 0`; additive, no depth,
@@ -55,30 +55,20 @@ draw. The shipped tube path is the compacted active/recent path only.
 
 ## Modes And Settings
 
-`connection_layer` has two active meanings at index 17:
+`connection_layer` has two active meanings: off, or active/recent morphology.
+Persisted and direct values normalize at both boundaries through
+`web/src/core/settings.ts → normalizeConnectionLayer, toFloat32Array` and
+`crates/brain-visualizer/src/sim/gpu/mod.rs → normalize_connection_layer,
+VisualSettings::from_slice`. The locked index contract is gated by `npm test`
+(`web/src/core/settings-contract.test.ts`) and `cargo test`
+(`visual_settings_from_slice_maps_locked_indices`); do not renumber settings
+slots.
 
-| Value | Meaning |
-|---|---|
-| `0` | Off; skips compaction, tube passes, and soma passes |
-| `1` | Active/recent morphology, the default |
-
-Persisted or direct `connection_layer` values greater than `1` normalize to
-`1` at both TypeScript and Rust boundaries. The old mode `2` is not a runtime
-mode.
-
-Other render mode fields are carried in `VisualSettings`:
-
-| Field | Integer values |
-|---|---|
-| `color_by` | 0=region, 1=E/I, 2=spike-age, 3=voltage-debug, 4=activity, 5=identity, 6=brain |
-| `neuron_visibility` | 0=all, 1=active-emphasis, 2=active-only |
-| `surface` | 0=off, 1=dim, 2=normal; hidden/default-written in the current UI |
-
-Tombstoned Float32Array slots stay in place. Index 9
-(`connectionLightPast`), 10 (`bloomStrength` user setting), 16
-(`signalSource`), and 23 (`adaptiveScalerEnabled`) are zero-written; index 1
-(`pointRadius`), 11 (`surfaceOpacity`), and 20 (`surface`) are
-default-written by the web settings boundary. Do not renumber settings indices.
+Other render mode fields are carried in `VisualSettings`. The authoritative
+option lists/defaults live in `web/src/core/settings.ts → DEFAULT_SETTINGS` and
+`web/src/ui/dev-panel.ts → COLOR_BY_OPTIONS`; Rust consumes the packed snapshot
+through `VisualSettings::from_slice`. Tombstoned Float32Array slots stay in
+place and are written by the web settings boundary.
 
 ## Morphology Rendering
 
@@ -103,11 +93,16 @@ passes use the same indirect args, so per-frame selected counts stay GPU-side.
 The layout contracts are the corruption-sensitive part:
 
 - `crates/brain-visualizer/src/sim/morphology.rs → MorphSegment` ↔
-  `render_morphology.wgsl → MorphSegment` is 48 B.
+  `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl →
+  MorphSegment` is branch-only and 48 B, gated by `cargo test` through
+  `segment_layout_is_48_bytes`.
 - `crates/brain-visualizer/src/sim/morphology.rs → MorphSphereInstance` ↔
-  `render_morphology.wgsl → SphereInstance` is 48 B.
+  `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl →
+  SphereInstance` is soma-only and 48 B, gated by `cargo test` through
+  `sphere_instance_layout_is_48_bytes`.
 - `crates/brain-visualizer/src/sim/gpu/resources.rs → MorphUniforms` ↔
-  `render_morphology.wgsl → MorphUniforms` is 192 B.
+  `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl →
+  MorphUniforms` is 192 B, gated by `cargo test` through `morph_layouts_locked`.
 
 Tessellation is controlled by WGSL override constants (`TUBE_SIDES`,
 `SPHERE_SLICES`, `SPHERE_STACKS`) supplied from `RenderQualityConfig` in

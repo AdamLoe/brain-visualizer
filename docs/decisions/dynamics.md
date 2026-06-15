@@ -34,30 +34,30 @@
 
 ## Region topology is functional, not spatially blocked
 
-- **Decision.** Input / association / output membership is a 30/40/30 split
-  assigned **uniformly at random over the volume**, not as contiguous anatomical
-  lobes. "Input" means *receives ambient drive*, "output" means *no special
-  treatment* — functional roles, not geography. Directionality comes from a mild
-  anterior (+Z) feed-forward bias on a fraction of excitatory synapses.
+- **Decision.** Input / association / output membership is assigned
+  **uniformly at random over the volume**, not as contiguous anatomical lobes.
+  "Input" means *receives ambient drive*, "output" means *no special treatment*
+  — functional roles, not geography. Directionality comes from a mild anterior
+  (+Z) feed-forward bias on a fraction of excitatory synapses.
 - **Why.** Scattering the regions keeps drive sources spread through the visible
   volume (so propagation is visible everywhere, not just at one pole) while the
   feed-forward bias still gives activity a coherent front. Blocking the regions
   spatially looked like three glowing slabs and hid the recurrent structure.
 - **Applies to.** [`../architecture/simulation.md`](../architecture/simulation.md),
-  [`connectivity.md`](connectivity.md) (the anterior bias).
+  [`../architecture/connectivity.md`](../architecture/connectivity.md) (the anterior bias).
 - **Code anchors.** `crates/brain-visualizer/src/manifold/regions.rs → assign_regions`,
   `RegionKind`; anterior-bias draw in
   `crates/brain-visualizer/src/sim/gpu/shaders/scatter.wgsl → target_neuron`.
 
-## E/I balance ~80/20, hash-assigned
+## E/I balance is hash-assigned
 
-- **Decision.** Roughly 20% of neurons are inhibitory; the E/I flag is bit 0 of
-  the neuron type byte, set by `hash32(id ^ seed_lo) % 5 == 0`. Excitatory
-  weights are positive, inhibitory negative — that asymmetry *is* the global
-  dissipation mechanism.
-- **Why.** The ~80/20 cortical ratio with stronger-but-fewer inhibitory synapses
-  is the standard balanced-network recipe for stable, critical-capable dynamics.
-  Deriving E/I from the seed hash keeps it deterministic and backend-identical.
+- **Decision.** The E/I flag is hash-assigned in the neuron type byte.
+  Excitatory weights are positive, inhibitory negative — that asymmetry *is* the
+  global dissipation mechanism.
+- **Why.** A cortical-style excitatory/inhibitory mix with stronger inhibitory
+  synapses is the standard balanced-network recipe for stable, critical-capable
+  dynamics. Deriving E/I from the seed hash keeps it deterministic and
+  backend-identical.
 - **Applies to.** [`../architecture/simulation.md`](../architecture/simulation.md),
   [`connectivity.md`](connectivity.md) (the signed weight rule).
 - **Code anchors.** `crates/brain-visualizer/src/sim/backend.rs → neuron_type_byte`;

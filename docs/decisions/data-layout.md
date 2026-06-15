@@ -5,17 +5,15 @@
 - **Decision.** `last_spike` is a single `u32` packing `HAS_SPIKED` (bit 31),
   7-bit neuron type (bits [30:24]), and 24-bit last-fire tick (bits [23:0]).
   There is no separate type array.
-- **Why.** Eliminates a dedicated type buffer and its alignment padding, giving
-  a 25% cache-density improvement (24 B vs ~32 B per neuron) in the hot
-  integrate loop on both CPU L2/L3 and GPU L1/L2. Extraction is a mask + shift;
-  zero extra bandwidth cost.
+- **Why.** Eliminates a dedicated type buffer and its alignment padding in the
+  hot integrate loop. Extraction is a mask + shift; zero extra bandwidth cost.
 - **Applies to.** [`../architecture/data-model.md`](../architecture/data-model.md).
 - **Code anchors.** `crates/brain-visualizer/src/sim/gpu/shaders/integrate.wgsl → HAS_SPIKED_MASK`,
   `TYPE_MASK`, `TICK_MASK`, `neuron_type`, `has_spiked`, `tick_diff`;
   `crates/brain-visualizer/src/connectivity/mod.rs → is_excitatory`.
-- **Tradeoffs.** The 24-bit tick wraps at ~4.6 h of real-time simulation.
-  Modular `tick_diff` stays correct for any interval shorter than half the wrap
-  range; this is not a correctness concern at practical session lengths.
+- **Tradeoffs.** The packed tick wraps by design. Modular `tick_diff` stays
+  correct within the representable comparison window, and `cargo test` gates the
+  Rust/WGSL behavior through `crates/brain-visualizer/tests/wgsl_tick_wrap.rs`.
 
 ## Fixed-point current scale S = 2^12
 
@@ -48,10 +46,11 @@
 
 ## Chunk large GPU storage bindings by byte budget
 
-- **Decision.** Large GPU storage arrays use `ChunkLayout` with a 64 MiB default
-  chunk budget and any tighter adapter storage-binding limit. Morphology segment
-  storage reuses that byte-budget math for 48 B `MorphSegment` records, while
-  render/compaction bind one segment chunk at a time.
+- **Decision.** Large GPU storage arrays use `ChunkLayout` with the default chunk
+  budget from `crates/brain-visualizer/src/buffers.rs → MAX_CHUNK_BYTES` and any
+  tighter adapter storage-binding limit. Morphology segment storage reuses that
+  byte-budget math for `MorphSegment` records, while render/compaction bind one
+  segment chunk at a time.
 - **Why.** WebGPU storage bindings can be smaller than the logical data set.
   Chunking preserves the flat logical data model without forcing CPU readback,
   layout changes, or hidden generator throttles to stay below one binding.

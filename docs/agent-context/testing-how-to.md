@@ -11,7 +11,7 @@ itself is owned by
 
 Run `cargo` from `app/` (workspace root) and `npm` from `app/web/`.
 
-- **`cargo test -p brain-visualizer`** — host unit tests plus the integration gates in `crates/brain-visualizer/tests/`:
+- **`cargo test`** — host unit tests plus the integration gates in `crates/brain-visualizer/tests/`:
   the Rust/WGSL hash + target determinism gates
   (`crates/brain-visualizer/tests/wgsl_hash_determinism.rs`, `crates/brain-visualizer/tests/wgsl_target_determinism.rs`),
   sim dynamics (`crates/brain-visualizer/tests/gpu_sim_dynamics.rs`), fixed-point
@@ -19,7 +19,7 @@ Run `cargo` from `app/` (workspace root) and `npm` from `app/web/`.
   and 24-bit tick wrap (`crates/brain-visualizer/tests/wgsl_tick_wrap.rs`). These
   run under **llvmpipe** in headless/WSL2 — no real GPU needed (a software Vulkan
   adapter validates the WGSL).
-- **`BV_REQUIRE_WGPU_TESTS=1 cargo test -p brain-visualizer`** — same native test
+- **`BV_REQUIRE_WGPU_TESTS=1 cargo test`** — same native test
   suite, but adapter/device acquisition failure is a hard failure. Without this
   env var, local no-adapter machines skip the native wgpu tests with explicit
   `SKIP ... no wgpu adapter/device` messages.
@@ -39,10 +39,11 @@ Run `cargo` from `app/` (workspace root) and `npm` from `app/web/`.
   no payload phase exceeds ~2s of silent work and to spot which morphology
   sub-phase owns the time before touching it.
 - **`npm run typecheck`** — `tsc --noEmit` over `web/`.
-- **`npm test`** — vitest unit tests (e.g. `web/controls.test.ts`).
+- **`npm test`** — vitest unit tests (e.g. `web/src/ui/controls.test.ts`,
+  `web/src/core/settings-contract.test.ts`).
 - **`npm run build`** — production-equivalent `wasm-pack build` + TypeScript check +
   Vite bundle. This is the shipping static-bundle gate, not just a dev-server check.
-- **`npm run test:e2e`** — Playwright e2e (`web/e2e/`). Needs a browser.
+- **`npm run test:e2e`** — Playwright e2e (`web/e2e/*.spec.ts`). Needs a browser.
 - **`npm run test:e2e:smoke`** — focused real-hardware/browser smoke. Writes a
   JSON artifact and screenshot with adapter availability, startup timings,
   nonblank canvas evidence, and frame-health samples; `BV_REQUIRE_WEBGPU=1`

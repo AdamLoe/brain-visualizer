@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-13
+last_updated:  2026-06-15
 ---
 
 # Simulation model
@@ -18,7 +18,7 @@ is wired.
 - Locked LIF constants (leak, threshold, reset, refractory): `crates/brain-visualizer/src/sim/gpu/mod.rs` (`LEAK_DECAY`/`THRESHOLD`/`RESET_POTENTIAL`/`REFRACTORY_TICKS`).
 - Excitability / gain — the single slider that sweeps silent→critical→seizure (the `gain = 0.5 + excitability * 1.5` mapping in `integrate.wgsl`).
 - Region ambient drive: `i_ext` injected into input-region neurons as the *sole* external energy. Region assignment is `crates/brain-visualizer/src/manifold/regions.rs → assign_regions`; the input-region test is `(ntype >> 2) == 0` in `integrate.wgsl`.
-- E/I assignment (~80/20): `crates/brain-visualizer/src/sim/backend.rs → neuron_type_byte`.
+- E/I assignment: `crates/brain-visualizer/src/sim/backend.rs → neuron_type_byte`.
 - Per-neuron heterogeneity (threshold/leak/refractory/input_sensitivity/weight_scale spread): the `hspread` / `SALT_*` / `*_SPREAD` block in `integrate.wgsl`.
 - Weight normalization (none|sqrt_k|k): `crates/brain-visualizer/src/sim/gpu/mod.rs → weight_norm_factor`, consumed as `weight_norm_factor` in `integrate.wgsl`.
 - Input modes (constant|poisson|pulsed|cursor_only|scripted|off): the `switch u.input_mode` in `integrate.wgsl`.
@@ -143,7 +143,7 @@ render boundary (raw GPU buffer handles, zero readback).
 ## Update when
 
 - The LIF step changes (any term in `integrate.wgsl → integrate`, including the
-  gain mapping or refractory rule) — cross-check the CPU mirror `integrate_neuron`.
+  gain mapping or refractory rule).
 - A locked LIF constant changes.
 - A `VisualSettings` index is added/reordered (must match `web/src/core/settings.ts`).
 - An input mode is added or `weight_norm_factor` modes change.

@@ -1,38 +1,43 @@
 # Decisions — Scaling
 
-## Three tiers built; auto-select deferred
+## Legacy preset table retained; auto-select deferred
 
-- **Decision.** Ship three presets (low / balanced / max) plus a minimal
-  `basic` entry; all are built and testable. Per-device automatic tier
-  selection is deferred — the user switches tiers manually.
+- **Decision.** Keep the web preset table in `web/src/ui/controls.ts →
+  TIER_PRESETS` (including the compatibility `basic` entry), but leave
+  per-device automatic tier selection deferred. The live app scales only when a
+  new N/K pair is chosen explicitly.
 - **Why.** Auto-selection requires browser WebGPU benchmark numbers on real
   hardware to calibrate the heuristics. Those numbers were not available in
   the WSL2 development environment (only llvmpipe software-emulation data
-  exists, which is not representative). Shipping the manual switch now lets
-  all three tiers be exercised and verified before committing to selection
-  logic.
+  exists, which is not representative). The current live UI already rebuilds
+  from explicit choices, so keeping the preset table as a manual/legacy surface
+  is enough until real benchmark data exists.
 - **Current default note.** This tier decision is separate from the clean
   first-load `DEFAULT_CONFIG`, which boots at `n=6000`, `k=16`, `tier="low"`.
 - **Applies to.** [`../architecture/scaling.md`](../architecture/scaling.md).
-- **Code anchors.** `web/src/ui/controls.ts → TIER_PRESETS`; `crates/brain-visualizer/src/sim/scaler.rs → TierRange::for_tier`.
+- **Code anchors.** `web/src/ui/controls.ts → TIER_PRESETS`;
+  `web/src/ui/dev-panel.ts → DevPanel`;
+  `crates/brain-visualizer/src/sim/scaler.rs → TierRange::for_tier`.
 - **Revisit when.** Real-hardware browser WebGPU benchmark data is collected.
 
-## K is a per-tier knob alongside N
+## K stays first-class even though presets pin it
 
-- **Decision.** Synaptic out-degree K is fixed per tier (not a single global
-  constant), set from the tier preset at startup. No separate "connectivity
-  level" control is exposed to the user; K is subsumed into the tier preset. (The
-  dormant scaler math also treats K as a per-tier axis, for a future re-arm.)
+- **Decision.** Synaptic out-degree K remains a first-class scaling knob. The
+  legacy preset table happens to pin K=16 for its canned entries, but the live
+  dev panel exposes direct K edits and the dormant scaler math still models K as
+  a per-tier axis for a future re-arm.
 - **Why.** K × N drives synapse-event cost as much as N alone. Varying K per
-  tier gives finer control over computational load: a lower-end device can run
-  a sparser but still valid network rather than just shrinking N.
+  rebuild gives finer control over computational load: a lower-end device can
+  run a sparser but still valid network rather than just shrinking N.
 - **Applies to.** [`../architecture/scaling.md`](../architecture/scaling.md).
-- **Code anchors.** `web/src/ui/controls.ts → TIER_PRESETS`, `N_MIN`, `N_MAX`; `crates/brain-visualizer/src/sim/scaler.rs → TierRange`.
+- **Code anchors.** `web/src/ui/controls.ts → TIER_PRESETS`, `N_MIN`, `N_MAX`;
+  `web/src/ui/dev-panel.ts → DevPanel`;
+  `crates/brain-visualizer/src/sim/scaler.rs → TierRange`.
 
 ## 20k product cap, separate from GPU hardware capacity
 
 - **Decision.** The product maximum neuron count is `20_000`. Web UI bounds,
-  saved config load/save, JS scaler ranges, Rust `SimConfig::default()`, WASM
+  saved config load/save, the dev-panel N control, JS scaler ranges, WASM
   backend construction, and Rust scaler proposals all clamp to that cap.
   `GpuCaps` continues to report hardware-derived adapter capacity and is not
   lowered to 20k.
@@ -45,21 +50,23 @@
   [`../architecture/web-frontend.md`](../architecture/web-frontend.md).
 - **Code anchors.** `web/src/core/types.ts → PRODUCT_MAX_N, clampNeuronCount`;
   `web/src/ui/controls.ts → TIER_PRESETS, N_MIN, N_MAX`;
+  `web/src/ui/dev-panel.ts → DevPanel`;
   `crates/brain-visualizer/src/sim/backend.rs → PRODUCT_MAX_N, clamp_neuron_count`;
+  `crates/brain-visualizer/src/lib.rs → WasmGpuBackend`;
   `crates/brain-visualizer/src/sim/scaler.rs → TierRange::for_tier`;
   `crates/brain-visualizer/src/gpu_limits.rs → GpuCaps`.
-- **Tradeoffs.** Old saved `bv2_config_v1` payloads keep their schema version but
-  saved `n` is clamped. This avoids a broad settings reset while preventing
-  stale localStorage from bypassing the cap.
+- **Tradeoffs.** Saved `bv2_config_v2` payloads keep their storage key and
+  `version: 1`, but `n` is clamped on load and on save. This avoids a broad
+  settings reset while preventing stale localStorage from bypassing the cap.
 
 ## Runtime auto-scaling removed; N is fixed at startup, user-driven only
 
 - **Decision.** No code path changes N during the rAF loop. The network is built
-  at a fixed N at startup and stays there until the user picks a different tier or
-  edits N/K in the dev panel (which restarts the backend). The pure `scalerDecide`
-  function and the Rust `scaler.rs` stub are kept dormant + tested as a seed for a
-  future scaler; `adaptiveScalerEnabled` (Float32Array index 23) is left
-  reserved/inert.
+  at a fixed N at startup and stays there until the user edits N/K in the dev
+  panel, a mobile boot forces the low-tier profile, or a legacy preset rebuild
+  is requested. The pure `scalerDecide` function and the Rust `scaler.rs` stub
+  are kept dormant + tested as a seed for a future scaler;
+  `adaptiveScalerEnabled` (Float32Array index 23) is left reserved/inert.
 - **Why.** The live scaler was unshippable in two compounding ways. (1) It decided
   on **p95** frame time, but each `grow_n` called `GpuBackend.reinitialize` — a
   full teardown (rebuild manifold + connectivity, reallocate every GPU buffer,
@@ -117,9 +124,10 @@
   than suppressing dendrite decoration at high N to fit one storage binding.
 - **Why.** `MorphSegment` is 48 B and product-scale morphology can exceed the
   WebGPU `max_storage_buffer_binding_size` if bound as one buffer. Chunking keeps
-  every segment binding below the 64 MiB project budget and the adapter limit
-  while preserving the full generator output and the GPU-driven indirect render
-  path.
+  every segment binding below the project chunk budget in
+  `crates/brain-visualizer/src/buffers.rs → MAX_CHUNK_BYTES` and the adapter
+  limit while preserving the full generator output and the GPU-driven indirect
+  render path.
 - **Applies to.** [`../architecture/scaling.md`](../architecture/scaling.md),
   [`../architecture/gpu-backend.md`](../architecture/gpu-backend.md),
   [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md).

@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-13
+last_updated:  2026-06-15
 ---
 
 # GPU backend / frame graph
@@ -111,7 +111,7 @@ upload of per-instance data. Order:
    additive, no depth.
 4. **active/recent compaction compute + morphology tube pass** — when `connection_layer != 0`. For each morphology segment chunk, the compaction compute (`compact_morph_segments.wgsl`: `reset` 1wg → `compact` ⌈chunk_segs/64⌉wg → `write_args` 1wg) writes that chunk's `active_draw_args`; the tube pass then binds each chunk and `draw_indirect`s over its compacted active/recent subset (additive, no depth) via `render_morphology.wgsl → vs_main`. Instance counts are GPU-decided per chunk — no CPU readback sizes these draws. See [`gpu-rendering.md`](gpu-rendering.md) for the selection predicate.
 5. **morphology soma sphere pass** — when `connection_layer != 0`; additive, no depth. One UV-sphere per neuron via `render_morphology.wgsl → vs_sphere`. Uses `render_soma_spheres` pipeline (`crates/brain-visualizer/src/sim/gpu/pipelines.rs → GpuPipelines`), reusing the same `last_spike` and `morph_uniform` buffers from the tube pass.
-6. **active-opacity tube + soma passes** — when `connection_layer != 0` and the active-opacity guard is on; depth-tested **alpha** blend (not additive), layered over the additive morphology passes so firing geometry genuinely occludes. The active-tube pass owns the depth `Clear(1.0)`; the active-soma pass `Load`s it. See [`gpu-rendering.md`](gpu-rendering.md) for the opacity model and skip-at-zero guard.
+6. **active-opacity tube + soma passes** — when `connection_layer != 0` and the active pipelines exist; depth-tested **alpha** blend (not additive), layered over the additive morphology passes so firing geometry genuinely occludes. The active-tube pass owns the depth `Clear(1.0)`; the active-soma pass `Load`s it. `active_opacity = 0` still encodes these passes; it softens the shader result rather than skipping the occluding layer.
 7. **(optional) bloom post** — bright → blur_h → blur_v → composite into the
    surface.
 
@@ -136,8 +136,9 @@ All large buffers are **persistent across frames**. Allocation happens only on a
   `init_morph_resources` allocators, then `refresh_bind_groups`.
   `init_morph_resources` splits the
   generated branch segments into `MorphSegmentChunk` resources using
-  `morph_segment_chunk_layout` (64 MiB default budget, further capped by the
-  adapter's storage-binding limit), allocates chunk-local compaction buffers
+  `morph_segment_chunk_layout` (bounded by
+  `crates/brain-visualizer/src/buffers.rs → MAX_CHUNK_BYTES` and the adapter's
+  storage-binding limit), allocates chunk-local compaction buffers
   (`active_segment_indices`, `active_segment_count`, `active_draw_args`,
   `compact_uniform`, plus profiler `active_selected` / `selected_staging`), and
   allocates the flat soma sphere instance buffer (`sphere_instances` via
@@ -217,8 +218,10 @@ billboards, the additive morphology tube + soma passes (`build_morph_pipelines`)
 and the active/recent compaction compute. **Deferred** compiles the 3 bloom
 pipelines (`bloom_bright`/`bloom_blur`/`bloom_composite`) and the true-opacity
 `*_active` morphology variants (`build_morph_active_pipelines`); the web rAF loop
-calls `build_render_deferred_pipelines` exactly once, one frame after the first
-rendered frame (idempotent via `is_render_deferred_built`). `render_full` already
+calls `crates/brain-visualizer/src/lib.rs → WasmGpuBackend::build_deferred_render_pipelines`,
+which forwards to `GpuBackend::build_render_deferred_pipelines`, exactly once,
+one frame after the first rendered frame (idempotent via
+`is_render_deferred_built`). `render_full` already
 guards every bloom/active access with `is_some()`, so a frame between core and
 deferred renders correctly without them — bloom is opt-in/default-off and the
 active layer briefly falls back to the additive look. The non-staged `create()`

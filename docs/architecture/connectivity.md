@@ -1,14 +1,14 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-13
+last_updated:  2026-06-15
 ---
 
 # Connectivity
 
 Procedural / implicit synapse wiring: there is no stored edge list. Every
 synapse target and weight is a pure deterministic function of the source neuron
-id, synapse index, and a global seed — computed on demand by both the Rust CPU
+id, synapse index, and a global seed — computed on demand by both the Rust host
 path and the WGSL GPU path, producing bit-identical results.
 
 ## What it owns
@@ -46,19 +46,16 @@ path and the WGSL GPU path, producing bit-identical results.
 `target(i, j, ...)` is a pure integer function:
 
 1. Look up the packed integer cell id of source neuron `i` via `SpatialGrid`.
-2. Hash `(seed, i, j, CELL_OFFSET)` → three independent axis offsets in
-   `[−LOCAL_D, LOCAL_D]`. For excitatory neurons, a deterministic fraction
-   (`ANTERIOR_BIAS_NUM / ANTERIOR_BIAS_DEN ≈ 31%`) of synapses force the Z
-   offset to `+LOCAL_D`, creating the posterior→anterior feed-forward bias.
-   Inhibitory synapses are left unbiased.
+2. Hash `(seed, i, j, CELL_OFFSET)` into local cell offsets. For excitatory
+   neurons, `ANTERIOR_BIAS_NUM / ANTERIOR_BIAS_DEN` controls the deterministic
+   feed-forward Z bias; inhibitory synapses are left unbiased.
 3. **Heavy-tailed reach coin flip.** Hash `(seed, i, j, REACH_COIN) %
-   REACH_FRAC_DEN` (denominator `256`) and compare against the per-run
-   `ReachParams.long_range_frac`. When `coin < long_range_frac`, the synapse is
-   long-range: a fresh `(seed, i, j, REACH_OFFSET)` hash, sliced 10 bits per
-   axis like the local path, **overwrites** the local (already anterior-biased)
-   `(dx, dy, dz)` with wider offsets in `[−max_reach, max_reach]`
-   (`long_offset_component`). Most synapses keep their local offset; a tunable
-   tail jumps far. This branch is integer-only — no float distance compare.
+   REACH_FRAC_DEN` and compare against the per-run
+   `ReachParams.long_range_frac`. When `coin < long_range_frac`, a fresh
+   `(seed, i, j, REACH_OFFSET)` hash **overwrites** the local
+   `(dx, dy, dz)` with wider offsets from `long_offset_component`. Most synapses
+   keep their local offset; a tunable tail jumps far. This branch is
+   integer-only — no float distance compare.
 4. Clamp the candidate cell coordinate to the grid boundary.
 5. If the candidate cell is empty, walk outward by increasing Chebyshev radius
    until an occupied cell is found (`nearest_occupied` in
@@ -66,21 +63,19 @@ path and the WGSL GPU path, producing bit-identical results.
 6. Hash `(seed, i, j, IN_CELL_PICK)` to pick a neuron within the chosen cell.
 
 The two reach knobs are integers so the path stays float-free:
-`long_range_frac` is a numerator over `REACH_FRAC_DEN` (`0` = always local,
-`256` = always long-range) and `max_reach` is a cell radius `≥ 1`. They are
-**dormant by default**: `ReachParams::LOCAL_ONLY` (`long_range_frac: 0`) and the
-`VisualSettings` default (`long_range_reach_frac: 0.0`) leave the coin compare
-always false, so the long-range branch never runs and output is bit-identical to
-the local-only network (the coin hash is still computed but changes no target).
-The dev-panel `longRangeReachFrac` (0..1) / `maxReachCells` knobs convert to
-these integers at the `set_visual_settings` boundary
-(`crates/brain-visualizer/src/sim/gpu/mod.rs → current_reach`); changing either
-rebuilds the axon geometry (a brain-reset/morphology-rebuild impact, not live).
+`long_range_frac` is a numerator over `REACH_FRAC_DEN` and `max_reach` is a cell
+radius. `ReachParams::LOCAL_ONLY` remains the bit-identical local-only baseline:
+when the fraction is zero, the coin hash is still computed but changes no target.
+The product `VisualSettings` default is intentionally non-zero; the dev-panel
+`longRangeReachFrac` / `maxReachCells` knobs convert to integer `ReachParams` at
+`crates/brain-visualizer/src/sim/gpu/mod.rs → reach_from_visual_settings` and
+`GpuBackend::current_reach`. Changing either rebuilds the axon geometry (a
+brain-reset/morphology-rebuild impact, not a live render tweak).
 
-`weight(i, j, source_type)` hashes `(0, i, j, WEIGHT)` — seed-independent
-so weight is a property of the synapse identity, not the network instance.
-Excitatory weights land in `[1000, 4095]` fixed-point units; inhibitory in
-`[−2000, −1000]`. Both are already scaled by `S = 4096`.
+`weight(i, j, source_type)` hashes `(0, i, j, WEIGHT)` — seed-independent so
+weight is a property of the synapse identity, not the network instance. The
+signed fixed-point ranges are owned by
+`crates/brain-visualizer/src/connectivity/mod.rs → weight, FIXED_POINT_SCALE`.
 
 There is **no float distance comparison** anywhere on this path. All
 arithmetic after the initial world→cell quantization is integer.
@@ -93,22 +88,13 @@ builder is the one exception: at network build time it evaluates the production
 deterministic host-side reverse view for rendering incoming dendrites. This does
 not alter `target`, `target_with_cell`, `weight`, or the Rust/WGSL scatter path.
 
-The stored shape is:
-
-- `IncomingSynapse`: every non-self raw incoming record, sorted into the target
-  neuron's range, carrying `(source_id, synapse_index, target_id)`, the
-  deterministic target socket index/position, and raw signed weight.
-- `IncomingRange`: one half-open range per target neuron into the raw incoming
-  vector.
-- `IncomingSocketGroup`: visible socket groups aggregated by duplicate
-  `(source_id, target_id, socket_idx)` with absolute weights summed.
-- `incoming_socket_group_ranges`: one range per target neuron into those visible
-  groups.
-
-At the default review scale (N=1200/K=16), v1 draws every unique incoming socket
-group; it does not sample or silently drop dense targets. If density becomes too
-high at a later scale, lower K or add an explicit cap policy before hiding
-groups.
+The stored shape is owned by
+`crates/brain-visualizer/src/sim/morphology.rs → build_incoming_view,
+IncomingSynapse, IncomingRange, IncomingSocketGroup, Morphology`. The invariant
+is that morphology stores every non-self raw incoming record and aggregates
+visible duplicate sockets explicitly; it does not sample or silently drop dense
+targets. If density becomes too high at a later scale, lower K or add an explicit
+cap policy before hiding groups.
 
 **No per-synapse long-range flag.** The heavy-tail reach coin (step 3 above) is
 baked into the resulting target id; `target` / `target_with_cell` return only the
@@ -157,27 +143,20 @@ the gate.
 
 ## Per-tier K and store-once vs regenerate
 
-K is the synaptic out-degree per neuron and is set per tier:
-
-| Tier     | N (typical) | K range   | Edge buffer strategy |
-|----------|-------------|-----------|----------------------|
-| Low      | ~10k        | 16–32     | store once (CSR)     |
-| Balanced | ~100k–1M    | 32–64     | store once           |
-| Max      | ~1M+        | 64–128    | regenerate per tick  |
-
-Storing K=64 for 1M neurons requires ~256 MB; 10M would be ~2.5 GB, which
-is infeasible in-browser. The max tier regenerates targets by hashing — zero
-storage at the cost of more compute. The adaptive scaler may compress or
-expand K within a tier alongside N.
+K is the synaptic out-degree per neuron. Current runtime presets and bounds live
+in `web/src/ui/controls.ts → TIER_PRESETS, N_MIN, N_MAX`; the dormant Rust scaler
+range helper is `crates/brain-visualizer/src/sim/scaler.rs → TierRange`. The
+connectivity rule itself does not store an edge list at any tier: simulation
+regenerates targets by hashing, trading storage for deterministic compute.
 
 ## Update when
 
 - `hash32` or `mix_key` constants change (must update both `hash.rs` and
   `hash.wgsl` and re-derive golden vectors).
 - `LOCAL_D` or `ANTERIOR_BIAS_NUM / ANTERIOR_BIAS_DEN` change.
-- The `target` or `weight` algorithm changes (edit all three of Rust
-  `target_with_cell`, WGSL `target_neuron`, and the CPU `ConnParams` path
-  together, then recheck `crates/brain-visualizer/tests/wgsl_target_determinism.rs`).
+- The `target` or `weight` algorithm changes (edit Rust `target_with_cell` and
+  WGSL `target_neuron` together, then recheck
+  `crates/brain-visualizer/tests/wgsl_target_determinism.rs`).
 - The heavy-tailed reach rule, `REACH_FRAC_DEN`, the `REACH_COIN`/`REACH_OFFSET`
   salts, or the `ConnectUniforms` `long_range_frac` / `max_reach` fields change
   (Rust `resources.rs` ↔ WGSL `scatter.wgsl` struct ↔ the inline copy in the

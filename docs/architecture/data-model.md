@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-13
+last_updated:  2026-06-15
 ---
 
 # Data Model
@@ -13,11 +13,11 @@ All fields live in `wgpu::Buffer` handles managed by
 
 ## What it owns
 
-- The six SoA fields: `pos_x / pos_y / pos_z` (f32, static), `v` (f32,
+- The SoA fields: `pos_x / pos_y / pos_z` (f32, static), `v` (f32,
   membrane potential), `I` (i32, fixed-point current accumulator),
   `last_spike` (u32, packed) — see `crates/brain-visualizer/src/sim/gpu/shaders/integrate.wgsl`
   binding declarations for authoritative types.
-- The `last_spike` packed word layout and the three mask constants
+- The `last_spike` packed word layout and mask constants
   (`HAS_SPIKED_MASK`, `TYPE_MASK`, `TICK_MASK`) defined in
   `crates/brain-visualizer/src/sim/gpu/shaders/integrate.wgsl`.
 - The `tick_diff` modular 24-bit helper — `integrate.wgsl → tick_diff`.
@@ -38,22 +38,20 @@ All fields live in `wgpu::Buffer` handles managed by
 
 ## Packed `last_spike` word
 
-```
-bit 31      = HAS_SPIKED  (1 = has ever fired)
-bits [30:24] = 7-bit type  (E/I flag in bit 24, cortical region in bits [30:25])
-bits [23:0]  = 24-bit tick of last fire
-```
-
-The 24-bit tick counter wraps at 2^24 ≈ 16.7M ticks (≈ 4.6 h at 1 ms/tick).
-All comparisons use `tick_diff(a, b) = (a − b) & TICK_MASK`; this stays
-correct as long as the compared interval is less than half the wrap range. The
-native Rust helper and the production WGSL helpers used by integrate, metrics,
-and far-glow rendering are covered by the tick-wrap gate.
+The exact mask layout lives in
+`crates/brain-visualizer/src/sim/backend.rs → HAS_SPIKED_MASK, TYPE_MASK,
+TICK_MASK, neuron_type, has_spiked, tick_diff` and the mirrored WGSL helpers in
+`crates/brain-visualizer/src/sim/gpu/shaders/integrate.wgsl → HAS_SPIKED_MASK,
+TYPE_MASK, TICK_MASK, neuron_type, has_spiked, tick_diff`. The packed tick wraps
+modulo `TICK_MASK`; all comparisons use `tick_diff`, and the Rust/WGSL wrap
+behavior is gated by `cargo test` via
+`crates/brain-visualizer/tests/wgsl_tick_wrap.rs`.
 
 Packing type into `last_spike` eliminates a dedicated type array and its
-alignment padding. Per-neuron footprint is **24 B** (25% better cache
-density than the naïve 32 B layout). At 1M neurons that is 24 MB of GPU
-buffers, well within budget on integrated and discrete hardware alike.
+alignment padding. The current per-neuron footprint is locked by
+`crates/brain-visualizer/src/sim/gpu/resources.rs → NeuronBuffers` and its
+`neuron_buffer_layouts_match_n` test under `cargo test`; keep the budget
+discussion in that owner instead of duplicating field math here.
 
 New neurons start with `HAS_SPIKED = 0`, type bits initialized, tick bits
 zero. Render shaders must treat `HAS_SPIKED = 0` as zero glow — never as a
@@ -64,13 +62,14 @@ emit pulse/flash/core terms when `HAS_SPIKED != 0`.
 
 ## Fixed-point current accumulator
 
-`I[i]` is an `i32` fixed-point value scaled by `S = 4096 (2^12)`. WGSL
-has no f32 atomics, so `atomicAdd` on an `i32` buffer is the only race-free
-scatter primitive. The integration pass converts on read:
-`current = f32(I[i]) / fixed_point_scale`.
+`I[i]` is an `i32` fixed-point value scaled by `FIXED_POINT_SCALE`. WGSL has no
+f32 atomics, so `atomicAdd` on an `i32` buffer is the only race-free scatter
+primitive. The integration pass converts on read through
+`crates/brain-visualizer/src/sim/gpu/shaders/integrate.wgsl → integrate`.
 
-S = 2^12 keeps individual synaptic weights in a comfortable range, but fan-in
-during synchronised firing can accumulate enough contributions to overflow i32.
+The fixed-point scale keeps individual synaptic weights in a comfortable range,
+but fan-in during synchronised firing can accumulate enough contributions to
+overflow i32.
 Scatter keeps a debug high-water `max_abs_current` atomic, read once per native
 test/harness batch through `GpuBackend::max_abs_current_hw`; the product render
 loop does not read it. `crates/brain-visualizer/tests/gpu_current_overflow.rs`
@@ -84,20 +83,20 @@ golden behavior.
 ## Chunked storage layout
 
 Each SoA field is a `ChunkedBuffer` (`crates/brain-visualizer/src/buffers.rs → ChunkedBuffer`).
-When a field's total byte size exceeds `MAX_CHUNK_BYTES` (64 MiB), the
-buffer is split into multiple `wgpu::Buffer` handles. Shaders index via
-`chunk = neuron_id / chunk_size`, `local = neuron_id % chunk_size`.
+When a field's total byte size exceeds `MAX_CHUNK_BYTES`, the buffer is split
+into multiple `wgpu::Buffer` handles. Shaders index through the `ChunkLayout`
+math instead of a second data model.
 
 The layout math is GPU-free and fully host-testable. The `ChunkLayout`
 unit tests in `crates/brain-visualizer/src/buffers.rs` gate this invariant.
-Morphology segment storage reuses the same math for 48 B `MorphSegment`
-records, but each render/compaction pass binds one segment chunk at a time
-rather than shader-indexing across chunks; see
+Morphology segment storage reuses the same math for `MorphSegment` records, but
+each render/compaction pass binds one segment chunk at a time rather than
+shader-indexing across chunks; see
 `crates/brain-visualizer/src/sim/gpu/resources.rs → morph_segment_chunk_layout`.
 
 Positions are three independent 4-byte fields (`pos_x`, `pos_y`, `pos_z`),
 never `array<vec3<f32>>`. Using a vec3 would impose a 16-byte stride and
-break the 24 B per-neuron budget.
+break the compact per-neuron budget.
 
 ## Update when
 

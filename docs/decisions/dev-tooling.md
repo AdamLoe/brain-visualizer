@@ -14,14 +14,13 @@
 - **Code anchors.** `web/src/ui/dev-panel.ts → DevPanel` (open triggers);
   `web/src/main.ts` (wires the gear button via `onVisibilityChange`).
 
-## Boot overlay is a clean three-row panel, not a diagnostics surface
+## Boot overlay is a clean status panel, not a diagnostics surface
 
 - **Decision.** The startup overlay shows only a title, a progress bar, and a
-  percent + current-stage row. The former boot diagnostics — `step X/Y`, elapsed
-  `time`, `frames`, and the rolling per-stage timings list — were removed from the
-  overlay and from `updateStartupOverlay`. Per-stage timings are still logged to
-  the console (`[startup] <stage>: <ms>`), and `__bvFrameCounter` / `__bvStartup.status`
-  remain as E2E hooks.
+  percent + current-stage row. Boot diagnostics stay out of overlay DOM and out
+  of `updateStartupOverlay`; timing detail is logged/recorded through
+  `boot-timings.ts`. `__bvFrameCounter` / `__bvStartup.status` remain as E2E
+  hooks.
 - **Why.** The boot panel is part of the product first impression, not a dev
   surface; the diagnostics were noise for the common case and added DOM/state for
   numbers a developer can read from the console or the e2e smoke artifact. Felt
@@ -29,7 +28,8 @@
   exposing raw timings.
 - **Applies to.** [`../architecture/web-frontend.md`](../architecture/web-frontend.md).
 - **Code anchors.** `web/index.html` (`#startup-overlay` markup + CSS);
-  `web/src/main.ts → updateStartupOverlay / startGpuBackend`.
+  `web/src/main.ts → updateStartupOverlay, startGpuBackend`;
+  `web/src/boot-timings.ts → recordBootTiming, logBootSummary`.
 
 ## Colored-dot impact classification as the single source of truth
 
@@ -37,7 +37,7 @@
   live / yellow = brain-reset / red = renderer-rebuild) whose color comes
   exclusively from `web/src/core/setting-metadata.ts → SETTING_IMPACT`. No other file
   makes impact decisions.
-- **Why.** With 24 settings spread across multiple tabs and potentially
+- **Why.** With settings spread across multiple tabs and potentially
   multiple UIs, a single classification table prevents drift between the visual
   hint and the actual apply path. Adding a control means adding one entry to
   `SETTING_IMPACT`; no other coordination needed.
@@ -48,19 +48,21 @@
 
 ## Most settings are live; rebuild-only controls stay explicit
 
-- **Decision.** Most `VisualizerSettings` fields are `"live"`, but
-  `connectionCurveLift` stays `"renderer-rebuild"` and the descriptor-driven
-  morphology generator/render-quality groups are still rebuild-backed. The
-  region-assignment prototype is an `AppConfig` dev-panel checkbox, not a
-  `VisualizerSettings` field, and also rebuilds through the worker-prepared
-  network path. The old brain-reset Apply API and pending UI are removed;
-  rebuilds go through the network/morphology rebuild controls.
+- **Decision.** Most `VisualizerSettings` fields are `"live"`, but the
+  heavy-tailed reach knobs stay `"brain-reset"`, `connectionCurveLift` stays
+  `"renderer-rebuild"`, and the descriptor-driven morphology generator /
+  render-quality groups are still rebuild-backed. The region-assignment
+  prototype is an `AppConfig` dev-panel checkbox, not a `VisualizerSettings`
+  field, and also rebuilds through the worker-prepared network path. The old
+  brain-reset Apply API and pending UI are removed; structural changes go
+  through the network/morphology rebuild controls.
 - **Why.** `heterogeneity`, `weightNormalization`, and `inputMode` are `"live"`
   because the integrate uniform is read from GPU memory every tick rather than
-  cached at init. `connectionCurveLift` and the morphology generator/quality
-  controls still change baked geometry or WGSL overrides, so keeping them
-  explicit avoids pretending they are cheap live knobs. Removing the no-op Apply
-  surface avoids suggesting there is a second rebuild path.
+  cached at init. Reach knobs change target ids and generated geometry,
+  `connectionCurveLift` changes baked morphology geometry, and morphology
+  generator/quality controls change generated geometry or WGSL overrides, so
+  keeping them explicit avoids pretending they are cheap live knobs. Removing
+  the no-op Apply surface avoids suggesting there is a second rebuild path.
 - **Applies to.** [`../architecture/dev-panel.md`](../architecture/dev-panel.md).
 - **Revisit when.** A truly structural setting is added (e.g. one that changes
   buffer sizes or requires re-uploading connectivity).
@@ -122,7 +124,7 @@
   Rust receives it without any slider interaction. The dev panel renders its rows
   from a typed descriptor array (`MORPH_DESCRIPTORS`) rather than bespoke
   per-control code, and descriptor defaults must match `DEFAULT_MORPH_CONFIG`.
-- **Why.** The 26-slot Float32Array index contract is a frozen, corruption-prone
+- **Why.** The positional Float32Array index contract is a frozen, corruption-prone
   Rust↔TS boundary (see Float32Array decision below); the morphology config is a
   larger, nested, evolving surface where adding/removing a field should not risk
   silently shifting every other visual setting. A separate JSON channel lets the
@@ -152,16 +154,14 @@
   while preserving the existing impact-dot model.
 - **Applies to.** [`../architecture/dev-panel.md`](../architecture/dev-panel.md).
 - **Code anchors.** `web/src/ui/dev-panel.ts → _sliderWithInput, _sliderRow,
-  _morphRow`; `web/src/core/morph-config.ts → MORPH_DESCRIPTORS`; `web/src/ui/dev-panel.test.ts`.
+  _morphRow`; `web/src/core/morph-config.ts → MORPH_DESCRIPTORS`.
 
 ## Tombstone or quarantine dead Float32Array slots instead of renumbering
 
-- **Decision.** `connectionLightPast` (index 9), `bloomStrength` as a user
-  setting (index 10), `signalSource` (index 16), and `adaptiveScalerEnabled`
-  (index 23) are removed from UI/debug persistence paths and zero-written, but
-  the 26-slot `VisualSettings` array is not renumbered. `pointRadius` (index 1),
-  `surfaceOpacity` (index 11), and `surface` (index 20) are also removed from
-  UI/persistence and default-written rather than renumbered or exposed.
+- **Decision.** Removed visual settings are tombstoned or quarantined in
+  `web/src/core/settings.ts → toFloat32Array` and
+  `crates/brain-visualizer/src/sim/gpu/mod.rs → VisualSettings::from_slice`
+  rather than renumbering later `VisualSettings` slots.
 - **Why.** Renumbering the Rust/TypeScript flat-array contract is a corruption
   risk with little payoff. Tombstoning/quarantining removes misleading controls
   while keeping old positional meaning stable and keeping dormant Rust render
@@ -169,7 +169,7 @@
 - **Applies to.** [`../architecture/dev-panel.md`](../architecture/dev-panel.md),
   [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md).
 - **Code anchors.** `web/src/core/settings.ts → SavedDev, toFloat32Array`;
-  `web/src/ui/dev-panel.ts → _buildRenderingTab, _buildDebugViewTab`;
+  `web/src/ui/dev-panel.ts → _buildAppearanceTab, _buildDebugViewTab`;
   `crates/brain-visualizer/src/sim/gpu/mod.rs → VisualSettings::from_slice`.
 
 ## Version-reset over migration for semantically breaking default changes
@@ -178,7 +178,7 @@
   actively mislead — such as high-excitability/high-`iExt` saves masking the
   new quiet-network defaults — the LS key version string is bumped (e.g.
   `bv2_settings_v1` → `bv2_settings_v2`) rather than writing migration logic.
-  All three keys were bumped together in the high-scale defaults wave.
+  App-owned keys move together for semantically coupled default waves.
 - **Why.** A migration that rewrites old high-excitability saves to the new
   low-firing defaults is indistinguishable from a reset for the user; a version
   bump is simpler, audit-proof, and has no edge cases. The cost is that saved
@@ -192,7 +192,7 @@
 
 ## Expose only bounded runtime-safe morphology knobs
 
-- **Decision.** The dev panel exposes only a small, bounded set of new
+- **Decision.** The dev panel exposes only a small, bounded set of
   morphology generator knobs at runtime. Decoration controls are capped by
   their compile-time maxima, and straight-subdivision controls are clamped to
   the already-budgeted `EDGE_SUBSEGMENTS_MAX`. Allocation budgets, salts, and
@@ -206,14 +206,14 @@
   [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md).
 - **Code anchors.** `web/src/core/morph-config.ts → MORPH_DESCRIPTORS`;
   `crates/brain-visualizer/src/sim/morphology.rs → GeneratorConfig::apply_to,
-  MorphologyParams::locked_default`.
+  MorphologyParams::locked_default, EDGE_SUBSEGMENTS_MAX`.
 - **Revisit when.** The pipeline rebuild path accepts dynamic buffer sizes, or a
   separate "needs-rebuild" flow is added for buffer-sized changes.
 
 ## Task-oriented settings IA over one oversized rendering tab
 
-- **Decision.** The dev panel uses Monitor / Dynamics / Network / Appearance /
-  Morphology / Debug / Storage tabs. Appearance owns live visual settings and
+- **Decision.** The dev panel uses the task-oriented tab set defined by
+  `web/src/ui/dev-panel.ts → TABS`. Appearance owns live visual settings and
   morphology lighting; Morphology owns descriptor-driven generator/render-quality
   config; Debug is read-only current-state labels.
 - **Why.** The old Rendering tab mixed color, glow, connection visibility,
@@ -244,7 +244,7 @@
 
 ## Float32Array index contract is the shared Rust/TS boundary
 
-- **Decision.** The 26-element `Float32Array` produced by
+- **Decision.** The `Float32Array` of length `SETTINGS_LENGTH` produced by
   `web/src/core/settings.ts → toFloat32Array` and consumed by
   `crates/brain-visualizer/src/sim/gpu/mod.rs → VisualSettings::from_slice` is the sole settings
   boundary between the JS and Rust worlds. Index assignment is the contract;

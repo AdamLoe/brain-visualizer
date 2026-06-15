@@ -54,9 +54,11 @@ docs capture but a casual reader may not expect:
   contiguous anterior/posterior lobes; directionality comes from the
   excitatory feed-forward bias in the connectivity rule. See
   [architecture/manifold.md](architecture/manifold.md).
-- **Default scale is small** (`DEFAULT_CONFIG` ≈ 1.2k neurons / K=16 in
-  `web/src/core/types.ts`) — beauty-first. High-N tiers and the adaptive scaler exist but
-  are gated. See [architecture/scaling.md](architecture/scaling.md).
+- **Default scale is beauty-first, but no longer tiny.** The page boots at
+  `DEFAULT_CONFIG.n = 6_000`, `k = 16`, `tier = "low"` in
+  `web/src/core/types.ts`. Higher-N tiers remain opt-in, and the old adaptive
+  scaler is dormant rather than live. See
+  [architecture/scaling.md](architecture/scaling.md).
 
 ## Hard-to-grep facts
 
