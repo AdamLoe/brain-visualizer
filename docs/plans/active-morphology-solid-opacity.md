@@ -1,8 +1,8 @@
 ---
-status:        draft
+status:        shipped
 owner:         unassigned
 last_updated:  2026-06-17
-okay_to_delete: false
+okay_to_delete: true
 long_lived:    false
 owning_docs:
   - architecture/gpu-rendering.md
@@ -115,11 +115,15 @@ solid-looking compositing model that survives close-up screenshots.
 
 ## Migration notes (filled in at ship time)
 
-Before marking this plan shipped, migrate durable facts into:
+Shipped durable context is captured in:
 
 - `architecture/gpu-rendering.md` for active pass ordering, depth/alpha policy,
-  and shader behavior.
-- `architecture/gpu-backend.md` if render-frame ordering or deferred pipeline
-  build behavior changes.
-- `decisions/rendering.md` for the active-only solidity decision and rejected
-  alternatives.
+  shader behavior, and active-only meaning.
+- `architecture/gpu-backend.md` for the frame graph order and deferred active
+  pipeline build behavior.
+- `decisions/rendering.md` for active-only true opacity, the firing-not-selection
+  rule, the `LightingConfig` opacity knobs, and rejected additive-brightness /
+  all-resting-opacity alternatives.
+
+This implementation batch kept that active-opacity contract intact while moving
+the morphology tube primitive to curved multi-ring rendering.

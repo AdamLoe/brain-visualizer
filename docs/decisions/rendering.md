@@ -157,14 +157,50 @@
 - **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md)
 - **Code anchors.** `crates/brain-visualizer/src/sim/gpu/mod.rs → GpuBackend::render_full, VisualSettings::from_slice, GpuBackend::set_bloom_strength`; `crates/brain-visualizer/src/sim/gpu/shaders/bloom.wgsl → fs_bright / fs_blur / fs_composite`; `web/src/core/settings.ts → toFloat32Array`.
 
-## Morphology as shader-generated 3D tubes + soma spheres, additive/no-depth
+## Morphology as shader-generated curved tubes + soma spheres
 
-- **Decision.** Branch segments are drawn as shader-generated tapered cylinders; soma bodies are a separate morphology-owned UV-sphere sub-pass. Both sub-passes keep additive blend and no depth write. The soma sphere is procedurally deformed in `vs_sphere` toward the dominant axon root carried by `MorphSphereInstance::root_dir/root_pull`, then lit by the same soma material and spike pulse path. A simple ambient + half-Lambert diffuse + rim lighting model in `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl → fs_main / fs_sphere` makes curvature readable without abandoning the additive glow aesthetic. Tessellation (`TUBE_SIDES`, `SPHERE_SLICES`, `SPHERE_STACKS`) and the lighting/brightness values are runtime-configurable rather than baked shader constants: tessellation rides WGSL `override` consts set at pipeline build, and lighting/brightness come from the `MorphologyConfig` lighting group. Defaults remain conservative; both are exposed to the hidden dev panel for tuning.
-- **Why.** Billboard quads give no sense of volume or curvature — the arbor reads as a glowing ribbon cloud rather than a cellular structure. Shader-generated tubes require no new buffer or layout change to `MorphSegment`, are fully GPU-side, and immediately read as cylindrical branches. Keeping additive/no-depth avoids a render pipeline compositing rework while still delivering the 3D curvature impression through lighting rather than occlusion. Rim lighting keeps the SNN glow aesthetic dominant while making curvature visible in screenshots.
+- **Decision.** Branch segments are drawn as shader-generated tapered, curved
+  multi-ring tubes; soma bodies are a separate morphology-owned UV-sphere
+  sub-pass. The tube centerline bow is derived deterministically from existing
+  `MorphSegment` fields, so organic close-up curvature does not add a buffer,
+  widen the 48 B segment layout, or alter activity ownership. Resting tube and
+  soma sub-passes keep additive blend and no depth write; firing geometry also
+  gets the active depth-tested redraw described below. The soma sphere is
+  procedurally deformed in `vs_sphere` toward the dominant axon root carried by
+  `MorphSphereInstance::root_dir/root_pull`, then lit by the same soma material
+  and spike pulse path. A simple ambient + half-Lambert diffuse + rim lighting
+  model in `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl →
+  fs_main / fs_sphere` makes curvature readable without abandoning the glow
+  aesthetic. Cross-section tessellation (`TUBE_SIDES`, `SPHERE_SLICES`,
+  `SPHERE_STACKS`) and lighting/brightness values are runtime-configurable;
+  the fixed tube ring count is shader-owned and mirrored in Rust draw counts.
+- **Why.** Billboard quads give no sense of volume or curvature, and straight
+  two-ring cylinders still read as angular generated linework at close camera
+  distances. Shader-generated curved tubes require no new storage contract, are
+  fully GPU-side, and immediately read as cylindrical branching processes.
+  Keeping the resting layer additive/no-depth avoids a broad compositing rework,
+  while the active redraw supplies true occlusion only for firing geometry. Rim
+  lighting keeps the SNN glow aesthetic dominant while making curvature visible
+  in screenshots.
 - **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md), [`../architecture/manifold.md`](../architecture/manifold.md)
-- **Alternatives considered.** Pre-built indexed mesh per neuron arbor — correct junctions and caps, but requires a new mesh-buffer layout and a much more complex generator; deferred. Depth writes for correct self-occlusion — requires sorting render passes and manifold-after-morphology ordering; deferred as a render pipeline rework.
-- **Code anchors.** `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl → vs_main / fs_main / vs_sphere / fs_sphere` (`TUBE_SIDES` / `SPHERE_SLICES` / `SPHERE_STACKS` override consts); `crates/brain-visualizer/src/sim/gpu/pipelines.rs → build_morph_pipelines`; `crates/brain-visualizer/src/sim/morphology.rs → LightingConfig, RenderQualityConfig`; `crates/brain-visualizer/src/sim/gpu/resources.rs → MorphUniforms`. The dev-panel exposure decision lives in [`dev-tooling.md`](dev-tooling.md) and [`manifold.md`](manifold.md).
-- **Revisit when.** True depth compositing is a separate future rework if screenshots demonstrate the additive interpenetration reads poorly at typical zoom distances. (Partially superseded: the active-opacity layer below now adds a depth-correct redraw for *firing* geometry; the resting additive layer stays additive/no-depth.)
+- **Alternatives considered.** Pre-built indexed mesh per neuron arbor — correct
+  junctions and caps, but requires a new mesh-buffer layout and a much more
+  complex generator; deferred. Curved control points in `MorphSegment` —
+  rejected because the shader can derive a stable bow from existing fields and
+  keep the corruption-sensitive 48 B layout unchanged. Depth writes for all
+  resting morphology — deferred because active-only opacity solves the firing
+  solidity problem without turning the inactive forest opaque.
+- **Code anchors.** `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl →
+  tube_curve_bend / vs_main / fs_main / vs_sphere / fs_sphere` (`TUBE_SIDES` /
+  `SPHERE_SLICES` / `SPHERE_STACKS` override consts); `crates/brain-visualizer/src/sim/gpu/pipelines.rs →
+  build_morph_pipelines`; `crates/brain-visualizer/src/sim/gpu/mod.rs →
+  tube_verts`; `crates/brain-visualizer/src/sim/morphology.rs → LightingConfig,
+  RenderQualityConfig`; `crates/brain-visualizer/src/sim/gpu/resources.rs →
+  MorphUniforms`. The dev-panel exposure decision lives in
+  [`dev-tooling.md`](dev-tooling.md) and [`manifold.md`](manifold.md).
+- **Revisit when.** Resting self-occlusion becomes more important than additive
+  readability, or branch junctions need explicit caps/fillets rather than
+  shader-built tube continuity.
 
 ## True opacity for active geometry, layered over the additive resting passes
 

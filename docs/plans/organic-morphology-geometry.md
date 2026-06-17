@@ -1,8 +1,8 @@
 ---
-status:        draft
+status:        shipped
 owner:         unassigned
 last_updated:  2026-06-17
-okay_to_delete: false
+okay_to_delete: true
 long_lived:    false
 owning_docs:
   - architecture/manifold.md
@@ -129,12 +129,17 @@ they are the acceptance surface.
 
 ## Migration notes (filled in at ship time)
 
-Before marking this plan shipped, migrate durable facts into:
+Shipped durable context was migrated into:
 
-- `architecture/manifold.md` for the generator/data contract.
-- `architecture/gpu-rendering.md` for render consumption of the new morphology
-  primitive.
-- `decisions/manifold.md` for the chosen branch grammar and rejected
-  alternatives.
-- `decisions/rendering.md` if shader primitives, packet path rendering, or
-  morphology material choices change.
+- `architecture/manifold.md` for the CPU path-sampling plus shader-curved tube
+  contract and the unchanged 48 B `MorphSegment` storage layout.
+- `architecture/gpu-rendering.md` for the curved multi-ring tube primitive,
+  fixed tube ring count, and draw-count dependency.
+- `architecture/dev-panel.md` for the hidden morphology controls now describing
+  path sampling rather than straight subdivision.
+- `decisions/manifold.md` for the split between host path truth and
+  shader-bowed tube smoothness.
+- `decisions/rendering.md` for shader-generated curved tubes, rejected
+  `MorphSegment` control-point widening, and the unchanged active ownership.
+- `decisions/dev-tooling.md` for keeping shader tube-ring curvature protected
+  while exposing only bounded path-sampling knobs.

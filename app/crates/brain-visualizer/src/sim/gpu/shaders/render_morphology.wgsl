@@ -2,11 +2,10 @@
 //
 // Instanced, fully GPU-generated tube geometry. One INSTANCE per MorphSegment
 // in the currently bound segment chunk;
-// TUBE_SIDES * 2 * 3 verts per instance form a tapered cylinder (tube) from
-// endpoint `a` (radius radius_a · width_scale) to endpoint `b` (radius
-// radius_b · width_scale). Two rings of TUBE_SIDES vertices each, triangulated
-// as quads (2 tris per side), with a stable perpendicular basis built from the
-// segment axis.
+// TUBE_SIDES * (TUBE_RINGS - 1) * 2 * 3 verts per instance form a tapered,
+// gently bowed tube from endpoint `a` (radius radius_a · width_scale) to endpoint
+// `b` (radius radius_b · width_scale). Ring centers are curved in-shader from
+// existing segment fields so the 48 B MorphSegment contract stays unchanged.
 //
 // Lighting model (Stage 0 / v0.3.0): one directional light + rim term.
 //   ambient + diffuse·max(dot(N,L),0) + rim·pow(1-max(dot(N,V),0), rim_power)
@@ -28,9 +27,12 @@
 // ── Tube geometry constant ────────────────────────────────────────────────────
 // v0.3.1: pipeline-overridable constant. The Rust side (gpu/mod.rs) sets this via
 // `compilation_options.constants` AND computes the matching draw vert-count
-// (TUBE_SIDES * 2 * 3) from the same runtime value, so the two sites stay in sync.
+// (TUBE_SIDES * (TUBE_RINGS - 1) * 2 * 3) from the same runtime value, so the two sites stay in sync.
 // Default 6 matches the inherited v0.3.0 value.
 override TUBE_SIDES: u32 = 6u;
+const TUBE_RINGS: u32 = 4u;
+const TUBE_SPANS: u32 = TUBE_RINGS - 1u;
+const ORGANIC_TUBE_BEND_SALT: u32 = 0x00B10001u;
 
 struct MorphSegment {
     a: vec3<f32>,
@@ -444,21 +446,48 @@ struct SphereVertOut {
 
 // ── Tube vertex generation ────────────────────────────────────────────────────
 //
-// Vertices per instance: TUBE_SIDES * 2 * 3
-// Layout: for each of TUBE_SIDES quads, emit 2 triangles (6 verts).
-// Quad s connects ring-side s and ring-side (s+1) % TUBE_SIDES across the two
-// rings (ring 0 at endpoint a/radius_a, ring 1 at endpoint b/radius_b).
+// Vertices per instance: TUBE_SIDES * (TUBE_RINGS - 1) * 2 * 3
+// Layout: for each axial span and side, emit 2 triangles (6 verts).
+// Quad (span, s) connects ring-side s and ring-side (s+1) % TUBE_SIDES across
+// rings `span` and `span + 1`.
 //
 // Triangle 0: (ring0,s), (ring0,s+1), (ring1,s)
 // Triangle 1: (ring1,s), (ring0,s+1), (ring1,s+1)
 //
 // Within each block of 6 verts (vid 0..5 for side s):
-//   vid 0 → (ring0, s)
-//   vid 1 → (ring0, s+1)
-//   vid 2 → (ring1, s)
-//   vid 3 → (ring1, s)
-//   vid 4 → (ring0, s+1)
-//   vid 5 → (ring1, s+1)
+//   vid 0 → (ring=span,     s)
+//   vid 1 → (ring=span,     s+1)
+//   vid 2 → (ring=span + 1, s)
+//   vid 3 → (ring=span + 1, s)
+//   vid 4 → (ring=span,     s+1)
+//   vid 5 → (ring=span + 1, s+1)
+
+fn tube_curve_bend(seg: MorphSegment, seg_len: f32, u_vec: vec3<f32>, v_vec: vec3<f32>) -> vec3<f32> {
+    let path_key = u32(abs(seg.path_len) * 4096.0);
+    let h0 = f32(mix_key(seg.neuron_id, seg.target_id, path_key, ORGANIC_TUBE_BEND_SALT)) / 4294967295.0;
+    let h1 = f32(mix_key(seg.target_id, seg.neuron_id, path_key ^ seg.kind, ORGANIC_TUBE_BEND_SALT ^ 0x6a09e667u)) / 4294967295.0;
+    var bend_raw = u_vec * (h0 * 2.0 - 1.0) + v_vec * (h1 * 2.0 - 1.0);
+    if length(bend_raw) < 1e-5 {
+        bend_raw = u_vec;
+    }
+    let bend_dir = normalize(bend_raw);
+    let local_strength = select(0.18, 0.13, seg.kind == 1u);
+    let long_strength = select(local_strength, local_strength * 0.55, seg.path_len >= LONG_RANGE_PATH);
+    return bend_dir * seg_len * long_strength;
+}
+
+fn tube_ring_basis(tangent: vec3<f32>, fallback_hint: vec3<f32>) -> mat2x3<f32> {
+    var fallback = fallback_hint;
+    if abs(dot(normalize(tangent), normalize(fallback))) > 0.94 {
+        fallback = vec3<f32>(1.0, 0.0, 0.0);
+        if abs(dot(normalize(tangent), fallback)) > 0.94 {
+            fallback = vec3<f32>(0.0, 0.0, 1.0);
+        }
+    }
+    let ring_u = normalize(cross(normalize(tangent), fallback));
+    let ring_v = cross(normalize(tangent), ring_u);
+    return mat2x3<f32>(ring_u, ring_v);
+}
 
 @vertex
 fn vs_main(
@@ -490,39 +519,45 @@ fn vs_main(
     let v_vec = cross(tube_axis, u_vec);               // second radial basis (already unit)
 
     // ── Decode vertex within the quad strip ─────────────────────────────────
-    // 6 verts per side; which side (s) and local index within that side.
-    let side = vid / 6u;
+    // 6 verts per quad; quads are grouped by axial span then side.
+    let quad = vid / 6u;
+    let span = quad / TUBE_SIDES;
+    let side = quad % TUBE_SIDES;
     let local = vid % 6u;
 
     // The two column indices in the ring for this triangle pair.
     let s0 = side;
     let s1 = (side + 1u) % TUBE_SIDES;
 
-    // Map local vertex to (ring, column) — ring 0 = endpoint a, ring 1 = endpoint b.
+    // Map local vertex to (ring, column).
     // Triangle 0 (local 0,1,2): (ring0,s0), (ring0,s1), (ring1,s0)
     // Triangle 1 (local 3,4,5): (ring1,s0), (ring0,s1), (ring1,s1)
     var ring: u32;
     var col: u32;
     switch local {
-        case 0u: { ring = 0u; col = s0; }
-        case 1u: { ring = 0u; col = s1; }
-        case 2u: { ring = 1u; col = s0; }
-        case 3u: { ring = 1u; col = s0; }
-        case 4u: { ring = 0u; col = s1; }
-        default: { ring = 1u; col = s1; }
+        case 0u: { ring = span; col = s0; }
+        case 1u: { ring = span; col = s1; }
+        case 2u: { ring = span + 1u; col = s0; }
+        case 3u: { ring = span + 1u; col = s0; }
+        case 4u: { ring = span; col = s1; }
+        default: { ring = span + 1u; col = s1; }
     }
 
     // ── Ring position ────────────────────────────────────────────────────────
     let theta = 6.283185307 * f32(col) / f32(TUBE_SIDES); // 2π * col / TUBE_SIDES
     let cos_t = cos(theta);
     let sin_t = sin(theta);
-    // Radial direction in world space — also the outward normal.
-    let radial = cos_t * u_vec + sin_t * v_vec;
+    let t = f32(ring) / f32(TUBE_SPANS);
+    let bend = tube_curve_bend(seg, seg_len, u_vec, v_vec);
+    let bend_weight = 4.0 * t * (1.0 - t);
+    let center = a + axis * t + bend * bend_weight;
+    let tangent = normalize(axis + bend * (4.0 - 8.0 * t));
+    let ring_basis = tube_ring_basis(tangent, fallback);
+    let radial = cos_t * ring_basis[0] + sin_t * ring_basis[1];
 
-    let endpoint = select(a, b, ring == 1u);
-    let radius = select(seg.radius_a, seg.radius_b, ring == 1u) * u.width_scale;
-    let world = endpoint + radial * radius;
-    let path_pos = seg.path_len + select(0.0, seg_len, ring == 1u);
+    let radius = mix(seg.radius_a, seg.radius_b, t) * u.width_scale;
+    let world = center + radial * radius;
+    let path_pos = seg.path_len + seg_len * t;
 
     // ── Normal and view direction for lighting ────────────────────────────────
     let N = radial; // unit outward normal = radial direction

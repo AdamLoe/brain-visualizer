@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-15
+last_updated:  2026-06-17
 ---
 
 # GPU Rendering
@@ -76,6 +76,10 @@ Morphology geometry is generated at network build time and uploaded as chunked
 `MorphSegment` storage plus one `MorphSphereInstance` per neuron. The tube pass
 uses `active_segment_indices[instance_index]` to map compacted instances back to
 chunk-local segments; there is no `instance_index == segment_index` debug path.
+Each selected segment is expanded by `render_morphology.wgsl → vs_main` into a
+curved multi-ring tube. The ring-count bend is derived deterministically from
+existing segment fields, so it changes only the render primitive and draw vertex
+count, not the Rust/WGSL storage layout or compaction predicate.
 
 The CPU generation of this geometry (`morphology::generate_with_progress`) is the
 heavy "Prepare network payload" boot phase and now reports continuous
@@ -106,9 +110,10 @@ The layout contracts are the corruption-sensitive part:
 
 Tessellation is controlled by WGSL override constants (`TUBE_SIDES`,
 `SPHERE_SLICES`, `SPHERE_STACKS`) supplied from `RenderQualityConfig` in
-`crates/brain-visualizer/src/sim/gpu/pipelines.rs → build_morph_pipelines`.
-The Rust draw vertex counts are derived from the same config in
-`GpuBackend`.
+`crates/brain-visualizer/src/sim/gpu/pipelines.rs → build_morph_pipelines`,
+plus the fixed tube ring count in `render_morphology.wgsl`. The Rust draw vertex
+counts are derived from the same side count and fixed ring count in `GpuBackend`,
+then written into the compaction draw args.
 
 ## Active Opacity
 

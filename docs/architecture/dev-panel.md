@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-13
+last_updated:  2026-06-17
 ---
 
 # Dev Panel
@@ -186,12 +186,12 @@ batched behind the Rebuild button instead of pushing on each change.
 
 **Dendrite generator controls.** The target-owned incoming dendrite generator is
 controlled by descriptor rows for socket placement, soma-proximal branching,
-decoration, and bounded straight-subdivision. The descriptor defaults/ranges are
-owned by `MORPH_DESCRIPTORS`, with defaults checked against
-`DEFAULT_MORPH_CONFIG` by `web/src/ui/dev-panel.test.ts` (`npm test`).
-Decoration and subdivision controls are clamped to existing generator/buffer
-limits; they do not add curved shader geometry. Waypoint counts and allocation
-budgets remain protected.
+decoration, and bounded path sampling. The descriptor defaults/ranges are owned
+by `MORPH_DESCRIPTORS`, with defaults checked against `DEFAULT_MORPH_CONFIG` by
+`web/src/ui/dev-panel.test.ts` (`npm test`). Decoration and path-sampling
+controls are clamped to existing generator/buffer limits; shader tube curvature
+is render-owned rather than a separate dev-panel knob. Waypoint counts and
+allocation budgets remain protected.
 
 Obsolete persisted morphology fields such as `dendritePrimaryMin`,
 `dendritePrimarySpan`, and duplicate `generator.axonCurveLift` are accepted,

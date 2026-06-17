@@ -287,7 +287,7 @@ describe("settings descriptors", () => {
   });
 });
 
-describe("morphology subdivision controls", () => {
+describe("morphology path sampling controls", () => {
   const paths = [
     "generator.maxSegmentLength",
     "generator.longRangeMaxSegmentLength",
@@ -296,7 +296,7 @@ describe("morphology subdivision controls", () => {
     "generator.minSubsegments",
   ];
 
-  test("DEFAULT_MORPH_CONFIG exposes straight subsegment controls", () => {
+  test("DEFAULT_MORPH_CONFIG exposes path sampling controls", () => {
     expect(DEFAULT_MORPH_CONFIG.generator.maxSegmentLength).toBe(0.05);
     expect(DEFAULT_MORPH_CONFIG.generator.longRangeMaxSegmentLength).toBe(0.025);
     expect(DEFAULT_MORPH_CONFIG.generator.curvatureSubsegmentBoost).toBe(2.0);

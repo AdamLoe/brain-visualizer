@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-15
+last_updated:  2026-06-17
 ---
 
 # Cortical Manifold
@@ -105,12 +105,14 @@ carry the real target id. Width is computed bottom-up from synaptic weight using
 the area-preserving rule described in
 [`../decisions/manifold.md`](../decisions/manifold.md).
 
-`adaptive_subsegments` controls straight-subsegment emission from edge length,
-curvature, and long-range classification. `long_range_waypoints` routes visually
-long leaf edges through deterministic bowed waypoints that are clamped to
-generation-time brain bounds. Morphology does not read a per-synapse long-range
-flag; connectivity exposes the chosen target id, and routing remains a visual
-concern.
+`adaptive_subsegments` controls deterministic CPU path sampling from edge
+length, curvature, and long-range classification. The renderer then bends each
+uploaded segment into a short multi-ring tube in-shader, so smoothness comes from
+both host-side path sampling and render-side curved tube tessellation without
+widening `MorphSegment`. `long_range_waypoints` routes visually long leaf edges
+through deterministic bowed waypoints that are clamped to generation-time brain
+bounds. Morphology does not read a per-synapse long-range flag; connectivity
+exposes the chosen target id, and routing remains a visual concern.
 
 `MorphSegment` is the branch-only Rust/WGSL layout contract, and
 `MorphSphereInstance` is the soma-only layout contract. `MorphSphereInstance`
@@ -147,10 +149,11 @@ web/Rust config loaders rather than revived as settings.
 `render_manifold.wgsl` draws the optional folded surface before additive neuron
 glow. `render_morphology.wgsl` consumes branch chunks and soma instances through
 the render pipelines owned by [`gpu-rendering.md`](gpu-rendering.md). The tube
-pass draws compacted active/recent branch instances; the soma pass draws one
-shader-built sphere per neuron. Both use `last_spike`, path length, material
-noise, and `MorphUniforms` lighting values, but pass order, blend/depth policy,
-compaction, bloom, and active-opacity behavior are owned by the rendering docs.
+pass draws compacted active/recent branch instances as shader-built curved
+multi-ring tubes; the soma pass draws one shader-built sphere per neuron. Both
+use `last_spike`, path length, material noise, and `MorphUniforms` lighting
+values, but pass order, blend/depth policy, compaction, bloom, and active-opacity
+behavior are owned by the rendering docs.
 
 ## Update When
 

@@ -900,5 +900,7 @@ mod tests {
         assert!(COMPACT_MORPH_WGSL.contains("AXON_IMPULSE_SPEED"));
         // render_morphology.wgsl — compacted instance remap present.
         assert!(RENDER_MORPHOLOGY_WGSL.contains("active_segment_indices"));
+        assert!(RENDER_MORPHOLOGY_WGSL.contains("const TUBE_RINGS: u32 = 4u"));
+        assert!(RENDER_MORPHOLOGY_WGSL.contains("tube_curve_bend"));
     }
 }

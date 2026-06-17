@@ -769,8 +769,8 @@ const REFRACTORY_TICKS: u32 = 5;
 const MORPH_BASE_BRIGHTNESS: f32 = 0.25;
 
 /// Morphology tube geometry: number of sides in the tube cross-section polygon.
-/// MUST match `TUBE_SIDES` const in render_morphology.wgsl. Vertices per tube =
-/// TUBE_SIDES * 2 * 3 (two rings, triangulated as quads → 2 tris per side).
+/// MUST match the default `TUBE_SIDES` override in render_morphology.wgsl.
+/// Vertices per tube = TUBE_SIDES * (TUBE_RINGS - 1) * 2 * 3.
 /// v0.3.1 will expose this as a pipeline rebuild knob.
 const TUBE_SIDES: u32 = 6;
 
@@ -874,8 +874,9 @@ pub struct GpuBackend {
     /// Initialised to `Default` (== contract defaults); `set_morphology_config`
     /// diffs incoming vs this and runs the narrowest update.
     morph_config: crate::sim::morphology::MorphologyConfig,
-    /// Tube draw vertex-count = tube_sides * 2 * 3. Runtime value kept in sync with
-    /// the WGSL `TUBE_SIDES` override constant the morph pipeline was built with.
+    /// Tube draw vertex-count = tube_sides * tube_spans * 2 * 3. Runtime value
+    /// kept in sync with the WGSL `TUBE_SIDES` override constant and fixed
+    /// `TUBE_RINGS` count the morph pipeline was built with.
     morph_tube_verts: u32,
     /// Soma sphere draw vertex-count = sphere_slices * sphere_stacks * 2 * 3.
     morph_sphere_verts: u32,
@@ -884,7 +885,8 @@ pub struct GpuBackend {
 /// Tube draw vertex-count from a tube-sides tessellation value.
 #[inline]
 fn tube_verts(tube_sides: u32) -> u32 {
-    tube_sides * 2 * 3
+    const TUBE_RINGS: u32 = 4;
+    tube_sides * (TUBE_RINGS - 1) * 2 * 3
 }
 
 /// Soma-sphere draw vertex-count from slice/stack tessellation values.
@@ -1982,10 +1984,9 @@ impl GpuBackend {
                 });
                 if mb.segment_count > 0 && compaction_ran {
                     pass.set_pipeline(pipe_morph);
-                    // tube_sides * 2 * 3 verts per segment (two rings, triangulated
-                    // as quads → 2 tris × 3 verts per side). v0.3.1: runtime value
-                    // kept in sync with the WGSL TUBE_SIDES override constant the
-                    // morph pipeline was built with.
+                    // tube_sides * tube_spans * 2 * 3 verts per segment. Runtime
+                    // value stays in sync with the WGSL TUBE_SIDES override and
+                    // fixed TUBE_RINGS count the morph pipeline was built with.
                     // Active/recent path (default): draw only the compacted
                     // instances via the GPU-written indirect args (instance count
                     // = selected segments). Legacy path: draw all segments.
@@ -2919,6 +2920,12 @@ mod tests {
         // build a real backend in a unit test, but the constant is the contract.
         // Verified end-to-end by examples/sim_check.rs (native GPU).
         let _ = (LEAK_DECAY, THRESHOLD); // touch to keep the module exercised
+    }
+
+    #[test]
+    fn morphology_tube_vertex_count_matches_four_ring_shader() {
+        assert_eq!(tube_verts(6), 6 * 3 * 2 * 3);
+        assert_eq!(tube_verts(12), 12 * 3 * 2 * 3);
     }
 
     #[test]

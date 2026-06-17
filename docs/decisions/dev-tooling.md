@@ -194,14 +194,15 @@
 
 - **Decision.** The dev panel exposes only a small, bounded set of
   morphology generator knobs at runtime. Decoration controls are capped by
-  their compile-time maxima, and straight-subdivision controls are clamped to
-  the already-budgeted `EDGE_SUBSEGMENTS_MAX`. Allocation budgets, salts, and
-  waypoint counts remain protected.
+  their compile-time maxima, and path-sampling controls are clamped to the
+  already-budgeted `EDGE_SUBSEGMENTS_MAX`. Allocation budgets, salts, waypoint
+  counts, and shader tube-ring curvature remain protected.
 - **Why.** The GPU morphology buffers are pre-allocated to fixed maxes at
   pipeline build time. Changing a buffer-sized parameter without resizing the
-  buffer silently drops segments or overruns memory. The exposed subdivision
+  buffer silently drops segments or overruns memory. The exposed path-sampling
   knobs only vary how much of the existing per-hop cap is used, so they can make
-  turns smoother/coarser without changing buffer sizing.
+  turns smoother/coarser before render-side tube bending without changing buffer
+  sizing.
 - **Applies to.** [`../architecture/dev-panel.md`](../architecture/dev-panel.md),
   [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md).
 - **Code anchors.** `web/src/core/morph-config.ts → MORPH_DESCRIPTORS`;

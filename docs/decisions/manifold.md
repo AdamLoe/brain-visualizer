@@ -93,28 +93,33 @@
   contract — gated by `cargo test` through `segment_layout_is_48_bytes` — so the
   tree ships inside it without new fields.
 
-## Branch smoothness uses bounded straight subdivision, not curved shader geometry
+## Branch smoothness uses host path sampling plus shader-bowed tubes
 
-- **Decision.** Branch and long-range path smoothness is controlled by bounded
-  subdivision knobs that change how many straight `MorphSegment` subsegments are
-  emitted per generated hop. The shader still draws straight tapered tubes; no
-  curved geometry segment type exists.
-- **Why.** More polyline samples make turns progress gradually while preserving
-  the existing 48 B `MorphSegment` layout and render shader contract, gated by
-  `cargo test` through `segment_layout_is_48_bytes`.
+- **Decision.** Branch and long-range path smoothness is split between bounded
+  host-side path sampling and render-side curved tube tessellation. The generator
+  still emits the existing 48 B `MorphSegment` samples; the shader expands each
+  segment into a short multi-ring tube whose centerline bow is derived
+  deterministically from existing segment fields.
+- **Why.** Host sampling keeps real path ownership, `path_len`, and waypoint
+  routing explicit for activity packets, while shader-bowed tubes remove the
+  close-up "straight cylinder between samples" look without widening the
+  Rust/WGSL storage contract. The segment layout stays gated by `cargo test`
+  through `segment_layout_is_48_bytes`.
 - **Applies to.** [`../architecture/manifold.md`](../architecture/manifold.md),
   [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md)
 - **Code anchors.** `crates/brain-visualizer/src/sim/morphology.rs →
-  adaptive_subsegments, GeneratorConfig::apply_to`; `web/src/core/morph-config.ts
-  → MORPH_DESCRIPTORS`.
+  adaptive_subsegments, GeneratorConfig::apply_to`;
+  `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl →
+  tube_curve_bend / vs_main`; `web/src/core/morph-config.ts →
+  MORPH_DESCRIPTORS`.
 
 ## Long-range waypoint routes stay inside the generated brain bounds
 
 - **Decision.** Long-range axon leaf routes clamp generated waypoints, route
   endpoints, and route control points to a generation-time inner brain bounds
-  helper before emitting straight subsegments.
+  helper before emitting path samples.
 - **Why.** Long projections should travel through the brain volume instead of
-  escaping the silhouette. Clamping generated geometry is the durable fix;
+  escaping the silhouette. Clamping generated path samples is the durable fix;
   shrinking rendered tube radius would only hide the escape.
 - **Applies to.** [`../architecture/manifold.md`](../architecture/manifold.md)
 - **Code anchors.** `crates/brain-visualizer/src/sim/morphology.rs →
