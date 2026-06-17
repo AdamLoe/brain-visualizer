@@ -98,14 +98,21 @@ sub-progress + `MorphologyTimings` to the boot overlay — see
 [`web-frontend.md`](web-frontend.md) for the per-phase ms and the
 `window.__bvBootTimings` / stall-watchdog observability.
 
-The compaction predicate mirrors the shader's traveling-packet activity. In the
-default active/recent mode, it keeps only segments whose packet band is about to
-light, lit, or recently lit. In visible-until-arrival mode, every segment owned
-by a recent spike stays selected until the packet front has passed that segment
-endpoint; non-packet fragments render as subdued resting structure rather than
-lit signal. Both modes write chunk-local `DrawIndirectArgs`, and both additive
-and active tube passes use the same indirect args, so per-frame selected counts
-stay GPU-side. `GpuBackend::read_active_segment_count` is diagnostics-only.
+The compaction predicate mirrors the shader's traveling-packet activity. Tube
+impulse age comes from the morphology-only `visual_spike` buffer, not directly
+from the physics `last_spike` buffer. `integrate.wgsl` updates `last_spike` on
+every real firing for simulation/metrics, but only starts a new `visual_spike`
+packet when the previous visual packet has had enough ticks to traverse the
+generated axon fanout. This prevents high-frequency source neurons from
+constantly resetting the visible packet near the soma before it reaches all K
+outgoing leaves. In the default active/recent mode, compaction keeps only
+segments whose packet band is about to light, lit, or recently lit. In
+visible-until-arrival mode, every segment owned by a recent visual spike stays
+selected until the packet front has passed that segment endpoint; non-packet
+fragments render as subdued resting structure rather than lit signal. Both modes
+write chunk-local `DrawIndirectArgs`, and both additive and active tube passes
+use the same indirect args, so per-frame selected counts stay GPU-side.
+`GpuBackend::read_active_segment_count` is diagnostics-only.
 
 The layout contracts are the corruption-sensitive part:
 
@@ -120,6 +127,9 @@ The layout contracts are the corruption-sensitive part:
 - `crates/brain-visualizer/src/sim/gpu/resources.rs → MorphUniforms` ↔
   `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl →
   MorphUniforms` is 192 B, gated by `cargo test` through `morph_layouts_locked`.
+- Morphology tube timing binds both `last_spike` (type/color metadata) and
+  `visual_spike` (packet age). `compact_morph_segments.wgsl` and
+  `render_morphology.wgsl` must use the same visual clock for `activity_id`.
 
 Tessellation is controlled by WGSL override constants (`TUBE_SIDES`,
 `SPHERE_SLICES`, `SPHERE_STACKS`) supplied from `RenderQualityConfig` in

@@ -47,6 +47,11 @@ One thread per neuron, every tick (`integrate.wgsl → integrate`):
    its absolute refractory window. On fire: append id to the spike list via an
    atomic counter (this count drives the indirect scatter — see
    [`gpu-backend.md`](gpu-backend.md)), reset `v`, and repack `last_spike`.
+   A separate `visual_spike` word is also maintained for morphology rendering
+   only: it keeps the first unresolved spike tick until the visual packet has
+   enough time to traverse the axon fanout, so repeated firing does not reset
+   the visible packet before it reaches the leaves. `visual_spike` is not read by
+   scatter, metrics, or refractory logic.
 3. **Scatter** (separate pass) reads the spike list and accumulates weighted
    current into targets — see [`connectivity.md`](connectivity.md).
 

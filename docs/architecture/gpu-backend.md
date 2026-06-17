@@ -68,7 +68,9 @@ submits it once. Per tick, in fixed order (`crates/brain-visualizer/src/sim/gpu/
 2. **uniforms** — the integrate uniform is rewritten each tick (cheap; carries the
    tick counter and live knobs); `spike_count` is zeroed via `write_buffer`.
 3. **integrate** — `integrate.wgsl → integrate`, `dispatch_workgroups(ceil(n/256))`.
-   Threshold-crossers append themselves to `spike_list` via `atomicAdd(spike_count)`.
+   Threshold-crossers append themselves to `spike_list` via `atomicAdd(spike_count)`,
+   repack physics `last_spike`, and update morphology-only `visual_spike` only
+   when the previous visual packet has had enough ticks to finish its fanout.
 4. **write_scatter_dispatch** — `write_scatter_dispatch.wgsl → main`, 1 workgroup.
    Reads `spike_count` *on the GPU*, computes `ceil(spike_count·K / 64)` into
    `dispatch_args`. This is the count→scan→scatter seam.
@@ -143,7 +145,8 @@ All large buffers are **persistent across frames**. Allocation happens only on a
   `compact_uniform`, plus profiler `active_selected` / `selected_staging`), and
   allocates the flat soma sphere instance buffer (`sphere_instances` via
   `crates/brain-visualizer/src/sim/morphology.rs → emit_soma_spheres`). The tube
-  and compaction bind groups are one pair per segment chunk; the sphere bind
+  and compaction bind groups are one pair per segment chunk and bind both
+  `last_spike` and the visual-only `visual_spike` clock; the sphere bind
   group stays flat and shares the 192 B `MorphUniforms` buffer
   (`crates/brain-visualizer/src/sim/gpu/resources.rs → MorphBuffers / MorphUniforms`).
 - **render-target resize** — `resize_render_targets`, guarded: it recreates the

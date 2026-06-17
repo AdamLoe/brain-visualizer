@@ -24,6 +24,10 @@ pub struct NeuronBuffers {
     pub i_current_next: ChunkedBuffer,
     /// Packed valid/type/tick (BV21).
     pub last_spike: ChunkedBuffer,
+    /// Packed valid/type/tick for morphology impulse rendering. Unlike
+    /// `last_spike`, this does not reset while a prior visual packet is still
+    /// traversing the axon tree.
+    pub visual_spike: ChunkedBuffer,
 }
 
 impl NeuronBuffers {
@@ -37,6 +41,7 @@ impl NeuronBuffers {
             i_current: ChunkedBuffer::new(n, 4),
             i_current_next: ChunkedBuffer::new(n, 4),
             last_spike: ChunkedBuffer::new(n, 4),
+            visual_spike: ChunkedBuffer::new(n, 4),
         }
     }
 }
@@ -420,7 +425,7 @@ impl GpuLayouts {
             count: None,
         };
 
-        // integrate group 0: v, last_spike, I, spike_list, spike_count (all rw).
+        // integrate group 0: v, last_spike, I, spike_list, spike_count, visual_spike.
         let integrate_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("integrate-bgl"),
             entries: &[
@@ -429,6 +434,7 @@ impl GpuLayouts {
                 storage(2, false),
                 storage(3, false),
                 storage(4, false),
+                storage(5, false),
             ],
         });
         let integrate_uniform_bgl =
@@ -582,8 +588,8 @@ impl GpuLayouts {
             });
 
         // ─── Morphology: render layout ────────────────────────────────────────
-        // group 0: one segment chunk (read storage, VS) + last_spike (read
-        // storage, VS) + morph uniform (VS).
+        // group 0: one segment chunk (read storage, VS) + last_spike for type
+        // metadata + morph uniform + visual_spike for impulse timing.
         let render_morphology_bgl =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("render-morphology-bgl"),
@@ -592,6 +598,7 @@ impl GpuLayouts {
                     render_vs_storage(1), // last_spike
                     render_vs_uniform(2), // MorphUniforms
                     render_vs_storage(6), // active_segment_indices (compacted instance map)
+                    render_vs_storage(7), // visual_spike
                 ],
             });
         // Active/recent compaction compute layout (binding slots match
@@ -606,6 +613,7 @@ impl GpuLayouts {
                 storage(4, false), // active_segment_count (atomic rw)
                 storage(5, false), // active_draw_args (rw)
                 storage(6, false), // selected_count (atomic rw, profiler)
+                storage(7, true),  // visual_spike (read)
             ],
         });
         // Soma sphere render layout (Wave 2). Uses binding slots 3/4/5 to avoid
@@ -836,6 +844,13 @@ impl GpuResources {
             bytemuck::cast_slice(&last_spike),
             st_init,
             "last_spike",
+        );
+        alloc_field(
+            device,
+            &mut nb.visual_spike,
+            bytemuck::cast_slice(&last_spike),
+            st_init,
+            "visual_spike",
         );
         self.neuron_buffers = Some(nb);
 
@@ -1386,6 +1401,7 @@ impl GpuResources {
         // multi-chunk path compiles via ChunkedBuffer but is not exercised here.
         let v = chunk0(&nb.v);
         let last_spike = chunk0(&nb.last_spike);
+        let visual_spike = chunk0(&nb.visual_spike);
         let i_front = chunk0(&nb.i_current);
         let i_back = chunk0(&nb.i_current_next);
 
@@ -1400,6 +1416,7 @@ impl GpuResources {
                     entry(2, i_buf),
                     entry(3, &sim.spike_list),
                     entry(4, &sim.spike_count),
+                    entry(5, visual_spike),
                 ],
             })
         };
@@ -1527,6 +1544,7 @@ impl GpuResources {
                             entry(1, last_spike),
                             entry(2, &mb.morph_uniform),
                             entry(6, &chunk.active_segment_indices),
+                            entry(7, visual_spike),
                         ],
                     });
                     let compact_morph = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1540,6 +1558,7 @@ impl GpuResources {
                             entry(4, &chunk.active_segment_count),
                             entry(5, &chunk.active_draw_args),
                             entry(6, &chunk.active_selected),
+                            entry(7, visual_spike),
                         ],
                     });
                     MorphSegmentBindGroups {
@@ -1821,5 +1840,4 @@ mod tests {
             assert!(layout.chunk_bytes(chunk) <= adapter_limit);
         }
     }
-
 }

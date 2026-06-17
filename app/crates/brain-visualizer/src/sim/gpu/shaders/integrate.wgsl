@@ -19,6 +19,7 @@
 @group(0) @binding(2) var<storage, read_write> I: array<i32>;
 @group(0) @binding(3) var<storage, read_write> spike_list: array<u32>;
 @group(0) @binding(4) var<storage, read_write> spike_count: atomic<u32>;
+@group(0) @binding(5) var<storage, read_write> visual_spike: array<u32>;
 
 struct Uniforms {
     tick: u32,
@@ -72,6 +73,10 @@ fn hspread(id: u32, salt: u32) -> f32 {
 const HAS_SPIKED_MASK: u32 = 0x80000000u;
 const TYPE_MASK: u32 = 0x7F000000u;
 const TICK_MASK: u32 = 0x00FFFFFFu;
+// Visual-only packet hold. Long-range morphology packets travel at 0.045
+// path-units/tick with a wide tail; 64 ticks covers the generated axon tree and
+// prevents frequent refiring from restarting the visible fanout near the soma.
+const VISUAL_PACKET_HOLD_TICKS: u32 = 64u;
 
 fn neuron_type(packed: u32) -> u32 {
     return (packed & TYPE_MASK) >> 24u;
@@ -159,5 +164,10 @@ fn integrate(@builtin(global_invocation_id) gid: vec3<u32>) {
         spike_list[idx] = i;
         v[i] = u.reset_potential;
         last_spike[i] = HAS_SPIKED_MASK | (ntype << 24u) | (u.tick & TICK_MASK);
+        let visual_packed = visual_spike[i];
+        let visual_age = tick_diff(u.tick, visual_packed & TICK_MASK);
+        if !has_spiked(visual_packed) || visual_age >= VISUAL_PACKET_HOLD_TICKS {
+            visual_spike[i] = HAS_SPIKED_MASK | (ntype << 24u) | (u.tick & TICK_MASK);
+        }
     }
 }

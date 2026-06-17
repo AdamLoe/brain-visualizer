@@ -97,13 +97,18 @@
   `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl →
   vs_sphere / fs_sphere` derive a slower `glow` envelope plus a faster `flash`
   and brief white-core lift from the existing packed `last_spike` word and
-  `tick`. `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl →
-  vs_main / fs_main` derives a traveling packet from that same source `last_spike` plus
+  `tick`. Morphology tubes use a separate `visual_spike` clock for packet age:
+  `integrate.wgsl` keeps the first unresolved visual tick until the previous
+  packet has had time to reach the generated axon leaves, while physics,
+  metrics, refractory checks, and scatter continue to use the latest
+  `last_spike`. `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl →
+  vs_main / fs_main` derives a traveling packet from `visual_spike` plus
   `MorphSegment.path_len + t * length(b-a)`; axons carry the full outward
   packet, dendrites carry only a weak near-soma echo. This keeps
   `MorphSegment`, `MorphUniforms`, `RenderUniforms`, and the
   `VisualSettings` Float32Array unchanged; pulse defaults live in shader
-  constants and existing `glow_tau` / `resting_brightness` / `active_boost`.
+  constants, the visual packet hold, and existing `glow_tau` /
+  `resting_brightness` / `active_boost`.
   `light_past` stays tombstoned in the settings surface.
 - **Decision.** Axon packets are attenuated by branch flow using the baked
   morphology radius as the source. The generator already derives internal axon
@@ -113,18 +118,22 @@
   branches get smaller through their existing tube radius and dimmer through the
   flow multiplier.
 - **Why.** The whole-arbor instant glow made firing read as a state change
-  rather than a causal event. Driving the pulse from `last_spike` keeps the
-  effect fully GPU-side and simulation-honest, while using `path_len` restores
-  branch-local motion without forcing a layout migration. Keeping dendrites to a
-  local echo avoids implying false outgoing signaling on source-owned dendrite
-  geometry. Using baked radii makes split intensity track real downstream
-  synaptic weight without new bind groups; live `i_current` / `I_next` is target
+  rather than a causal event, but using only latest `last_spike` made frequently
+  firing neurons restart their packet near the soma before the signal reached
+  most outgoing leaves. The visual clock keeps the effect fully GPU-side and
+  simulation-honest without changing synaptic timing: it only changes what the
+  morphology renderer remembers. Using `path_len` restores branch-local motion
+  without forcing a segment layout migration. Keeping dendrites to a local echo
+  avoids implying false outgoing signaling on source-owned dendrite geometry.
+  Using baked radii makes split intensity track real downstream synaptic weight
+  without new per-edge flow buffers; live `i_current` / `I_next` is target
   accumulation, not per-edge flow. Upstream lighting remains deferred because
   shared arbors are still source-owned structure.
 - **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md), [`../architecture/manifold.md`](../architecture/manifold.md), [`../architecture/data-model.md`](../architecture/data-model.md)
 - **Code anchors.** `crates/brain-visualizer/src/sim/gpu/shaders/render_far.wgsl`;
   `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl`;
-  `crates/brain-visualizer/src/sim/gpu/resources.rs → MorphUniforms`.
+  `crates/brain-visualizer/src/sim/gpu/resources.rs → MorphUniforms,
+  NeuronBuffers::visual_spike`.
 
 ## Morphology material stays procedural, deterministic, and asset-free
 

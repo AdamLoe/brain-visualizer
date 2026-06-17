@@ -100,6 +100,10 @@ struct MorphUniforms {
 // (not 3/4/5) so it does not collide with the soma pass bindings in this shared
 // module.
 @group(0) @binding(6) var<storage, read> active_segment_indices: array<u32>;
+// Visual-only spike clock for morphology tube impulses. `last_spike` above stays
+// the physics/type source; this buffer avoids restarting a packet near the soma
+// while an older impulse is still traversing the generated fanout.
+@group(0) @binding(7) var<storage, read> visual_spike: array<u32>;
 
 // ── Soma sphere pass bindings (group 0, bindings 3/4/5) ──────────────────────
 // The sphere pipeline uses its OWN bind group layout (render_soma_spheres_bgl)
@@ -591,7 +595,7 @@ fn vs_main(
     let owner_packed = last_spike[seg.neuron_id];
     let presynaptic_dendrite = seg.kind == 0u && seg.target_id != seg.neuron_id;
     let activity_id = select(seg.neuron_id, seg.target_id, presynaptic_dendrite);
-    let activity_packed = last_spike[activity_id];
+    let activity_packed = visual_spike[activity_id];
     let ty = neuron_type(owner_packed);
     let ei = ty & 1u;
     let region = (ty >> 2u) & 0x3u;

@@ -134,6 +134,26 @@
   (lighting.restingBrightness);
   `crates/brain-visualizer/src/sim/gpu/mod.rs → VisualSettings::default`.
 
+## Morphology visual packet memory is not synaptic memory
+
+- **Decision.** `integrate.wgsl` maintains a morphology-only `visual_spike`
+  clock in addition to physics `last_spike`. `last_spike` still updates on every
+  real firing and remains the source for refractory checks, scatter, metrics, and
+  soma glow. `visual_spike` only prevents the tube renderer from restarting a
+  packet near the soma while the previous packet is still traversing the axon
+  fanout.
+- **Why.** At the product default, some neurons can refire before a visible
+  packet reaches all K outgoing leaves. If the renderer keys packet age directly
+  to latest `last_spike`, the signal appears to branch once or twice and reset,
+  under-reading real fanout. Keeping a separate visual clock fixes the read
+  without changing LIF dynamics or synaptic delivery.
+- **Applies to.** [`../architecture/simulation.md`](../architecture/simulation.md),
+  [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md).
+- **Code anchors.** `crates/brain-visualizer/src/sim/gpu/shaders/integrate.wgsl`;
+  `crates/brain-visualizer/src/sim/gpu/shaders/compact_morph_segments.wgsl`;
+  `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl`;
+  `crates/brain-visualizer/src/sim/gpu/resources.rs → NeuronBuffers::visual_spike`.
+
 ## Heavy-tailed synapse reach on by default
 
 - **Decision.** The product defaults enable heavy-tailed long-range connectivity:

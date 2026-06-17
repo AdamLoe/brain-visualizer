@@ -224,7 +224,6 @@ impl GpuPipelines {
                 cache: None,
             }),
         );
-
     }
 
     /// Build the Phase 3 render + stimulate pipelines.
@@ -665,9 +664,10 @@ impl GpuPipelines {
 
         // ── Active/recent compaction compute pipelines ──────────────────────────
         // One module, three entry points (reset → compact → write_args). Reads
-        // segments + last_spike; writes active_segment_indices + draw args. Built
-        // here so the set_morphology_config render-quality rebuild keeps them in
-        // sync (they carry no override constants, so rebuild is harmless).
+        // segments + the visual-only spike clock; writes active_segment_indices +
+        // draw args. Built here so the set_morphology_config render-quality
+        // rebuild keeps them in sync (they carry no override constants, so
+        // rebuild is harmless).
         let compact_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("compact_morph_segments.wgsl"),
             source: wgpu::ShaderSource::Wgsl(COMPACT_MORPH_WGSL.into()),
@@ -833,7 +833,6 @@ impl GpuPipelines {
     pub fn is_render_built(&self) -> bool {
         self.render_far.is_some() && self.render_manifold.is_some() && self.stimulate.is_some()
     }
-
 }
 
 #[cfg(test)]
@@ -898,8 +897,10 @@ mod tests {
         assert!(COMPACT_MORPH_WGSL.contains("fn write_args"));
         assert!(COMPACT_MORPH_WGSL.contains("presynaptic_dendrite"));
         assert!(COMPACT_MORPH_WGSL.contains("AXON_IMPULSE_SPEED"));
+        assert!(COMPACT_MORPH_WGSL.contains("visual_spike[activity_id]"));
         // render_morphology.wgsl — compacted instance remap present.
         assert!(RENDER_MORPHOLOGY_WGSL.contains("active_segment_indices"));
+        assert!(RENDER_MORPHOLOGY_WGSL.contains("visual_spike[activity_id]"));
         assert!(RENDER_MORPHOLOGY_WGSL.contains("const TUBE_RINGS: u32 = 4u"));
         assert!(RENDER_MORPHOLOGY_WGSL.contains("tube_curve_bend"));
     }

@@ -51,6 +51,7 @@ struct CompactUniforms {
 @group(0) @binding(5) var<storage, read_write> draw_args: array<u32>;
 // Profiler: last selected count (mirror of active_count after the dispatch).
 @group(0) @binding(6) var<storage, read_write> selected_count: atomic<u32>;
+@group(0) @binding(7) var<storage, read> visual_spike: array<u32>;
 
 // ── Mirror of render_morphology.wgsl decode constants ────────────────────────
 // These MUST stay byte-for-byte in lockstep with render_morphology.wgsl: speed,
@@ -115,7 +116,7 @@ fn compact(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    let packed = last_spike[activity_id];
+    let packed = visual_spike[activity_id];
     if !has_spiked(packed) {
         return;
     }
