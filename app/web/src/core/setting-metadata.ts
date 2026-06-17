@@ -57,6 +57,8 @@ export const SETTING_IMPACT: Record<keyof VisualizerSettings, SettingImpact> = {
   // ── Heavy-tailed reach — brain-reset: changes target ids + generated geometry ──
   longRangeReachFrac:       "brain-reset",
   maxReachCells:            "brain-reset",
+  // ── Until-arrival visibility — live compaction/render timing ──────────────
+  arrivalHoldTicks:         "live",
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

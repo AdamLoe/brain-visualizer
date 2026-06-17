@@ -7,7 +7,7 @@
 // last_spike[owner], and — mirroring the shader's impulse decode — appends
 // the chunk-local segment index to `active_segment_indices` ONLY when the segment is
 // currently lit, recently lit, ABOUT to be lit, or (mode 2) still waiting for
-// its packet to reach the segment endpoint. A second
+// its packet to reach the aggregate arrival window plus hold time. A second
 // single-thread entry point copies the atomic counter into a DrawIndirectArgs
 // buffer so the tube passes draw exactly the selected instances.
 //
@@ -39,7 +39,7 @@ struct CompactUniforms {
     light_next: u32,
     light_past: u32,
     tube_verts: u32, // vertex_count written into the indirect draw args
-    _pad: u32,
+    arrival_hold_ticks: f32,
 }
 
 @group(0) @binding(0) var<storage, read> segments: array<MorphSegment>;
@@ -83,6 +83,11 @@ const LONG_RANGE_PATH: f32 = 0.18;
 const PACKET_REACH_MUL: f32 = 3.0;
 const TAIL_REACH_MUL: f32 = 2.6 * 4.0;
 const HEAD_HEADROOM_MUL: f32 = 4.0;
+// Mode 2 intentionally keeps every selected branch for one aggregate travel
+// window, because MorphSegment has no per-tree max endpoint field. The value
+// covers the current generated local and waypoint-routed fanouts under the
+// mirrored packet speeds, then the live setting extends the post-arrival hold.
+const ARRIVAL_MODE_MAX_TRAVEL_TICKS: f32 = 28.0;
 
 fn has_spiked(packed: u32) -> bool {
     return (packed & HAS_SPIKED_MASK) != 0u;
@@ -152,7 +157,8 @@ fn compact(@builtin(global_invocation_id) gid: vec3<u32>) {
     let seg_start = seg.path_len;
     let seg_end = seg.path_len + length(seg.b - seg.a);
     if u.connection_layer >= 2u {
-        if travel <= seg_end + tail_reach {
+        let lifetime = ARRIVAL_MODE_MAX_TRAVEL_TICKS + max(u.arrival_hold_ticks, 0.0);
+        if age <= lifetime {
             let slot = atomicAdd(&active_count, 1u);
             active_indices[slot] = idx;
         }

@@ -10,7 +10,7 @@
 // Never persist runtime counters (there are none in this struct).
 
 // ─── canonical flat-array length ─────────────────────────────────────────────
-export const SETTINGS_LENGTH = 26;
+export const SETTINGS_LENGTH = 27;
 
 // ─── VisualizerSettings (runtime flat type) ───────────────────────────────────
 // One field per contract index. Mode fields are carried as numbers because the
@@ -48,6 +48,8 @@ export interface VisualizerSettings {
   // ── index 24–25: heavy-tailed synapse reach ──
   longRangeReachFrac:       number;   // 24 fraction of synapses routed long-range (0..1; 0 = local only)
   maxReachCells:            number;   // 25 long-range max-reach radius in cells (integer)
+  // ── index 26: until-arrival visibility ──
+  arrivalHoldTicks:          number;   // 26 extra ticks that until-arrival visibility remains after aggregate arrival
 }
 
 // ─── DEFAULT_SETTINGS ─────────────────────────────────────────────────────────
@@ -79,6 +81,7 @@ export const DEFAULT_SETTINGS: VisualizerSettings = {
   adaptiveScalerEnabled:    0,  // RESERVED/INERT — auto-scaling removed in 0.1.1; index 23 kept for the contract
   longRangeReachFrac:       0.14, // heavy-tailed reach: 14% long-range synapses
   maxReachCells:            14,   // long-range max-reach radius in cells
+  arrivalHoldTicks:         30.0, // until-arrival mode: hold subdued full-branch visibility after aggregate arrival
 };
 
 // ─── SavedVisualizerSettings — persisted schema ───────────────────────────────
@@ -110,6 +113,7 @@ interface SavedDev {
   inputMode:                number;
   longRangeReachFrac:       number;
   maxReachCells:            number;
+  arrivalHoldTicks:         number;
 }
 
 /** Versioned localStorage schema.  version !== 5 → ignored (no migration). */
@@ -150,6 +154,7 @@ function settingsToSaved(s: VisualizerSettings): SavedVisualizerSettings {
       inputMode:                s.inputMode,
       longRangeReachFrac:       s.longRangeReachFrac,
       maxReachCells:            s.maxReachCells,
+      arrivalHoldTicks:         s.arrivalHoldTicks,
     },
   };
 }
@@ -182,6 +187,7 @@ function mergeOver(base: VisualizerSettings, saved: SavedVisualizerSettings): Vi
     inputMode:                d.inputMode                ?? base.inputMode,
     longRangeReachFrac:       d.longRangeReachFrac       ?? base.longRangeReachFrac,
     maxReachCells:            d.maxReachCells            ?? base.maxReachCells,
+    arrivalHoldTicks:         d.arrivalHoldTicks         ?? base.arrivalHoldTicks,
   };
 }
 
@@ -296,6 +302,7 @@ export function toFloat32Array(s: VisualizerSettings): Float32Array {
   a[23] = 0; // index 23: reserved_zero (adaptiveScalerEnabled removed)
   a[24] = s.longRangeReachFrac;   // heavy-tailed reach: long-range fraction (0..1)
   a[25] = s.maxReachCells;        // heavy-tailed reach: max-reach radius (cells)
+  a[26] = s.arrivalHoldTicks;     // until-arrival mode: post-arrival full-branch hold (ticks)
   return a;
 }
 

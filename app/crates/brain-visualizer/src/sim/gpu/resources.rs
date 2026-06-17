@@ -156,7 +156,7 @@ pub struct CompactUniforms {
     pub light_next: u32,
     pub light_past: u32,
     pub tube_verts: u32,
-    pub _pad: u32,
+    pub arrival_hold_ticks: f32,
 }
 
 /// Derive the per-binding segment layout for morphology chunks.

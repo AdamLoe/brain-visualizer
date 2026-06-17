@@ -50,8 +50,10 @@ owned by `web/src/core/settings.ts → VisualizerSettings, toFloat32Array`.
 
 `connectionLayer` is surfaced as the "Connections" dropdown in the "Morphology
 Visibility" section. It offers off, active/recent, and until-arrival visibility;
-the until-arrival mode keeps subdued connections visible until each spike packet
-reaches its endpoint. Its current values and normalization live in
+the until-arrival mode keeps subdued connections visible for the aggregate
+packet-arrival window plus the live "Arrival hold" setting, because individual
+morphology segments do not carry a per-tree final endpoint. Its current values
+and normalization live in
 `web/src/core/settings.ts → normalizeConnectionLayer` and
 `crates/brain-visualizer/src/sim/gpu/mod.rs → normalize_connection_layer`. The
 resting-debug mode is not exposed and is not a runtime mode.

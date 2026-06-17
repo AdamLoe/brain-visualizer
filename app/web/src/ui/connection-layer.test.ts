@@ -47,9 +47,9 @@ describe("connectionLayer index contract", () => {
     }
   });
 
-  test("Float32Array length remains 26 after connectionLayer change", () => {
+  test("Float32Array length remains 27 after connectionLayer change", () => {
     const arr = toFloat32Array({ ...DEFAULT_SETTINGS, connectionLayer: 2 });
-    expect(arr.length).toBe(26);
+    expect(arr.length).toBe(27);
   });
 });
 
@@ -90,6 +90,10 @@ describe("connectionLayer mode enum bounds", () => {
 describe("connectionLayer setting impact", () => {
   test("connectionLayer impact is 'live' (no network rebuild needed)", () => {
     expect(SETTING_IMPACT.connectionLayer).toBe("live");
+  });
+
+  test("arrivalHoldTicks impact is 'live' (compaction timing only)", () => {
+    expect(SETTING_IMPACT.arrivalHoldTicks).toBe("live");
   });
 });
 
@@ -147,8 +151,15 @@ describe("connectionLayer mode semantics", () => {
         inputMode: DEFAULT_SETTINGS.inputMode,
         longRangeReachFrac: DEFAULT_SETTINGS.longRangeReachFrac,
         maxReachCells: DEFAULT_SETTINGS.maxReachCells,
+        arrivalHoldTicks: DEFAULT_SETTINGS.arrivalHoldTicks,
       },
     }));
     expect(loadSettings().connectionLayer).toBe(2);
+  });
+
+  test("arrivalHoldTicks serialises after existing VisualSettings slots", () => {
+    const arr = toFloat32Array({ ...DEFAULT_SETTINGS, arrivalHoldTicks: 42 });
+    expect(arr[26]).toBe(42);
+    expect(DEFAULT_SETTINGS.arrivalHoldTicks).toBe(30);
   });
 });

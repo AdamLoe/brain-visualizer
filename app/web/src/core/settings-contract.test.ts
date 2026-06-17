@@ -20,8 +20,8 @@ function expectFloatArrayClose(actual: Float32Array, expected: readonly number[]
 }
 
 describe("VisualSettings Float32Array contract", () => {
-  test("default settings serialize to the locked 26-slot layout", () => {
-    expect(SETTINGS_LENGTH).toBe(26);
+  test("default settings serialize to the locked 27-slot layout", () => {
+    expect(SETTINGS_LENGTH).toBe(27);
     expectFloatArrayClose(toFloat32Array(DEFAULT_SETTINGS), [
       10.0,
       0.004,
@@ -49,6 +49,7 @@ describe("VisualSettings Float32Array contract", () => {
       0.0,
       0.14,
       14.0,
+      30.0,
     ]);
   });
 

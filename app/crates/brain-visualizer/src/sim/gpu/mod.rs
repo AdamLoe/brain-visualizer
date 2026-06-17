@@ -546,7 +546,7 @@ enum MetricsReadState {
 }
 
 // Canonical flat-array contract (shared with TypeScript via Float32Array).
-// Indices 0..=25 match web/settings.ts `toFloat32Array` output exactly.
+// Indices 0..=26 match web/settings.ts `toFloat32Array` output exactly.
 // Length-tolerant parsing: new indices added later won't break old callers.
 //
 // Field naming: f32 for continuous knobs, u32 for mode enums.
@@ -620,6 +620,9 @@ pub struct VisualSettings {
     /// index 25 — heavy-tailed reach: max-reach cell radius (integer carried as
     /// f32 like the other mode fields; default 6.0, clamped >= 1 at the boundary).
     pub max_reach_cells: f32,
+    /// index 26 — Until-arrival visibility hold in simulation ticks after the
+    /// aggregate packet arrival point.
+    pub arrival_hold_ticks: f32,
 }
 
 impl Default for VisualSettings {
@@ -657,6 +660,7 @@ impl Default for VisualSettings {
             // Heavy-tailed reach: 14% long-range synapses by default.
             long_range_reach_frac: 0.14,
             max_reach_cells: 14.0,
+            arrival_hold_ticks: 30.0,
         }
     }
 }
@@ -697,13 +701,14 @@ impl VisualSettings {
             adaptive_scaler_enabled: 0, // index 23: reserved_zero (adaptiveScalerEnabled removed)
             long_range_reach_frac: f(24, d.long_range_reach_frac),
             max_reach_cells: f(25, d.max_reach_cells),
+            arrival_hold_ticks: f(26, d.arrival_hold_ticks).clamp(0.0, 300.0),
         }
     }
 
     /// Compact JSON snapshot for review artifacts.
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"glow_tau\":{:.6},\"point_radius\":{:.6},\"neuron_visual_radius\":{:.6},\"active_neuron_radius_boost\":{:.6},\"inactive_neuron_opacity\":{:.6},\"voltage_glow_strength\":{:.6},\"connection_visual_width\":{:.6},\"connection_curve_lift\":{:.6},\"connection_light_next\":{},\"bloom_strength\":{:.6},\"surface_opacity\":{:.6},\"i_ext\":{:.6},\"synaptic_scale\":{:.6},\"heterogeneity\":{:.6},\"morph_resting_opacity\":{:.6},\"signal_source\":{},\"connection_layer\":{},\"color_by\":{},\"neuron_visibility\":{},\"surface\":{},\"weight_normalization\":{},\"input_mode\":{},\"adaptive_scaler_enabled\":{},\"long_range_reach_frac\":{:.6},\"max_reach_cells\":{:.6}}}",
+            "{{\"glow_tau\":{:.6},\"point_radius\":{:.6},\"neuron_visual_radius\":{:.6},\"active_neuron_radius_boost\":{:.6},\"inactive_neuron_opacity\":{:.6},\"voltage_glow_strength\":{:.6},\"connection_visual_width\":{:.6},\"connection_curve_lift\":{:.6},\"connection_light_next\":{},\"bloom_strength\":{:.6},\"surface_opacity\":{:.6},\"i_ext\":{:.6},\"synaptic_scale\":{:.6},\"heterogeneity\":{:.6},\"morph_resting_opacity\":{:.6},\"signal_source\":{},\"connection_layer\":{},\"color_by\":{},\"neuron_visibility\":{},\"surface\":{},\"weight_normalization\":{},\"input_mode\":{},\"adaptive_scaler_enabled\":{},\"long_range_reach_frac\":{:.6},\"max_reach_cells\":{:.6},\"arrival_hold_ticks\":{:.6}}}",
             self.glow_tau,
             self.point_radius,
             self.neuron_visual_radius,
@@ -729,6 +734,7 @@ impl VisualSettings {
             self.adaptive_scaler_enabled,
             self.long_range_reach_frac,
             self.max_reach_cells,
+            self.arrival_hold_ticks,
         )
     }
 }
@@ -1898,7 +1904,7 @@ impl GpuBackend {
                         light_next: self.visual.connection_light_next,
                         light_past: 0, // upstream lighting removed (mirrors tube uniform)
                         tube_verts: self.morph_tube_verts,
-                        _pad: 0,
+                        arrival_hold_ticks: self.visual.arrival_hold_ticks.clamp(0.0, 300.0),
                     };
                     self.ctx
                         .queue
@@ -2939,6 +2945,7 @@ mod tests {
         assert_eq!(settings.glow_tau, 10.0);
         assert_eq!(settings.bloom_strength, 0.0);
         assert_eq!(settings.heterogeneity, 0.50);
+        assert_eq!(settings.arrival_hold_ticks, 30.0);
     }
 
     #[test]
@@ -2947,6 +2954,7 @@ mod tests {
         assert_eq!(settings.glow_tau, 10.0);
         assert_eq!(settings.bloom_strength, 0.0);
         assert_eq!(settings.heterogeneity, 0.50);
+        assert_eq!(settings.arrival_hold_ticks, 30.0);
     }
 
     #[test]
@@ -2959,7 +2967,7 @@ mod tests {
 
     #[test]
     fn visual_settings_from_slice_maps_locked_indices() {
-        let data: Vec<f32> = (1..=26).map(|v| v as f32).collect();
+        let data: Vec<f32> = (1..=27).map(|v| v as f32).collect();
         let settings = VisualSettings::from_slice(&data);
 
         assert_eq!(settings.glow_tau, 1.0);
@@ -2988,6 +2996,7 @@ mod tests {
         assert_eq!(settings.adaptive_scaler_enabled, 0);
         assert_eq!(settings.long_range_reach_frac, 25.0);
         assert_eq!(settings.max_reach_cells, 26.0);
+        assert_eq!(settings.arrival_hold_ticks, 27.0);
     }
 
     #[test]

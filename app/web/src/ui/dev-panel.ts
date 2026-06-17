@@ -1503,6 +1503,14 @@ export class DevPanel {
       ],
     }, s.connectionLayer, "live");
 
+    this._sliderRow(root, {
+      key: "arrivalHoldTicks",
+      label: "Arrival hold",
+      tooltip: "Extra ticks that Until arrival keeps the subdued full branch visible after the aggregate packet arrival point.",
+      min: 0, max: 180, step: 1,
+      decimals: 0,
+    }, s.arrivalHoldTicks, "live");
+
     // v0.1.2: whole-connection spike lighting toggles (replace the retired
     // traveling-pulse "Signal speed" / "Recent trail" sliders).
     this._selectRow(root, {

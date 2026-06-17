@@ -277,7 +277,7 @@ describe("settings descriptors", () => {
     };
     const values = toFloat32Array(settings);
 
-    expect(values.length).toBe(26);
+    expect(values.length).toBe(27);
     expect(values[1]).toBeCloseTo(DEFAULT_SETTINGS.pointRadius);
     expect(values[10]).toBe(0);
     expect(values[11]).toBe(DEFAULT_SETTINGS.surfaceOpacity);

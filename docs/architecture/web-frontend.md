@@ -154,6 +154,9 @@ doc owns the *bridge mechanics* (call ordering, pending-flag discipline,
 reentrancy rules). The data-layout contracts for `VisualSettings` and
 `SimConfig`/`TickStats` are owned by [`dev-panel.md`](dev-panel.md) and
 [`simulation.md`](simulation.md) respectively.
+`VisualSettings` changes remain latest-wins, and render-only knobs such as
+until-arrival hold should flow through that packed settings call rather than a
+structural rebuild path.
 
 The morphology config travels a **separate** channel from the Float32Array:
 `crates/brain-visualizer/src/lib.rs → WasmGpuBackend::set_morphology_config` takes
