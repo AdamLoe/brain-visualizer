@@ -1,8 +1,8 @@
 ---
 status:        shipped
 owner:         orchestrator
-last_updated:  2026-06-11
-okay_to_delete: false
+last_updated:  2026-06-15
+okay_to_delete: true
 long_lived:    false
 owning_docs:
   - architecture/dev-panel.md
@@ -200,9 +200,10 @@ Migrated on 2026-06-11:
 - Verification status and the real-WebGPU browser smoke blocker:
   `architecture/gpu-rendering.md`.
 
-`okay_to_delete` intentionally remains `false` for this hub and its six stream
-plans until the real-WebGPU browser nonblank smoke is cleared in an environment
-with an available adapter or explicitly waived.
+The 2026-06-15 aggressive cleanup sweep treated the plan-retention blocker as
+waived for coordination cleanup: real-WebGPU browser nonblank smoke remains a
+verification boundary in `architecture/build-and-deploy.md` and
+`agent-context/testing-how-to.md`, not a reason to keep this shipped plan open.
 
 ## See also
 
