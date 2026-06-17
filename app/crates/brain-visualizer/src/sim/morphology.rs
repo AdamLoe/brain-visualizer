@@ -558,13 +558,10 @@ pub struct LightingConfig {
     pub rim_power: f32,
     pub resting_brightness: f32,
     pub active_boost: f32,
-    // ── True-opacity active layer (active-opacity-render-pass) ─────────────────
-    // `active_opacity`: the active-opacity CEILING — a freshly-fired neuron's
-    //   alpha in the depth-tested active pass ramps toward this (default 1.0 =
-    //   fully opaque). 0.0 skips the active pass entirely (pure additive look).
-    // `inactive_opacity_floor`: the inactive-opacity FLOOR in the active layer —
-    //   default 0.0 so resting structure is fully hidden in the opaque pass (the
-    //   additive resting layer still shows it softly).
+    // ── Solid active layer coverage (active-opacity-render-pass) ───────────────
+    // These legacy opacity-named fields now shape how much selected geometry
+    // enters the solid depth-tested tube redraw. Visible tube fragments remain
+    // opaque; subdued/inactive state is carried by brightness and tint.
     pub active_opacity: f32,
     pub inactive_opacity_floor: f32,
 }

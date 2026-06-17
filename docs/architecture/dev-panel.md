@@ -49,7 +49,9 @@ _buildAppearanceTab`; index assignment, tombstones, and default-written slots ar
 owned by `web/src/core/settings.ts → VisualizerSettings, toFloat32Array`.
 
 `connectionLayer` is surfaced as the "Connections" dropdown in the "Morphology
-Visibility" section. Its current values and normalization live in
+Visibility" section. It offers off, active/recent, and until-arrival visibility;
+the until-arrival mode keeps subdued connections visible until each spike packet
+reaches its endpoint. Its current values and normalization live in
 `web/src/core/settings.ts → normalizeConnectionLayer` and
 `crates/brain-visualizer/src/sim/gpu/mod.rs → normalize_connection_layer`. The
 resting-debug mode is not exposed and is not a runtime mode.

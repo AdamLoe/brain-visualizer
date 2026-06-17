@@ -6,8 +6,8 @@
 // using the EXACT SAME rule as render_morphology.wgsl::vs_main, reads
 // last_spike[owner], and — mirroring the shader's impulse decode — appends
 // the chunk-local segment index to `active_segment_indices` ONLY when the segment is
-// currently lit, recently lit, or ABOUT to be lit (a headroom window so a
-// long-range packet is submitted slightly before it arrives). A second
+// currently lit, recently lit, ABOUT to be lit, or (mode 2) still waiting for
+// its packet to reach the segment endpoint. A second
 // single-thread entry point copies the atomic counter into a DrawIndirectArgs
 // buffer so the tube passes draw exactly the selected instances.
 //
@@ -150,6 +150,13 @@ fn compact(@builtin(global_invocation_id) gid: vec3<u32>) {
     let travel = age * speed;
     let seg_start = seg.path_len;
     let seg_end = seg.path_len + length(seg.b - seg.a);
+    if u.connection_layer >= 2u {
+        if travel <= seg_end + tail_reach {
+            let slot = atomicAdd(&active_count, 1u);
+            active_indices[slot] = idx;
+        }
+        return;
+    }
     if travel < seg_start - head_headroom {
         return; // front has not yet reached this segment (beyond headroom lead)
     }

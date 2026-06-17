@@ -598,7 +598,8 @@ pub struct VisualSettings {
     // ── mode enums (stored as integer cast to f32) ─────────────────────────
     /// index 16 — reserved_zero (signalSource removed)
     pub signal_source: u32,
-    /// index 17 — connection_layer mode: 0=Off, 1=Active/recent only (default)
+    /// index 17 — connection_layer mode: 0=Off, 1=Active/recent only (default),
+    /// 2=Visible until impulse arrival
     pub connection_layer: u32,
     /// index 18 — color_by mode (default 6 = Brain)
     pub color_by: u32,
@@ -644,8 +645,8 @@ impl Default for VisualSettings {
             // Morphology controls: resting opacity of non-active structure.
             morph_resting_opacity: 0.0,
             signal_source: 0,
-            // Morphology controls: 0=Off (skip all morphology work), 1=Active/recent only
-            // (default — compacted GPU draw of recently-lit segments + somas).
+            // Morphology controls: 0=Off, 1=Active/recent only, 2=Visible until
+            // impulse arrival.
             connection_layer: 1,
             color_by: 6,
             neuron_visibility: 0,
@@ -733,7 +734,11 @@ impl VisualSettings {
 }
 
 fn normalize_connection_layer(mode: u32) -> u32 {
-    if mode == 0 { 0 } else { 1 }
+    match mode {
+        0 => 0,
+        2 => 2,
+        _ => 1,
+    }
 }
 
 pub fn reach_from_visual_settings(visual: &VisualSettings) -> crate::connectivity::ReachParams {

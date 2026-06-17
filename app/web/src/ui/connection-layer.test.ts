@@ -79,9 +79,9 @@ describe("connectionLayer mode enum bounds", () => {
     expect(arr[17]).toBe(1);
   });
 
-  test("mode 2 normalizes to active/recent at index 17", () => {
+  test("mode 2 (Until arrival) serialises to 2 at index 17", () => {
     const arr = toFloat32Array({ ...DEFAULT_SETTINGS, connectionLayer: 2 });
-    expect(arr[17]).toBe(1);
+    expect(arr[17]).toBe(2);
   });
 });
 
@@ -105,12 +105,12 @@ describe("connectionLayer mode semantics", () => {
     expect(off[17]).not.toBe(on[17]);
   });
 
-  test("mode 2 is a compatibility alias for mode 1", () => {
+  test("mode 2 is distinct from off and active/recent", () => {
     const off   = toFloat32Array({ ...DEFAULT_SETTINGS, connectionLayer: 0 });
     const active = toFloat32Array({ ...DEFAULT_SETTINGS, connectionLayer: 1 });
-    const oldSaved  = toFloat32Array({ ...DEFAULT_SETTINGS, connectionLayer: 2 });
-    expect(oldSaved[17]).not.toBe(off[17]);
-    expect(oldSaved[17]).toBe(active[17]);
+    const untilArrival  = toFloat32Array({ ...DEFAULT_SETTINGS, connectionLayer: 2 });
+    expect(untilArrival[17]).not.toBe(off[17]);
+    expect(untilArrival[17]).not.toBe(active[17]);
   });
 
   test("resting connections are hidden by default (morphRestingOpacity=0 + mode 1)", () => {
@@ -121,7 +121,7 @@ describe("connectionLayer mode semantics", () => {
     expect(DEFAULT_SETTINGS.connectionLayer).toBe(1);
   });
 
-  test("persisted mode 2 loads as active/recent", () => {
+  test("persisted mode 2 loads as until-arrival mode", () => {
     installMemoryLocalStorage();
     localStorage.setItem(SETTINGS_LS_KEY, JSON.stringify({
       version: 5,
@@ -149,6 +149,6 @@ describe("connectionLayer mode semantics", () => {
         maxReachCells: DEFAULT_SETTINGS.maxReachCells,
       },
     }));
-    expect(loadSettings().connectionLayer).toBe(1);
+    expect(loadSettings().connectionLayer).toBe(2);
   });
 });

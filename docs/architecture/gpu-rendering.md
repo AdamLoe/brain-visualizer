@@ -55,7 +55,8 @@ draw. The shipped tube path is the compacted active/recent path only.
 
 ## Modes And Settings
 
-`connection_layer` has two active meanings: off, or active/recent morphology.
+`connection_layer` has three meanings: off, active/recent morphology, or
+visible-until-arrival morphology.
 Persisted and direct values normalize at both boundaries through
 `web/src/core/settings.ts → normalizeConnectionLayer, toFloat32Array` and
 `crates/brain-visualizer/src/sim/gpu/mod.rs → normalize_connection_layer,
@@ -81,6 +82,15 @@ curved multi-ring tube. The ring-count bend is derived deterministically from
 existing segment fields, so it changes only the render primitive and draw vertex
 count, not the Rust/WGSL storage layout or compaction predicate.
 
+Axon impulse emphasis is weighted by the same downstream synaptic-flow signal
+that shapes the baked axon tree: generator radii encode subtree synaptic weight
+(`sqrt(subtree_weight / total_weight)` for internal branches, terminal twig
+floor for leaves), and the shader derives `flow_strength` from the interpolated
+unscaled radius. As an impulse splits, child branches are already physically
+smaller and their packet brightness/tint/active opacity fade with the carried
+flow. The renderer does not bind `i_current` / `I_next` for this because those
+buffers are target-neuron accumulated current, not per-branch flow.
+
 The CPU generation of this geometry (`morphology::generate_with_progress`) is the
 heavy "Prepare network payload" boot phase and now reports continuous
 sub-progress + `MorphologyTimings` to the boot overlay — see
@@ -88,11 +98,14 @@ sub-progress + `MorphologyTimings` to the boot overlay — see
 [`web-frontend.md`](web-frontend.md) for the per-phase ms and the
 `window.__bvBootTimings` / stall-watchdog observability.
 
-The compaction predicate mirrors the shader's traveling-packet activity. It
-keeps only segments whose packet band is about to light, lit, or recently lit,
-then writes a chunk-local `DrawIndirectArgs`. Both additive and active tube
-passes use the same indirect args, so per-frame selected counts stay GPU-side.
-`GpuBackend::read_active_segment_count` is diagnostics-only.
+The compaction predicate mirrors the shader's traveling-packet activity. In the
+default active/recent mode, it keeps only segments whose packet band is about to
+light, lit, or recently lit. In visible-until-arrival mode, every segment owned
+by a recent spike stays selected until the packet front has passed that segment
+endpoint; non-packet fragments render as subdued resting structure rather than
+lit signal. Both modes write chunk-local `DrawIndirectArgs`, and both additive
+and active tube passes use the same indirect args, so per-frame selected counts
+stay GPU-side. `GpuBackend::read_active_segment_count` is diagnostics-only.
 
 The layout contracts are the corruption-sensitive part:
 
@@ -120,12 +133,15 @@ then written into the compaction draw args.
 Active tubes and somas redraw the same geometry with alpha blending and depth
 testing. "Active" means spike-keyed firing, not click selection. The active
 tube pass clears depth; the active soma pass loads that depth so active tubes
-and somas mutually occlude. The additive resting layer remains additive/no-depth.
+and somas mutually occlude. Selected tube fragments write full alpha in the
+active pass, so visible connections are not see-through; the subdued/inactive
+look is carried by brightness and tint, not translucency. The additive resting
+layer remains additive/no-depth behind that solid redraw.
 
-`active_opacity` and `inactive_opacity_floor` live in
+The legacy `active_opacity` and `inactive_opacity_floor` field names live in
 `crates/brain-visualizer/src/sim/morphology.rs → LightingConfig` and ride the
-existing 192 B `MorphUniforms` layout. `active_opacity = 0` still encodes a
-soft low-emphasis active layer; it does not skip the active redraw.
+existing 192 B `MorphUniforms` layout. They now act as coverage/emphasis inputs
+for the solid redraw rather than allowing see-through tube fragments.
 
 ## Bloom
 

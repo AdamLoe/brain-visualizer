@@ -105,13 +105,22 @@
   `VisualSettings` Float32Array unchanged; pulse defaults live in shader
   constants and existing `glow_tau` / `resting_brightness` / `active_boost`.
   `light_past` stays tombstoned in the settings surface.
+- **Decision.** Axon packets are attenuated by branch flow using the baked
+  morphology radius as the source. The generator already derives internal axon
+  radii from downstream subtree synaptic weight, so `render_morphology.wgsl`
+  maps interpolated unscaled radius to `flow_strength` and applies it to packet
+  brightness, active tint, and active-pass opacity. Trunks stay bright; split
+  branches get smaller through their existing tube radius and dimmer through the
+  flow multiplier.
 - **Why.** The whole-arbor instant glow made firing read as a state change
   rather than a causal event. Driving the pulse from `last_spike` keeps the
   effect fully GPU-side and simulation-honest, while using `path_len` restores
   branch-local motion without forcing a layout migration. Keeping dendrites to a
   local echo avoids implying false outgoing signaling on source-owned dendrite
-  geometry. Upstream lighting remains deferred because shared arbors are still
-  source-owned structure.
+  geometry. Using baked radii makes split intensity track real downstream
+  synaptic weight without new bind groups; live `i_current` / `I_next` is target
+  accumulation, not per-edge flow. Upstream lighting remains deferred because
+  shared arbors are still source-owned structure.
 - **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md), [`../architecture/manifold.md`](../architecture/manifold.md), [`../architecture/data-model.md`](../architecture/data-model.md)
 - **Code anchors.** `crates/brain-visualizer/src/sim/gpu/shaders/render_far.wgsl`;
   `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl`;
@@ -202,13 +211,13 @@
   readability, or branch junctions need explicit caps/fillets rather than
   shader-built tube continuity.
 
-## True opacity for active geometry, layered over the additive resting passes
+## True opacity for selected connection geometry, layered over the additive resting passes
 
-- **Decision.** Firing geometry gets a genuine depth-tested, alpha-blended redraw (active tube + active soma passes) on top of the unchanged additive resting passes, so it occludes. Tube opacity is keyed off continuous segment packet proximity from `inactive_opacity_floor` to an active ceiling, while brightness remains fragment-local so the impulse still travels. Soma opacity uses the same floor/ceiling model from soma activity. `active_opacity = 0` is a soft low-emphasis ceiling, not a disabled active layer.
+- **Decision.** Selected connection geometry gets a genuine depth-tested redraw on top of the unchanged additive resting passes, so visible tubes occlude instead of reading as see-through. Tube selection still comes from the spike packet compaction path, but selected tube fragments return full alpha; subdued/inactive connection state is expressed through dark resting brightness/tint, while lit packet brightness remains fragment-local so the impulse still travels. Soma opacity uses the same floor/ceiling model from soma activity.
 - **Why.** Additive blending physically cannot occlude — it can only make things brighter, so everything read as uniformly muddy translucency. A real depth + alpha path lets active neurons read as solid and inactive structure drop to near-invisible. Keeping the active redraw encoded at the low end avoids the additive blowout caused by removing the only depth-tested morphology layer, while the soft ceiling preserves the expected "least emphasis" slider meaning. Layering the active redraw over the additive passes (rather than converting them) avoids reworking the whole bloom/HDR compositing pipeline: the active passes write the same HDR `scene_view` color, so bloom composes over them with zero bloom-path edits.
 - **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md)
 - **Alternatives considered.** Fake opacity by making active geometry brighter-additive — rejected because additive cannot occlude, which was the actual defect. Convert the resting passes to depth-tested too — rejected: needs pass sorting and breaks the bloom-friendly additive resting glow; resting self-occlusion stays deferred.
-- **Tradeoffs.** The active passes redraw the same tube/soma geometry and the active layer owns its own depth clear. The opacity knobs ride repurposed `MorphUniforms` pads, so the 192 B layout is unchanged; that size is gated by `cargo test` through `morph_layouts_locked`.
+- **Tradeoffs.** The active passes redraw the same tube/soma geometry and the active layer owns its own depth clear. The legacy opacity-named knobs ride repurposed `MorphUniforms` pads as coverage/emphasis inputs, so the 192 B layout is unchanged; that size is gated by `cargo test` through `morph_layouts_locked`.
 - **Code anchors.** `crates/brain-visualizer/src/sim/gpu/mod.rs → GpuBackend::render_full`; `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl → fs_main_active / fs_sphere_active`; `crates/brain-visualizer/src/sim/gpu/pipelines.rs → build_morph_pipelines, build_morph_active_pipelines`.
 
 ## "Active" = firing, not click-selection (no picking)
@@ -219,22 +228,24 @@
 - **Code anchors.** `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl → fs_main_active / fs_sphere_active` (alpha from the spike-driven `activity`).
 - **Revisit when.** Click-to-inspect / picking is built — the active layer's alpha source can then accept a selected-set input.
 
-## Active-layer opacity knobs live in LightingConfig, not the VisualSettings Float32Array
+## Active-layer coverage knobs live in LightingConfig, not the VisualSettings Float32Array
 
-- **Decision.** `active_opacity` and `inactive_opacity_floor` live in the morph-config-owned `LightingConfig` and ride two repurposed trailing `MorphUniforms` pad slots — the locked `VisualSettings` Float32Array index contract is untouched.
+- **Decision.** The legacy `active_opacity` and `inactive_opacity_floor` fields live in the morph-config-owned `LightingConfig` and ride two repurposed trailing `MorphUniforms` pad slots — the locked `VisualSettings` Float32Array index contract is untouched. Their UI labels describe active/inactive coverage because visible tube fragments are rendered solid.
 - **Why.** `LightingConfig` is the established, contract-light path for morphology beauty knobs (it already carries `resting_brightness` / `active_boost` through `MorphUniforms`). Growing the Float32Array would touch the locked Rust↔TS index contract and the persistence schema for no benefit; repurposing reserved `MorphUniforms` pads keeps the 192 B layout assert green under `cargo test`.
 - **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md)
 - **Code anchors.** `crates/brain-visualizer/src/sim/morphology.rs → LightingConfig` (`active_opacity`, `inactive_opacity_floor`); `crates/brain-visualizer/src/sim/gpu/resources.rs → MorphUniforms`.
 
-## Draw only active/recent morphology segments, not all of them
+## Connection visibility modes reuse GPU-indirect segment selection
 
 - **Decision.** A GPU compute pass (`compact_morph_segments.wgsl`) selects each
-  frame the segments that are about-to-be-lit / lit / recently-lit. Selection
+  frame the segments for the current connection visibility mode. Active/recent
+  mode selects the about-to-be-lit / lit / recently-lit packet band.
+  Until-arrival mode selects every segment owned by a recent spike until the
+  packet front has passed that segment endpoint, then lets it drop. Selection
   runs per segment chunk, and both morphology tube passes draw each chunk's
   compacted subset via `draw_indirect`. There is no whole-geometry debug draw
   path. Soma sphere passes are per-neuron and unaffected.
-- **Why.** Frame cost must scale with *visible activity*, not with total generated segment count, so N / K / branch detail can
-  grow without the tube passes becoming the bottleneck.
+- **Why.** Frame cost must scale with visible spike activity rather than total generated segment count, while the review mode needs a readable whole-connection context during packet travel. Reusing compaction and indirect args keeps both behaviors on the existing GPU-side selection path.
 - **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md), [`../architecture/gpu-backend.md`](../architecture/gpu-backend.md), [`../architecture/scaling.md`](../architecture/scaling.md)
 - **Code anchors.** `crates/brain-visualizer/src/sim/gpu/shaders/compact_morph_segments.wgsl → reset / compact / write_args`; `crates/brain-visualizer/src/sim/gpu/mod.rs → render_full`; `crates/brain-visualizer/src/sim/gpu/pipelines.rs → build_morph_pipelines`; `crates/brain-visualizer/src/sim/gpu/resources.rs → MorphSegmentChunk / MorphBuffers`.
 
@@ -251,20 +262,20 @@
 - **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md), [`../architecture/gpu-backend.md`](../architecture/gpu-backend.md)
 - **Code anchors.** `crates/brain-visualizer/src/sim/gpu/mod.rs → GpuBackend::render_full, GpuBackend::read_active_segment_count`.
 
-## Select the packet band, not the whole fired arbor
+## Default connection visibility selects the packet band, not the whole fired arbor
 
 - **Decision.** The compaction predicate selects only the segments under the
   traveling impulse **packet band** (a `HEAD_HEADROOM` lead plus a `TAIL_REACH`
-  tail around `front = age * speed` along `path_len`), mirroring the render
-  shader's per-segment activity exactly. `glow_tau` is not a packet lifetime or
-  culling input; it controls soma/legacy afterglow only.
+  tail around `front = age * speed` along `path_len`) in the default
+  active/recent mode, mirroring the render shader's per-segment activity exactly.
+  `glow_tau` is not a packet lifetime or culling input; it controls soma/legacy
+  afterglow only.
 - **Why.** Selecting the whole arbor for the full glow lifetime would keep
   nearly all segments and defeat the scaling goal, while tying packet survival
   to `glow_tau` would make low afterglow settings truncate long-range packets
   before they reach their leaves.
-- **Tradeoffs.** A deliberate visual trade-off: there is no bounded whole-arbor
-  afterglow today. Adding one (a capped afterglow window) is a possible future
-  addition, not a bug.
+- **Tradeoffs.** Users who need whole-connection context can opt into
+  until-arrival mode; the default remains packet-local for readability and cost.
 - **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md)
 - **Code anchors.** `crates/brain-visualizer/src/sim/gpu/shaders/compact_morph_segments.wgsl → compact` (`HEAD_HEADROOM_MUL` / `TAIL_REACH_MUL`); `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl → fs_main`.
 

@@ -1491,15 +1491,15 @@ export class DevPanel {
     // ── Morphology visibility (procedural neuron connectivity) ──────────────
     root.appendChild(this._sep("Morphology Visibility"));
 
-    // connectionLayer: 0=Off (skips all morphology work including compute+tubes+somas),
-    // 1=Active/recent only (default: compacted GPU draw of recently-lit tubes + somas).
+    // connectionLayer: 0=Off, 1=Active/recent, 2=Visible until impulse arrival.
     this._selectRow(root, {
       key: "connectionLayer",
       label: "Connections",
-      tooltip: "Morphology rendering mode. Off: no morphology work. Active/recent: draw only segments near a spike.",
+      tooltip: "Morphology rendering mode. Off: no morphology work. Active/recent: draw only segments near a spike. Until arrival: keep a subdued connection visible until its impulse reaches the endpoint.",
       options: [
         { value: 0, label: "Off" },
         { value: 1, label: "Active/recent" },
+        { value: 2, label: "Until arrival" },
       ],
     }, s.connectionLayer, "live");
 
@@ -1682,11 +1682,11 @@ export class DevPanel {
     const d = this.debugViewFields;
 
     const NEURON_VIS_LABELS = ["All", "Active emphasis", "Active only"];
-    const CONN_LAYER_LABELS = ["Off", "Active/recent"];
+    const CONN_LAYER_LABELS = ["Off", "Active/recent", "Until arrival"];
 
     d.colorBy.textContent          = COLOR_BY_LABELS[s.colorBy]          ?? String(s.colorBy);
     d.neuronVisibility.textContent = NEURON_VIS_LABELS[s.neuronVisibility] ?? String(s.neuronVisibility);
-    d.connectionLayer.textContent  = CONN_LAYER_LABELS[s.connectionLayer === 0 ? 0 : 1];
+    d.connectionLayer.textContent  = CONN_LAYER_LABELS[s.connectionLayer] ?? String(s.connectionLayer);
   }
 
   private _loadAcceptedDefaultBase(): void {

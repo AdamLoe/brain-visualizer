@@ -165,6 +165,15 @@ const IMPULSE_TAIL_STRENGTH: f32 = 0.28;
 const DENDRITE_ECHO_STRENGTH: f32 = 0.28;
 const DENDRITE_ECHO_RANGE: f32 = 0.075;
 const ACTIVE_OPACITY_SOFT_MIN: f32 = 0.10;
+const ARRIVAL_MODE_REST_BRIGHTNESS: f32 = 0.11;
+// Axon branch radii are generated from downstream subtree synaptic weight:
+// internal radius = root_radius * sqrt(subtree_weight / total_weight), with
+// terminal leaves at the configured twig floor. The renderer uses that baked
+// radius as a layout-free impulse-flow signal so split branches carry smaller,
+// dimmer packets without binding live per-neuron current buffers.
+const AXON_FLOW_ROOT_RADIUS: f32 = 0.0054;
+const AXON_FLOW_MIN: f32 = 0.22;
+const AXON_FLOW_POWER: f32 = 1.35;
 const BRAIN_REST_PINK: vec3<f32> = vec3<f32>(1.0, 0.18, 0.54);
 const BRAIN_ACTIVE_BLUE: vec3<f32> = vec3<f32>(0.08, 0.56, 1.0);
 const BRAIN_SOFT_BLUE: vec3<f32> = vec3<f32>(0.30, 0.68, 1.0);
@@ -409,10 +418,22 @@ fn impulse_segment_activity(seg_start: f32, seg_end: f32, age: f32, packet_gate:
     return clamp(proximity * packet_gate, 0.0, 1.0);
 }
 
+fn impulse_flow_strength(radius: f32, kind: u32) -> f32 {
+    if kind != 1u {
+        return 1.0;
+    }
+    let radius_ratio = clamp(radius / AXON_FLOW_ROOT_RADIUS, 0.0, 1.0);
+    return mix(AXON_FLOW_MIN, 1.0, pow(radius_ratio, AXON_FLOW_POWER));
+}
+
 fn active_opacity_ceiling(active_opacity: f32, inactive_floor: f32) -> f32 {
     let floor = clamp(inactive_floor, 0.0, 1.0);
     let requested = clamp(active_opacity, 0.0, 1.0);
     return max(floor, mix(ACTIVE_OPACITY_SOFT_MIN, 1.0, requested));
+}
+
+fn tube_resting_brightness(connection_layer: u32, configured: f32) -> f32 {
+    return select(configured, max(configured, ARRIVAL_MODE_REST_BRIGHTNESS), connection_layer >= 2u);
 }
 
 struct TubeVertOut {
@@ -430,6 +451,7 @@ struct TubeVertOut {
     @location(10) @interpolate(flat) segment_end: f32,
     @location(11) @interpolate(flat) long_range: u32,
     @location(12) packet_gate: f32,
+    @location(13) flow_strength: f32,
 }
 
 struct SphereVertOut {
@@ -555,7 +577,8 @@ fn vs_main(
     let ring_basis = tube_ring_basis(tangent, fallback);
     let radial = cos_t * ring_basis[0] + sin_t * ring_basis[1];
 
-    let radius = mix(seg.radius_a, seg.radius_b, t) * u.width_scale;
+    let unscaled_radius = mix(seg.radius_a, seg.radius_b, t);
+    let radius = unscaled_radius * u.width_scale;
     let world = center + radial * radius;
     let path_pos = seg.path_len + seg_len * t;
 
@@ -598,6 +621,7 @@ fn vs_main(
     // axon-only gate lives in impulse_speed/impulse_width.
     out.long_range = select(0u, 1u, seg.path_len >= LONG_RANGE_PATH);
     out.packet_gate = select(0.0, 1.0, spike_enabled);
+    out.flow_strength = impulse_flow_strength(unscaled_radius, seg.kind);
     return out;
 }
 
@@ -612,15 +636,17 @@ fn fs_main(in: TubeVertOut) -> @location(0) vec4<f32> {
 
     let long_range = in.long_range == 1u;
     let packet = impulse_packet(in.path_pos, in.spike_age, in.packet_gate, in.kind, long_range);
-    let legacy = in.glow * select(0.04, LEGACY_WHOLE_GLOW, in.kind == 1u);
-    let activity = legacy + packet;
+    let packet_flow = packet * in.flow_strength;
+    let legacy = in.glow * select(0.04, LEGACY_WHOLE_GLOW, in.kind == 1u) * in.flow_strength;
+    let activity = legacy + packet_flow;
     let material = tube_material(in.base_color, N, in.world_pos, in.path_pos, in.neuron_id, in.kind);
     let tint = select(
-        mix(material, vec3<f32>(1.0), clamp(packet * 0.18, 0.0, 0.18)),
-        brain_tube_tint(material, legacy, packet),
+        mix(material, vec3<f32>(1.0), clamp(packet_flow * 0.18, 0.0, 0.18)),
+        brain_tube_tint(material, legacy, packet_flow),
         u.color_by == 6u,
     );
-    let brightness = u.resting_brightness + activity * u.active_boost;
+    let resting_brightness = tube_resting_brightness(u.connection_layer, u.resting_brightness);
+    let brightness = resting_brightness + activity * u.active_boost;
 
     let lambert = max(dot(N, L), 0.0);
     let nv = max(dot(N, V), 0.0);
@@ -646,15 +672,17 @@ fn fs_main_active(in: TubeVertOut) -> @location(0) vec4<f32> {
 
     let long_range = in.long_range == 1u;
     let packet = impulse_packet(in.path_pos, in.spike_age, in.packet_gate, in.kind, long_range);
-    let legacy = in.glow * select(0.04, LEGACY_WHOLE_GLOW, in.kind == 1u);
-    let activity = legacy + packet;
+    let packet_flow = packet * in.flow_strength;
+    let legacy = in.glow * select(0.04, LEGACY_WHOLE_GLOW, in.kind == 1u) * in.flow_strength;
+    let activity = legacy + packet_flow;
     let material = tube_material(in.base_color, N, in.world_pos, in.path_pos, in.neuron_id, in.kind);
     let tint = select(
-        mix(material, vec3<f32>(1.0), clamp(packet * 0.18, 0.0, 0.18)),
-        brain_tube_tint(material, legacy, packet),
+        mix(material, vec3<f32>(1.0), clamp(packet_flow * 0.18, 0.0, 0.18)),
+        brain_tube_tint(material, legacy, packet_flow),
         u.color_by == 6u,
     );
-    let brightness = u.resting_brightness + activity * u.active_boost;
+    let resting_brightness = tube_resting_brightness(u.connection_layer, u.resting_brightness);
+    let brightness = resting_brightness + activity * u.active_boost;
 
     let lambert = max(dot(N, L), 0.0);
     let nv = max(dot(N, V), 0.0);
@@ -669,16 +697,17 @@ fn fs_main_active(in: TubeVertOut) -> @location(0) vec4<f32> {
         in.packet_gate,
         in.kind,
         long_range,
-    );
+    ) * in.flow_strength;
     let inactive_floor = clamp(u.inactive_opacity_floor, 0.0, 1.0);
     let active_ceiling = active_opacity_ceiling(u.active_opacity, inactive_floor);
     // Packet proximity drives opacity continuously from the inactive floor to
     // the active ceiling. active_opacity=0 maps to a soft low-end ceiling so the
     // active pass still damps additive blowout instead of disappearing.
-    let active_alpha = mix(inactive_floor, active_ceiling, segment_activity);
+    let visible_selected = select(0.0, 1.0, u.connection_layer >= 2u);
+    let active_alpha = max(mix(inactive_floor, active_ceiling, segment_activity), visible_selected);
     // Below epsilon, write neither color nor depth (in-shader inactive skip).
     if active_alpha < 0.004 { discard; }
-    return vec4<f32>(c, active_alpha);
+    return vec4<f32>(c, 1.0);
 }
 
 // ════════════════════════════════════════════════════════════════════════════

@@ -135,8 +135,8 @@ pub struct MorphUniforms {
     // only by the NEW depth-tested fs_main_active / fs_sphere_active entry points;
     // the additive resting passes share this buffer and ignore them. Size is
     // unchanged (two u32→f32 in place), so the 192 B asserts stay green.
-    pub active_opacity: f32,         // active-opacity ceiling (was _pad4)
-    pub inactive_opacity_floor: f32, // inactive-opacity floor (was _pad5; pads to 192 B)
+    pub active_opacity: f32,         // active coverage/emphasis (was _pad4)
+    pub inactive_opacity_floor: f32, // inactive coverage floor (was _pad5; pads to 192 B)
 }
 
 /// Morphology: active/recent compaction uniform — layout MUST match

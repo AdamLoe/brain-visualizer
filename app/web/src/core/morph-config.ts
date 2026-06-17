@@ -221,8 +221,8 @@ export const MORPH_DESCRIPTORS: readonly MorphDescriptor[] = [
   { jsonPath: "lighting.rimPower",          group: "lighting", label: "Rim power",          type: "number", min:  1.0,  max: 6.0,  step: 0.1,  default: 2.0,  impact: "live", applyKind: "uniform", tooltip: "Rim highlight falloff exponent." },
   { jsonPath: "lighting.restingBrightness", group: "lighting", label: "Resting brightness", type: "number", min:  0.0,  max: 1.0,  step: 0.01, default: 0.0,  impact: "live", applyKind: "uniform", tooltip: "Brightness of resting (non-active) structure." },
   { jsonPath: "lighting.activeBoost",       group: "lighting", label: "Active boost",       type: "number", min:  0.0,  max: 4.0,  step: 0.05, default: 1.8,  impact: "live", applyKind: "uniform", tooltip: "Brightness multiplier on active structure." },
-  { jsonPath: "lighting.activeOpacity",     group: "lighting", label: "Active opacity",     type: "number", min:  0.0,  max: 1.0,  step: 0.01, default: 1.0,  impact: "live", applyKind: "uniform", tooltip: "Opacity ceiling for firing geometry in the depth-tested active layer." },
-  { jsonPath: "lighting.inactiveOpacityFloor", group: "lighting", label: "Inactive opacity floor", type: "number", min: 0.0, max: 1.0, step: 0.01, default: 0.0, impact: "live", applyKind: "uniform", tooltip: "Opacity floor for non-overlapped geometry in the active layer." },
+  { jsonPath: "lighting.activeOpacity",     group: "lighting", label: "Active coverage",     type: "number", min:  0.0,  max: 1.0,  step: 0.01, default: 1.0,  impact: "live", applyKind: "uniform", tooltip: "How much of the firing packet qualifies for the solid depth-tested connection layer." },
+  { jsonPath: "lighting.inactiveOpacityFloor", group: "lighting", label: "Inactive coverage floor", type: "number", min: 0.0, max: 1.0, step: 0.01, default: 0.0, impact: "live", applyKind: "uniform", tooltip: "Baseline coverage for subdued selected connection geometry; visible tube fragments remain solid." },
 ] as const;
 
 // ─── Nested path get/set helpers ──────────────────────────────────────────────

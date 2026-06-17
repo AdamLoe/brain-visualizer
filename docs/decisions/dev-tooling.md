@@ -251,7 +251,8 @@
   boundary between the JS and Rust worlds. Index assignment is the contract;
   both files carry authoritative inline comments and executable contract tests.
   Removed settings reserve their existing indices and are zero/default-written
-  rather than shifting later slots.
+  rather than shifting later slots, while additive enum values such as
+  `connectionLayer = 2` reuse the existing slot.
 - **Why.** WASM passes a raw byte slice — there is no named-field protocol.
   Using a flat array with documented indices is simpler than building a
   serialisation layer, and the `from_slice` implementation is length-tolerant
