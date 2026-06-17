@@ -11,7 +11,7 @@ source lives under `app/`. Doc code anchors are written relative to
 
 ```
 app/                         Workspace root — Cargo.toml here is the workspace manifest.
-  run.sh                     Small repo-local launcher/helper script.
+  local_dev.sh               Small repo-local launcher/helper script.
   crates/brain-visualizer/   The Rust crate (compiles to WASM; pure logic also host-tested).
     Cargo.toml               Crate manifest: [lib] cdylib+rlib.
     src/

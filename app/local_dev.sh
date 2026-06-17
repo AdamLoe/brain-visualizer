@@ -3,8 +3,8 @@
 # Rebuild the wasm crate and serve the visualizer. Runs in the foreground:
 # Ctrl-C to stop, then re-run to rebuild + restart (handy after a plan finishes).
 #
-#   ./run.sh            dev build  (fast, unoptimized wasm)  + vite dev
-#   ./run.sh release    optimized wasm                       + vite dev
+#   ./local_dev.sh            dev build  (fast, unoptimized wasm)  + vite dev
+#   ./local_dev.sh release    optimized wasm                       + vite dev
 #
 set -euo pipefail
 
