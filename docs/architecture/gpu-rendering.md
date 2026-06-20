@@ -34,7 +34,9 @@ current docs must not describe those as dormant runtime surfaces.
 `GpuBackend::render_full` encodes these passes into one command encoder:
 
 1. **Manifold surface** when `surface != 0`; clears color/depth and draws the
-   dim brain shell.
+   dim brain shell. Accepted defaults write `surface = 1`, so the first healthy
+   frame is visibly brain-shaped even before the calm default dynamics produce
+   much spike activity.
 2. **Far billboard glow** for every neuron; additive, no depth, with the
    close-camera radius ramping in `render_far.wgsl`.
 3. **Active/recent compaction** when `connection_layer != 0`; each morphology

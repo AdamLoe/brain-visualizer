@@ -51,9 +51,16 @@ Run `cargo` from `app/` (workspace root) and `npm` from `app/web/`.
   explicit adapter-unavailable blocker when Chromium only exposes
   fallback/non-adapter WebGPU. For the strict UX visual proof, run:
   `BV_WEBGPU_BROWSER_MODE=hardware USE_WEBSERVER=1 npm run test:e2e -- e2e/ux_audit_remediation.spec.ts --grep "real WebGPU boot"`.
+  `hardware` mode launches Chromium with `--enable-unsafe-webgpu`,
+  `--ignore-gpu-blocklist`, and ANGLE Vulkan so local WebGPU adapters are
+  requestable in the Playwright browser.
   Set `BV_REQUIRE_WEBGPU_VISUAL=0` only for local non-strict verification of the
   rest of that spec; that path uses software WebGPU launch flags by default and
   is not accepted screenshot/pixel evidence.
+  On this WSLg Chromium path, `requestAdapter()` succeeds but Playwright
+  screenshots have captured a uniform white or black WebGPU surface; treat that
+  as a screenshot/compositor blocker and cross-check render health with
+  `cargo run -p brain-visualizer --example render_check`.
 - **`npm run test:e2e:smoke`** — focused real-hardware/browser smoke. Writes a
   JSON artifact and screenshot with adapter availability, startup timings,
   nonblank canvas evidence, and frame-health samples; `BV_REQUIRE_WEBGPU=1`

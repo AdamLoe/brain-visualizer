@@ -740,7 +740,7 @@ mod wasm_entry {
                     width: w,
                     height: h,
                     present_mode: wgpu::PresentMode::Fifo,
-                    alpha_mode: wgpu::CompositeAlphaMode::Auto,
+                    alpha_mode: wgpu::CompositeAlphaMode::Opaque,
                     view_formats: vec![],
                     desired_maximum_frame_latency: 2,
                 },

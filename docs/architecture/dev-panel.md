@@ -80,9 +80,10 @@ The tab also contains a "Morphology Lighting" section that renders the
 The `Color by` selector includes Brain mode and reuses the existing `colorBy`
 setting rather than adding a persistence key. Point-radius and surface controls
 are not exposed or persisted; their Float32Array slots remain
-compatibility slots written from defaults. The Rust optional surface path still
-exists, but the current product settings UI keeps surface controls quarantined
-and default-off.
+compatibility slots written from defaults. The Rust surface path is active
+through the default-written `surface = 1` slot so first boot has a dim
+folded-brain shell, while the current product settings UI keeps surface controls
+quarantined.
 
 The settings boundary is guarded by executable contract tests on both sides:
 TypeScript locks `toFloat32Array(DEFAULT_SETTINGS)`, length, and

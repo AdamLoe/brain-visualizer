@@ -23,33 +23,33 @@ describe("VisualSettings Float32Array contract", () => {
   test("default settings serialize to the locked 27-slot layout", () => {
     expect(SETTINGS_LENGTH).toBe(27);
     expectFloatArrayClose(toFloat32Array(DEFAULT_SETTINGS), [
-      10.0,
-      0.004,
-      0.004,
-      2.0,
-      1.0,
-      0.0,
-      0.80,
-      0.15,
-      1.0,
-      0.0,
-      0.0,
-      1.0,
-      0.014,
-      0.03,
-      0.50,
-      0.0,
-      0.0,
-      1.0,
-      6.0,
-      0.0,
-      0.0,
-      1.0,
-      0.0,
-      0.0,
-      0.14,
-      14.0,
-      30.0,
+      10.0,  // 0 glowTau
+      0.004, // 1 pointRadius default-written quarantine slot
+      0.004, // 2 neuronVisualRadius
+      2.0,   // 3 activeNeuronRadiusBoost
+      1.0,   // 4 inactiveNeuronOpacity
+      0.0,   // 5 voltageGlowStrength
+      0.80,  // 6 connectionVisualWidth
+      0.15,  // 7 connectionCurveLift
+      1.0,   // 8 connectionLightNext
+      0.0,   // 9 reserved_zero
+      0.0,   // 10 bloomStrength zero-written quarantine slot
+      1.0,   // 11 surfaceOpacity default-written quarantine slot
+      0.014, // 12 iExt
+      0.03,  // 13 synapticScale
+      0.50,  // 14 heterogeneity
+      0.0,   // 15 morphRestingOpacity
+      0.0,   // 16 signalSource zero-written quarantine slot
+      1.0,   // 17 connectionLayer
+      6.0,   // 18 colorBy
+      0.0,   // 19 neuronVisibility
+      1.0,   // 20 surface default-written quarantine slot
+      1.0,   // 21 weightNormalization
+      0.0,   // 22 inputMode
+      0.0,   // 23 adaptiveScalerEnabled zero-written quarantine slot
+      0.14,  // 24 longRangeReachFrac
+      14.0,  // 25 maxReachCells
+      30.0,  // 26 arrivalHoldTicks
     ]);
   });
 

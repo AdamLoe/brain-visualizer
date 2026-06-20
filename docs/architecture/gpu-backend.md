@@ -108,8 +108,10 @@ upload of per-instance data. Order:
    HDR/blur targets are allocated only on the first bloom-enabled render after
    the bloom pipelines exist; only then does the scene render into the offscreen
    target.
-2. **(optional) manifold surface pass** — gated by `visual.surface != 0`; clears
-   color+depth so later passes load on top.
+2. **manifold surface pass** — gated by `visual.surface != 0`; the accepted
+   default writes `surface = 1` so successful boot has a dim folded-brain shell
+   before spikes or active morphology are visible. The pass clears color+depth so
+   later passes load on top.
 3. **far-LOD glow pass** — clears color (unless the surface pass already did),
    additive, no depth.
 4. **active/recent compaction compute + morphology tube pass** — when `connection_layer != 0`. For each morphology segment chunk, the compaction compute (`compact_morph_segments.wgsl`: `reset` 1wg → `compact` ⌈chunk_segs/64⌉wg → `write_args` 1wg) writes that chunk's `active_draw_args`; the tube pass then binds each chunk and `draw_indirect`s over its compacted active/recent subset (additive, no depth) via `render_morphology.wgsl → vs_main`. Instance counts are GPU-decided per chunk — no CPU readback sizes these draws. See [`gpu-rendering.md`](gpu-rendering.md) for the selection predicate.
@@ -121,6 +123,10 @@ upload of per-instance data. Order:
 Per-frame uniform uploads use `queue.write_buffer` into buffers the bind groups
 already reference, so no bind-group rebuild is needed for a uniform change. See
 [`gpu-rendering.md`](gpu-rendering.md) for each pass's visual semantics.
+
+The browser WebGPU surface is configured with `CompositeAlphaMode::Opaque` on
+initial acquire and resize. Browser-selected alpha modes can make an otherwise
+successful render composite as an empty white page in screenshot/review paths.
 
 ### Retired-pass policy
 

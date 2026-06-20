@@ -239,9 +239,12 @@ Commands:
   settings and rebuild-backed morphology stay out of app-owned localStorage
   until backend apply succeeds; failed preparation/application rolls controls and
   storage back to the last applied state.
-- Remaining verification blocker: this host cannot provide the required real
-  WebGPU browser/adapter proof. The strict e2e gate now fails with an explicit
-  adapter-unavailable blocker instead of passing fallback/non-adapter output.
+- Remaining verification blocker: this host can request a WebGPU adapter in
+  Playwright hardware mode, but the WSLg/Chromium screenshot path captures a
+  uniform white or black WebGPU surface instead of the rendered scene. Native
+  `render_check` proves the GPU render path is drawing; the strict browser
+  screenshot proof remains unshipped until the screenshot/compositor path can
+  capture visible desktop and mobile-ish frames.
 
 ## Implementer brief
 
@@ -291,7 +294,8 @@ than this plan assumes.
 
 Open decisions:
 None for implementation. Remaining work is strict real-WebGPU visual proof on a
-machine/browser where `navigator.gpu.requestAdapter()` returns a real adapter.
+machine/browser where `navigator.gpu.requestAdapter()` returns a real adapter
+and Playwright screenshots capture the WebGPU surface.
 
 ## Migration notes (filled in at ship time)
 
@@ -318,12 +322,20 @@ Migration record:
   behavior into `architecture/web-frontend.md`, `architecture/dev-panel.md`,
   `decisions/dev-tooling.md`, `decisions/interaction.md`, and
   `agent-context/testing-how-to.md`.
+- 2026-06-20: Follow-up commit added Playwright hardware WebGPU launch flags,
+  opaque browser surface configuration, center-canvas screenshot sampling, an
+  inline favicon to remove favicon 404 noise, and a default-written dim
+  manifold surface (`surface = 1`) so the first healthy frame has a stable brain
+  shell. Native `cargo run -p brain-visualizer --example render_check` passed,
+  including the 6k/K16 baseline and active/recent compaction checks.
 - 2026-06-20: Not shipped yet. Strict visual proof remains blocked in this
-  environment: Chromium exposes `navigator.gpu`, but
-  `navigator.gpu.requestAdapter()` returns no adapter. Run
+  environment: Playwright hardware mode can request an adapter, but screenshots
+  capture a uniform WebGPU surface (white without compositor forcing, black with
+  `--disable-gpu-compositing`) rather than the rendered scene. Run
   `BV_WEBGPU_BROWSER_MODE=hardware USE_WEBSERVER=1 npm run test:e2e -- e2e/ux_audit_remediation.spec.ts --grep "real WebGPU boot"`
-  from `app/web/` on a real-WebGPU machine, then fill in desktop/mobile-ish
-  screenshot artifact paths and set `status: shipped` only if that gate passes.
+  from `app/web/` in a browser/compositor path that captures WebGPU output, then
+  fill in desktop/mobile-ish screenshot artifact paths and set `status: shipped`
+  only if that gate passes.
 
 ## See also
 

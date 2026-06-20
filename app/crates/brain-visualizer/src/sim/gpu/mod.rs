@@ -653,7 +653,7 @@ impl Default for VisualSettings {
             connection_layer: 1,
             color_by: 6,
             neuron_visibility: 0,
-            surface: 0,
+            surface: 1,
             weight_normalization: 1,
             input_mode: 0,
             adaptive_scaler_enabled: 0,
@@ -1288,7 +1288,7 @@ impl GpuBackend {
             width,
             height,
             present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            alpha_mode: wgpu::CompositeAlphaMode::Opaque,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };

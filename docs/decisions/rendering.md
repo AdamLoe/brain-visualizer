@@ -56,9 +56,11 @@
 
 - **Decision.** The Brain color mode is the clean default color mode. Resting
   visible structure is pink; firing neuron cores, active morphology packets, and
-  active-adjacent highlights are blue. Brain mode is a color branch only: it
-  respects `surface = off`, `connection_layer = off`, and `neuron_visibility`
-  instead of forcing hidden layers on.
+  active-adjacent highlights are blue. The accepted default now writes
+  `surface = 1` so successful boot has a dim folded-brain shell before calm
+  default dynamics produce much activity. Brain mode itself remains a color
+  branch: it respects `connection_layer = off` and `neuron_visibility` instead
+  of forcing hidden layers on.
 - **Why.** The product goal is a coherent brain-themed activity view rather than
   separate debug encodings. Pink resting structure keeps the whole sculpture
   readable, while blue current activity gives spikes and traveling packets a
@@ -66,7 +68,8 @@
   settings contract migration.
 - **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md),
   [`../architecture/dev-panel.md`](../architecture/dev-panel.md).
-- **Code anchors.** `web/src/core/settings.ts → DEFAULT_SETTINGS.colorBy`;
+- **Code anchors.** `web/src/core/settings.ts → DEFAULT_SETTINGS.colorBy,
+  DEFAULT_SETTINGS.surface`;
   `web/src/ui/dev-panel.ts → COLOR_BY_OPTIONS`;
   `crates/brain-visualizer/src/sim/gpu/shaders/render_far.wgsl`;
   `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl`;

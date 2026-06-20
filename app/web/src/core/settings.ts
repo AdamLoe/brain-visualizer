@@ -75,7 +75,7 @@ export const DEFAULT_SETTINGS: VisualizerSettings = {
   connectionLayer:          1,
   colorBy:                  6,
   neuronVisibility:         0,
-  surface:                  0,
+  surface:                  1,
   weightNormalization:      1,  // sqrt_k default
   inputMode:                0,  // constant
   adaptiveScalerEnabled:    0,  // RESERVED/INERT — auto-scaling removed in 0.1.1; index 23 kept for the contract

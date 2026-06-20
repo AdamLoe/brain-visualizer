@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { inflateSync } from "node:zlib";
 
 const REQUIRE_WEBGPU_VISUAL = process.env.BV_REQUIRE_WEBGPU_VISUAL !== "0";
 const WEBGPU_BROWSER_MODE =
@@ -13,6 +14,8 @@ interface AdapterState {
 interface CanvasEvidence {
   width: number;
   height: number;
+  sampleX: number;
+  sampleY: number;
   sampleWidth: number;
   sampleHeight: number;
   nonBlackRatio: number;
@@ -59,45 +62,101 @@ async function waitForReady(page: Page): Promise<void> {
   );
 }
 
-async function collectCanvasEvidence(page: Page): Promise<CanvasEvidence> {
-  return page.evaluate(async () => {
-    const canvas = document.getElementById("brain-canvas") as HTMLCanvasElement | null;
-    if (!canvas) throw new Error("brain-canvas not found");
-    const image = new Image();
-    image.src = canvas.toDataURL("image/png");
-    await image.decode();
+function paeth(a: number, b: number, c: number): number {
+  const p = a + b - c;
+  const pa = Math.abs(p - a);
+  const pb = Math.abs(p - b);
+  const pc = Math.abs(p - c);
+  if (pa <= pb && pa <= pc) return a;
+  return pb <= pc ? b : c;
+}
 
-    const sampleCanvas = document.createElement("canvas");
-    const sampleWidth = Math.min(180, Math.max(1, image.naturalWidth));
-    const sampleHeight = Math.min(120, Math.max(1, image.naturalHeight));
-    sampleCanvas.width = sampleWidth;
-    sampleCanvas.height = sampleHeight;
-    const ctx = sampleCanvas.getContext("2d", { willReadFrequently: true });
-    if (!ctx) throw new Error("2d sample context unavailable");
-    ctx.drawImage(image, 0, 0, sampleWidth, sampleHeight);
-    const pixels = ctx.getImageData(0, 0, sampleWidth, sampleHeight).data;
+function collectScreenshotEvidence(png: Buffer): CanvasEvidence {
+  const signature = "89504e470d0a1a0a";
+  if (png.subarray(0, 8).toString("hex") !== signature) throw new Error("screenshot is not PNG");
 
-    let count = 0;
-    let nonBlack = 0;
-    let sum = 0;
-    let sumSq = 0;
-    for (let i = 0; i < pixels.length; i += 4) {
-      const luma = 0.2126 * pixels[i] + 0.7152 * pixels[i + 1] + 0.0722 * pixels[i + 2];
+  let offset = 8;
+  let width = 0;
+  let height = 0;
+  let bitDepth = 0;
+  let colorType = 0;
+  const idat: Buffer[] = [];
+  while (offset < png.length) {
+    const length = png.readUInt32BE(offset);
+    const type = png.subarray(offset + 4, offset + 8).toString("ascii");
+    const data = png.subarray(offset + 8, offset + 8 + length);
+    if (type === "IHDR") {
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+      bitDepth = data[8];
+      colorType = data[9];
+      if (data[12] !== 0) throw new Error("interlaced PNG screenshots are unsupported");
+    } else if (type === "IDAT") {
+      idat.push(Buffer.from(data));
+    } else if (type === "IEND") {
+      break;
+    }
+    offset += 12 + length;
+  }
+  if (bitDepth !== 8 || (colorType !== 2 && colorType !== 6)) {
+    throw new Error(`unsupported PNG format bitDepth=${bitDepth} colorType=${colorType}`);
+  }
+
+  const channels = colorType === 6 ? 4 : 3;
+  const stride = width * channels;
+  const inflated = inflateSync(Buffer.concat(idat));
+  const recon = new Uint8Array(stride * height);
+  let src = 0;
+  for (let y = 0; y < height; y++) {
+    const filter = inflated[src++];
+    const row = y * stride;
+    const prev = row - stride;
+    for (let x = 0; x < stride; x++) {
+      const raw = inflated[src++];
+      const left = x >= channels ? recon[row + x - channels] : 0;
+      const up = y > 0 ? recon[prev + x] : 0;
+      const upLeft = y > 0 && x >= channels ? recon[prev + x - channels] : 0;
+      let value: number;
+      if (filter === 0) value = raw;
+      else if (filter === 1) value = raw + left;
+      else if (filter === 2) value = raw + up;
+      else if (filter === 3) value = raw + Math.floor((left + up) / 2);
+      else if (filter === 4) value = raw + paeth(left, up, upLeft);
+      else throw new Error(`unsupported PNG filter ${filter}`);
+      recon[row + x] = value & 0xff;
+    }
+  }
+
+  const sampleX = Math.floor(width * 0.2);
+  const sampleY = Math.floor(height * 0.2);
+  const sampleWidth = Math.max(1, Math.floor(width * 0.6));
+  const sampleHeight = Math.max(1, Math.floor(height * 0.6));
+
+  let count = 0;
+  let nonBlack = 0;
+  let sum = 0;
+  let sumSq = 0;
+  for (let y = sampleY; y < sampleY + sampleHeight; y++) {
+    for (let x = sampleX; x < sampleX + sampleWidth; x++) {
+      const i = (y * width + x) * channels;
+      const luma = 0.2126 * recon[i] + 0.7152 * recon[i + 1] + 0.0722 * recon[i + 2];
       count++;
       sum += luma;
       sumSq += luma * luma;
       if (luma > 3) nonBlack++;
     }
-    const mean = sum / count;
-    return {
-      width: canvas.width,
-      height: canvas.height,
-      sampleWidth,
-      sampleHeight,
-      nonBlackRatio: +(nonBlack / count).toFixed(4),
-      varianceLuma: +Math.max(0, sumSq / count - mean * mean).toFixed(3),
-    };
-  });
+  }
+  const mean = sum / count;
+  return {
+    width,
+    height,
+    sampleX,
+    sampleY,
+    sampleWidth,
+    sampleHeight,
+    nonBlackRatio: +(nonBlack / count).toFixed(4),
+    varianceLuma: +Math.max(0, sumSq / count - mean * mean).toFixed(3),
+  };
 }
 
 async function setDevPanelSlider(page: Page, label: string, value: string): Promise<void> {
@@ -152,11 +211,12 @@ test("BV-UX-AUDIT-001/006 real WebGPU boot screenshots are visibly nonblank on d
     await waitForReady(page);
     await page.waitForTimeout(500);
     const screenshotPath = testInfo.outputPath(`bv-ux-audit-001-${viewport.name}.png`);
-    await page.screenshot({ path: screenshotPath, fullPage: true });
-    const evidence = await collectCanvasEvidence(page);
+    const png = await page.locator("#brain-canvas").screenshot({ path: screenshotPath });
+    const evidence = collectScreenshotEvidence(png);
     console.log(
       `[BV-UX-AUDIT-001] ${viewport.name} viewport=${viewport.width}x${viewport.height} ` +
-      `sample=${evidence.sampleWidth}x${evidence.sampleHeight} screenshot=${screenshotPath} ` +
+      `sample=center-${evidence.sampleWidth}x${evidence.sampleHeight}@${evidence.sampleX},${evidence.sampleY} ` +
+      `screenshot=${screenshotPath} ` +
       `nonBlackRatio=${evidence.nonBlackRatio} varianceLuma=${evidence.varianceLuma}`,
     );
 

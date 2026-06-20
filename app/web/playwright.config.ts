@@ -17,6 +17,7 @@ const USE_WEBSERVER = process.env.USE_WEBSERVER === "1";
 const REQUIRE_WEBGPU_VISUAL = process.env.BV_REQUIRE_WEBGPU_VISUAL !== "0";
 const WEBGPU_BROWSER_MODE =
   process.env.BV_WEBGPU_BROWSER_MODE ?? (REQUIRE_WEBGPU_VISUAL ? "hardware" : "software");
+const HEADLESS = process.env.BV_PLAYWRIGHT_HEADLESS === "1";
 
 if (WEBGPU_BROWSER_MODE !== "hardware" && WEBGPU_BROWSER_MODE !== "software") {
   throw new Error(`BV_WEBGPU_BROWSER_MODE must be "hardware" or "software", got ${WEBGPU_BROWSER_MODE}`);
@@ -25,7 +26,9 @@ if (WEBGPU_BROWSER_MODE !== "hardware" && WEBGPU_BROWSER_MODE !== "software") {
 const webGpuArgs =
   WEBGPU_BROWSER_MODE === "hardware"
     ? [
+        "--enable-unsafe-webgpu",
         "--ignore-gpu-blocklist",
+        "--use-angle=vulkan",
         "--enable-features=Vulkan,WebGPU",
       ]
     : [
@@ -47,7 +50,7 @@ export default defineConfig({
     baseURL: "http://localhost:5173",
     // Strict UX visual proof defaults to hardware mode. Non-strict local e2e
     // can set BV_REQUIRE_WEBGPU_VISUAL=0 to use the software flags below.
-    headless: false,
+    headless: HEADLESS,
     launchOptions: {
       executablePath:
         process.env.CHROMIUM_PATH ||
