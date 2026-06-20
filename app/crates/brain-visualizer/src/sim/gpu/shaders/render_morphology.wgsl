@@ -711,7 +711,7 @@ fn fs_main_active(in: TubeVertOut) -> @location(0) vec4<f32> {
     let active_alpha = max(mix(inactive_floor, active_ceiling, segment_activity), visible_selected);
     // Below epsilon, write neither color nor depth (in-shader inactive skip).
     if active_alpha < 0.004 { discard; }
-    return vec4<f32>(c, 1.0);
+    return vec4<f32>(c, active_alpha);
 }
 
 // ════════════════════════════════════════════════════════════════════════════

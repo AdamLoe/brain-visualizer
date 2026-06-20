@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-15
+last_updated:  2026-06-20
 ---
 
 # GPU backend / frame graph
@@ -104,16 +104,17 @@ GpuBackend::render_full`). Every pass reads GPU-resident state directly; no
 upload of per-instance data. Order:
 
 1. **bloom routing decision** — when `visual.bloom_strength <= 0` (default),
-   `scene_view` *is* the surface `target_view` (validated direct path). Only when
-   bloom is on AND all bloom pipelines/targets exist does the scene render into
-   the offscreen HDR target.
+   `scene_view` *is* the surface `target_view` (validated direct path). Bloom
+   HDR/blur targets are allocated only on the first bloom-enabled render after
+   the bloom pipelines exist; only then does the scene render into the offscreen
+   target.
 2. **(optional) manifold surface pass** — gated by `visual.surface != 0`; clears
    color+depth so later passes load on top.
 3. **far-LOD glow pass** — clears color (unless the surface pass already did),
    additive, no depth.
 4. **active/recent compaction compute + morphology tube pass** — when `connection_layer != 0`. For each morphology segment chunk, the compaction compute (`compact_morph_segments.wgsl`: `reset` 1wg → `compact` ⌈chunk_segs/64⌉wg → `write_args` 1wg) writes that chunk's `active_draw_args`; the tube pass then binds each chunk and `draw_indirect`s over its compacted active/recent subset (additive, no depth) via `render_morphology.wgsl → vs_main`. Instance counts are GPU-decided per chunk — no CPU readback sizes these draws. See [`gpu-rendering.md`](gpu-rendering.md) for the selection predicate.
 5. **morphology soma sphere pass** — when `connection_layer != 0`; additive, no depth. One UV-sphere per neuron via `render_morphology.wgsl → vs_sphere`. Uses `render_soma_spheres` pipeline (`crates/brain-visualizer/src/sim/gpu/pipelines.rs → GpuPipelines`), reusing the same `last_spike` and `morph_uniform` buffers from the tube pass.
-6. **active-opacity tube + soma passes** — when `connection_layer != 0` and the active pipelines exist; depth-tested **alpha** blend (not additive), layered over the additive morphology passes so firing geometry genuinely occludes. The active-tube pass owns the depth `Clear(1.0)`; the active-soma pass `Load`s it. `active_opacity = 0` still encodes these passes; it softens the shader result rather than skipping the occluding layer.
+6. **active-opacity tube + soma passes** — when `connection_layer != 0` and the active pipelines exist; depth-tested **alpha** blend (not additive), layered over both additive morphology passes so firing geometry is drawn last. The active-tube pass owns the depth `Clear(1.0)`; the active-soma pass `Load`s it. `active_opacity = 0` still encodes these passes; it softens the shader result rather than skipping the occluding layer.
 7. **(optional) bloom post** — bright → blur_h → blur_v → composite into the
    surface.
 
@@ -150,8 +151,11 @@ All large buffers are **persistent across frames**. Allocation happens only on a
   group stays flat and shares the 192 B `MorphUniforms` buffer
   (`crates/brain-visualizer/src/sim/gpu/resources.rs → MorphBuffers / MorphUniforms`).
 - **render-target resize** — `resize_render_targets`, guarded: it recreates the
-  depth + bloom textures **only when width/height actually changed** (the
-  `changed` check in `crates/brain-visualizer/src/sim/gpu/resources.rs → GpuResources::resize_render_targets`).
+  depth texture **only when width/height actually changed** (the `changed` check
+  in `crates/brain-visualizer/src/sim/gpu/resources.rs → GpuResources::resize_render_targets`).
+  Bloom HDR/blur textures are optional and allocated by
+  `crates/brain-visualizer/src/sim/gpu/resources.rs → GpuResources::ensure_bloom_render_targets`
+  only after bloom is enabled.
 - **backend restart / device-loss** — re-acquire context, rebuild pipelines,
   re-`initialize`.
 - **direct curve-lift / generator fallback** — `regenerate_morphology` rebuilds

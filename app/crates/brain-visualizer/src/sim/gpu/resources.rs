@@ -1329,13 +1329,14 @@ impl GpuResources {
         self.bind_groups_dirty = true;
     }
 
-    /// Recreate render targets (depth texture) only when dimensions/format change.
+    /// Recreate direct render targets only when dimensions change. Bloom/HDR
+    /// targets are allocated separately on the first bloom-enabled render.
     pub fn resize_render_targets(
         &mut self,
         device: &wgpu::Device,
         width: u32,
         height: u32,
-        scene_format: wgpu::TextureFormat,
+        _scene_format: wgpu::TextureFormat,
     ) {
         let changed = self
             .render_targets
@@ -1359,55 +1360,72 @@ impl GpuResources {
             });
             let depth_view = depth_texture.create_view(&Default::default());
 
-            // ─── V2 Phase E: bloom offscreen targets ─────────────────────────
-            // Full-res HDR scene + half-res ping-pong (rgba16float). Allocated
-            // unconditionally on resize (rare path); only USED when bloom is on.
-            let hdr_usage =
-                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
-            let make_tex = |w: u32, h: u32, label: &str, fmt: wgpu::TextureFormat| {
-                device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some(label),
-                    size: wgpu::Extent3d {
-                        width: w,
-                        height: h,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: fmt,
-                    usage: hdr_usage,
-                    view_formats: &[],
-                })
-            };
             let bw = (width / 2).max(1);
             let bh = (height / 2).max(1);
-            // The HDR scene target uses the SURFACE format so the (format-specific)
-            // scene pipelines stay compatible when rendered offscreen. The blur
-            // ping-pong stays rgba16float for soft-halo headroom.
-            let hdr_texture = make_tex(width, height, "bloom-hdr", scene_format);
-            let bloom_a_texture = make_tex(bw, bh, "bloom-a", wgpu::TextureFormat::Rgba16Float);
-            let bloom_b_texture = make_tex(bw, bh, "bloom-b", wgpu::TextureFormat::Rgba16Float);
-            let hdr_view = hdr_texture.create_view(&Default::default());
-            let bloom_a_view = bloom_a_texture.create_view(&Default::default());
-            let bloom_b_view = bloom_b_texture.create_view(&Default::default());
-
             self.render_targets = Some(RenderTargets {
                 width,
                 height,
                 depth_texture: Some(depth_texture),
                 depth_view: Some(depth_view),
-                hdr_texture: Some(hdr_texture),
-                hdr_view: Some(hdr_view),
-                bloom_a_texture: Some(bloom_a_texture),
-                bloom_a_view: Some(bloom_a_view),
-                bloom_b_texture: Some(bloom_b_texture),
-                bloom_b_view: Some(bloom_b_view),
+                hdr_texture: None,
+                hdr_view: None,
+                bloom_a_texture: None,
+                bloom_a_view: None,
+                bloom_b_texture: None,
+                bloom_b_view: None,
                 bloom_width: bw,
                 bloom_height: bh,
             });
             self.bind_groups_dirty = true;
         }
+    }
+
+    /// Allocate the optional bloom/HDR render targets on first use. A resize
+    /// drops them back to `None`; the next bloom-enabled render recreates them.
+    pub fn ensure_bloom_render_targets(
+        &mut self,
+        device: &wgpu::Device,
+        scene_format: wgpu::TextureFormat,
+    ) {
+        let Some(rt) = self.render_targets.as_mut() else {
+            return;
+        };
+        if rt.hdr_view.is_some() && rt.bloom_a_view.is_some() && rt.bloom_b_view.is_some() {
+            return;
+        }
+
+        let hdr_usage =
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
+        let make_tex = |w: u32, h: u32, label: &str, fmt: wgpu::TextureFormat| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: fmt,
+                usage: hdr_usage,
+                view_formats: &[],
+            })
+        };
+
+        let bw = (rt.width / 2).max(1);
+        let bh = (rt.height / 2).max(1);
+        let hdr_texture = make_tex(rt.width, rt.height, "bloom-hdr", scene_format);
+        let bloom_a_texture = make_tex(bw, bh, "bloom-a", wgpu::TextureFormat::Rgba16Float);
+        let bloom_b_texture = make_tex(bw, bh, "bloom-b", wgpu::TextureFormat::Rgba16Float);
+        rt.hdr_view = Some(hdr_texture.create_view(&Default::default()));
+        rt.bloom_a_view = Some(bloom_a_texture.create_view(&Default::default()));
+        rt.bloom_b_view = Some(bloom_b_texture.create_view(&Default::default()));
+        rt.hdr_texture = Some(hdr_texture);
+        rt.bloom_a_texture = Some(bloom_a_texture);
+        rt.bloom_b_texture = Some(bloom_b_texture);
+        rt.bloom_width = bw;
+        rt.bloom_height = bh;
     }
 
     /// Rebuild bind groups after any buffer recreation, then clear the dirty

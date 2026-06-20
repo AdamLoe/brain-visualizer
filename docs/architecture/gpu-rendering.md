@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-17
+last_updated:  2026-06-20
 ---
 
 # GPU Rendering
@@ -41,10 +41,10 @@ current docs must not describe those as dormant runtime surfaces.
    segment chunk writes `active_segment_indices` and `active_draw_args`.
 4. **Morphology tubes** when `connection_layer != 0`; additive, no depth,
    drawn only through each chunk's GPU-written indirect args.
-5. **Active tube redraw** when the active pipelines exist; depth-tested alpha
-   over the additive tube pass.
-6. **Soma spheres** when `connection_layer != 0`; additive, one shader-built
+5. **Soma spheres** when `connection_layer != 0`; additive, one shader-built
    sphere per neuron.
+6. **Active tube redraw** when the active pipelines exist; depth-tested alpha
+   over both additive morphology passes.
 7. **Active soma redraw**; depth-tested alpha, loading the active-tube depth.
 8. **Bloom** only when `bloom_strength > 0`; the app settings tombstone that
    Float32Array slot to zero, but examples can still call
@@ -141,12 +141,14 @@ then written into the compaction draw args.
 ## Active Opacity
 
 Active tubes and somas redraw the same geometry with alpha blending and depth
-testing. "Active" means spike-keyed firing, not click selection. The active
-tube pass clears depth; the active soma pass loads that depth so active tubes
-and somas mutually occlude. Selected tube fragments write full alpha in the
-active pass, so visible connections are not see-through; the subdued/inactive
-look is carried by brightness and tint, not translucency. The additive resting
-layer remains additive/no-depth behind that solid redraw.
+testing. "Active" means spike-keyed firing, not click selection. The additive
+tube and soma passes run first; the active tube pass then clears the active
+depth target, and the active soma pass loads that depth so active tubes and
+somas mutually occlude. Tube alpha is continuous from the configured inactive
+floor toward the active ceiling using the same spike-packet proximity that
+drives lighting. The subdued/inactive look is carried by brightness, tint, and
+low alpha while the additive resting layer remains additive/no-depth behind the
+active redraw.
 
 The legacy `active_opacity` and `inactive_opacity_floor` field names live in
 `crates/brain-visualizer/src/sim/morphology.rs → LightingConfig` and ride the
@@ -155,11 +157,12 @@ for the solid redraw rather than allowing see-through tube fragments.
 
 ## Bloom
 
-Bloom is retained as an internal render path. When enabled through
-`GpuBackend::set_bloom_strength`, the scene renders into an HDR target, then
-bright-pass, horizontal blur, vertical blur, and composite passes run. Normal
-web settings write bloom strength as zero, so product frames use the direct
-target path.
+Bloom is retained as an internal render path. Normal web settings write bloom
+strength as zero, so product frames use the direct target path and do not
+allocate the HDR/blur textures. When enabled through
+`GpuBackend::set_bloom_strength`, the first bloom-ready render allocates the
+HDR scene target and half-resolution blur ping-pong targets, then bright-pass,
+horizontal blur, vertical blur, and composite passes run.
 
 ## Validation
 

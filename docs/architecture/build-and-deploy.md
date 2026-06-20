@@ -115,7 +115,7 @@ substitute for browser WebGPU numbers on real hardware.**
 |---|---|---|
 | `sim_check.rs` | `cargo run --release --example sim_check` | GPU dynamics: non-zero spikes, excitability sweep (sleep→seizure), no NaN/overflow under seizure, i32 accumulator range. |
 | `soc_sweep.rs` | `cargo run --release --example soc_sweep` | Criticality sweep: i_ext parameter sweep + five brain-state acceptance bands. |
-| `render_check.rs` | `cargo run -p brain-visualizer --example render_check` | Render pipeline: offscreen render to 512×512 texture, non-black pixels, distinct region colours, stimulation response, morphology draw, bloom path, zero Naga shader-compile errors. |
+| `render_check.rs` | `cargo run -p brain-visualizer --example render_check` | Render pipeline: offscreen render to 512×512 texture, non-black pixels, distinct region colours, stimulation response, morphology draw, active-opacity deltas, bloom lazy allocation/path, zero Naga shader-compile errors. |
 | `morph_view.rs` | `cargo run -p brain-visualizer --example morph_view` | Morphology renderer: renders the accepted-default review views to `/tmp/morph_{0,1,2,3}.rgba` plus JSON stats artifacts for manual/defaults inspection; asserts non-black pixels. |
 | `time_network_payload.rs` | `cargo run -p brain-visualizer --example time_network_payload --release` | Worker-prepared startup payload timing: prints per-phase wall-clock timings plus `prepare_with_progress` cadence so boot-overlay stalls can be triaged without a browser or WebGPU adapter. |
 
@@ -152,7 +152,7 @@ under `CI`) to make the same adapter/device failure hard-fail the test process.
 **`npm run typecheck`** — `tsc --noEmit` over `web/`. This is the standalone JS
 contract gate outside `npm run build`.
 
-**`cargo run -p brain-visualizer --example render_check`** — native production-render smoke gate for render, morphology, stimulation, and bloom.
+**`cargo run -p brain-visualizer --example render_check`** — native production-render smoke gate for render, morphology, stimulation, active-opacity deltas, and bloom lazy allocation/path.
 
 **`cargo run -p brain-visualizer --example morph_view`** — native review-artifact/defaults gate for the accepted-default morphology views and stats ledger.
 

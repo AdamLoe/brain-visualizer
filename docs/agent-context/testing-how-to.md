@@ -25,7 +25,8 @@ Run `cargo` from `app/` (workspace root) and `npm` from `app/web/`.
   env var, local no-adapter machines skip the native wgpu tests with explicit
   `SKIP ... no wgpu adapter/device` messages.
 - **`cargo run -p brain-visualizer --example render_check`** — native render-path smoke gate:
-  offscreen render, stimulation path, morphology draw, and bloom path.
+  offscreen render, stimulation path, morphology draw, active-opacity deltas,
+  bloom lazy allocation, and bloom path.
 - **`cargo run -p brain-visualizer --example morph_view`** — native artifact/review harness:
   regenerates the accepted-default morphology views and writes the current `/tmp/morph_*`
   stats artifacts for manual/defaults verification.

@@ -20,7 +20,8 @@
   draws. Bloom and true-opacity `*_active` morphology variants are compiled from
   the first post-ready rAF frame via
   `build_render_deferred_pipelines` called from the web rAF loop. `render_full`
-  guards every bloom/active access with `is_some()`, so the first frame paints
+  guards every bloom/active access with `is_some()`, and bloom HDR/blur textures
+  are allocated only on the first bloom-enabled render, so the first frame paints
   correctly without them.
 - **Why.** Synchronous WebGPU shader compilation blocks the calling thread; the
   bloom + active compiles are the largest avoidable cost on the boot critical
@@ -34,6 +35,8 @@
   build_render_core / build_render_deferred / build_morph_active_pipelines /
   is_render_deferred_built`; `crates/brain-visualizer/src/sim/gpu/mod.rs →
   build_render_core_pipelines / build_render_deferred_pipelines`;
+  `crates/brain-visualizer/src/sim/gpu/resources.rs →
+  ensure_bloom_render_targets`;
   `crates/brain-visualizer/src/lib.rs → startup_build_render_pipelines /
   build_deferred_render_pipelines`; `web/src/main.ts → rafLoop`.
 - **Revisit when.** Hardware testing shows the bloom/active gap is multiple
@@ -167,13 +170,14 @@
   `bloom_strength > 0` still enables the HDR offscreen render + bright-pass +
   separable blur + composite path, but the user-facing `VisualSettings` index is
   tombstoned and zero-written. Normal app settings therefore use the direct
-  `target_view` path; internal examples/tests can still call
-  `GpuBackend::set_bloom_strength` to validate the retained pipeline.
+  `target_view` path and do not allocate HDR/blur textures; internal
+  examples/tests can still call `GpuBackend::set_bloom_strength` to validate the
+  retained pipeline and its first-use target allocation.
 - **Why.** Bloom strength was not needed as a user control. Keeping the pipeline
   avoids a broad render-resource deletion while removing the settings and
   persistence surface.
 - **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md)
-- **Code anchors.** `crates/brain-visualizer/src/sim/gpu/mod.rs → GpuBackend::render_full, VisualSettings::from_slice, GpuBackend::set_bloom_strength`; `crates/brain-visualizer/src/sim/gpu/shaders/bloom.wgsl → fs_bright / fs_blur / fs_composite`; `web/src/core/settings.ts → toFloat32Array`.
+- **Code anchors.** `crates/brain-visualizer/src/sim/gpu/mod.rs → GpuBackend::render_full, VisualSettings::from_slice, GpuBackend::set_bloom_strength`; `crates/brain-visualizer/src/sim/gpu/resources.rs → GpuResources::ensure_bloom_render_targets`; `crates/brain-visualizer/src/sim/gpu/shaders/bloom.wgsl → fs_bright / fs_blur / fs_composite`; `web/src/core/settings.ts → toFloat32Array`.
 
 ## Morphology as shader-generated curved tubes + soma spheres
 
@@ -222,8 +226,8 @@
 
 ## True opacity for selected connection geometry, layered over the additive resting passes
 
-- **Decision.** Selected connection geometry gets a genuine depth-tested redraw on top of the unchanged additive resting passes, so visible tubes occlude instead of reading as see-through. Tube selection still comes from the spike packet compaction path, but selected tube fragments return full alpha; subdued/inactive connection state is expressed through dark resting brightness/tint, while lit packet brightness remains fragment-local so the impulse still travels. Soma opacity uses the same floor/ceiling model from soma activity.
-- **Why.** Additive blending physically cannot occlude — it can only make things brighter, so everything read as uniformly muddy translucency. A real depth + alpha path lets active neurons read as solid and inactive structure drop to near-invisible. Keeping the active redraw encoded at the low end avoids the additive blowout caused by removing the only depth-tested morphology layer, while the soft ceiling preserves the expected "least emphasis" slider meaning. Layering the active redraw over the additive passes (rather than converting them) avoids reworking the whole bloom/HDR compositing pipeline: the active passes write the same HDR `scene_view` color, so bloom composes over them with zero bloom-path edits.
+- **Decision.** Selected connection geometry gets a genuine depth-tested redraw on top of the unchanged additive resting passes, so visible tubes occlude instead of reading as see-through. Tube selection still comes from the spike packet compaction path, and selected tube fragments return continuous straight alpha from the inactive floor toward the active ceiling using spike-packet proximity; subdued/inactive connection state is expressed through dark resting brightness/tint and low alpha, while lit packet brightness remains fragment-local so the impulse still travels. Soma opacity uses the same floor/ceiling model from soma activity.
+- **Why.** Additive blending physically cannot occlude — it can only make things brighter, so everything read as uniformly muddy translucency. A real depth + alpha path lets active neurons read as solid and inactive structure drop to near-invisible without turning the opacity controls into binary thresholds. Keeping the active redraw encoded at the low end avoids the additive blowout caused by removing the only depth-tested morphology layer, while the soft ceiling preserves the expected "least emphasis" slider meaning. Layering the active redraw over the additive passes (rather than converting them) avoids reworking the whole bloom/HDR compositing pipeline: the active passes write the same HDR `scene_view` color, so bloom composes over them with zero bloom-path edits.
 - **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md)
 - **Alternatives considered.** Fake opacity by making active geometry brighter-additive — rejected because additive cannot occlude, which was the actual defect. Convert the resting passes to depth-tested too — rejected: needs pass sorting and breaks the bloom-friendly additive resting glow; resting self-occlusion stays deferred.
 - **Tradeoffs.** The active passes redraw the same tube/soma geometry and the active layer owns its own depth clear. The legacy opacity-named knobs ride repurposed `MorphUniforms` pads as coverage/emphasis inputs, so the 192 B layout is unchanged; that size is gated by `cargo test` through `morph_layouts_locked`.

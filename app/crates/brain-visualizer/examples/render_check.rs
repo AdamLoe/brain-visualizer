@@ -62,6 +62,10 @@ async fn run() {
     let color_format = wgpu::TextureFormat::Rgba8Unorm;
     backend.build_render_pipelines(color_format);
     backend.resize_render_targets(WIDTH, HEIGHT);
+    assert!(
+        bloom_targets_absent(&backend),
+        "Default resize should not allocate bloom/HDR render targets"
+    );
 
     // Rebuild bind groups after resize_render_targets sets dirty flag.
     // (initialize already called refresh_bind_groups, but resize may set dirty again)
@@ -227,6 +231,10 @@ async fn run() {
     // Confirm rendering the active/recent layer again is stable.
     backend.set_connection_layer(1);
     backend.render(&color_view, &mvp, camera_right, camera_up, 100.0, 0.012);
+    assert!(
+        bloom_targets_absent(&backend),
+        "Default bloom_strength=0 renders should stay on the direct target path"
+    );
     println!("[render_check] morphology check PASS: active/recent forest drew");
 
     // --- 11. V2 Phase E: BLOOM check -----------------------------------------
@@ -241,6 +249,10 @@ async fn run() {
         backend.tick(1, 0.55);
     }
     backend.render(&color_view, &mvp, camera_right, camera_up, 100.0, 0.012);
+    assert!(
+        bloom_targets_present(&backend),
+        "Bloom-enabled render should allocate HDR/blur render targets on first use"
+    );
     let bloom_pixels =
         readback_rgba(backend.device(), backend.queue(), &color_tex, WIDTH, HEIGHT).await;
     let mut bloom_non_black = 0u32;
@@ -711,6 +723,26 @@ fn non_black_count(pixels: &[u8]) -> u32 {
         .chunks(4)
         .filter(|p| p[0] > 2 || p[1] > 2 || p[2] > 2)
         .count() as u32
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn bloom_targets_absent(backend: &brain_visualizer::sim::gpu::GpuBackend) -> bool {
+    backend
+        .resources()
+        .render_targets
+        .as_ref()
+        .map(|rt| rt.hdr_view.is_none() && rt.bloom_a_view.is_none() && rt.bloom_b_view.is_none())
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn bloom_targets_present(backend: &brain_visualizer::sim::gpu::GpuBackend) -> bool {
+    backend
+        .resources()
+        .render_targets
+        .as_ref()
+        .map(|rt| rt.hdr_view.is_some() && rt.bloom_a_view.is_some() && rt.bloom_b_view.is_some())
+        .unwrap_or(false)
 }
 
 #[cfg(not(target_arch = "wasm32"))]

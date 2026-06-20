@@ -1690,6 +1690,25 @@ impl GpuBackend {
         camera_pos: [f32; 3],
         camera_distance: f32,
     ) {
+        let pipe_far = match self.pipelines.render_far.as_ref() {
+            Some(p) => p,
+            None => return,
+        };
+
+        // ─── V2 Phase E: bloom routing ────────────────────────────────────────
+        // OPT-IN. When bloom_strength <= 0 (the default), `scene_view` IS the
+        // surface `target_view` → the exact validated direct path (no offscreen
+        // indirection, bit-for-bit the Part-1 look). Only when bloom_strength > 0
+        // AND all bloom pipelines exist do we allocate/use the HDR offscreen
+        // target and run the post passes.
+        let bloom_ready = self.visual.bloom_strength > 0.0
+            && self.pipelines.bloom_bright.is_some()
+            && self.pipelines.bloom_blur.is_some()
+            && self.pipelines.bloom_composite.is_some();
+        if bloom_ready {
+            self.resources
+                .ensure_bloom_render_targets(&self.ctx.device, self.render_color_format);
+        }
         let bg = match self.resources.bind_groups.as_ref() {
             Some(b) if b.render_far.is_some() => b,
             _ => return,
@@ -1706,21 +1725,7 @@ impl GpuBackend {
             Some(d) => d,
             None => return,
         };
-        let pipe_far = match self.pipelines.render_far.as_ref() {
-            Some(p) => p,
-            None => return,
-        };
-
-        // ─── V2 Phase E: bloom routing ────────────────────────────────────────
-        // OPT-IN. When bloom_strength <= 0 (the default), `scene_view` IS the
-        // surface `target_view` → the exact validated direct path (no offscreen
-        // indirection, bit-for-bit the Part-1 look). Only when bloom_strength > 0
-        // AND all bloom resources/pipelines exist do we render the scene into the
-        // HDR offscreen target and run the post passes.
-        let bloom_on = self.visual.bloom_strength > 0.0
-            && self.pipelines.bloom_bright.is_some()
-            && self.pipelines.bloom_blur.is_some()
-            && self.pipelines.bloom_composite.is_some()
+        let bloom_on = bloom_ready
             && rt.hdr_view.is_some()
             && rt.bloom_a_view.is_some()
             && rt.bloom_b_view.is_some();
@@ -2014,12 +2019,53 @@ impl GpuBackend {
             }
         }
 
+        // ─── Morphology: soma sphere pass (Wave 2) ────────────────────────────
+        // One shader-generated UV sphere per neuron. Drawn AFTER the tube pass
+        // (order: manifold → far glow → additive tubes → additive somas →
+        // active tubes → active somas → bloom).
+        // Gated on the same connection_layer condition as tubes (0 = off).
+        // Additive, no depth — same compositing as the tube pass.
+        if self.visual.connection_layer != 0 {
+            if let (Some(pipe_soma), Some(soma_bg), Some(mb)) = (
+                self.pipelines.render_soma_spheres.as_ref(),
+                bg.render_soma_spheres.as_ref(),
+                self.resources.morph_buffers.as_ref(),
+            ) {
+                let n_spheres = mb.sphere_count;
+                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("soma-sphere-pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: scene_view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                if n_spheres > 0 {
+                    pass.set_pipeline(pipe_soma);
+                    pass.set_bind_group(0, soma_bg, &[]);
+                    // slices * stacks * 2 * 3 verts per soma instance. v0.3.1:
+                    // runtime value kept in sync with the WGSL SPHERE_SLICES /
+                    // SPHERE_STACKS override constants.
+                    pass.draw(0..self.morph_sphere_verts, 0..n_spheres);
+                }
+            }
+        }
+
         // ─── NEW: true-opacity active tube pass ───────────────────────────────
         // Depth-tested, alpha-blended draw of the SAME tubes, on top of the
-        // additive resting tube pass. Owns the frame's depth clear (Clear(1.0))
-        // since the additive passes never touch depth. `fs_main_active` returns continuous
-        // spike-proximity straight alpha so active_opacity smoothly changes tube
-        // occlusion while the bright packet remains fragment-local.
+        // additive resting morphology passes. Owns the frame's active-depth
+        // clear (Clear(1.0)) since the additive passes never touch depth.
+        // `fs_main_active` returns continuous spike-proximity straight alpha so
+        // active_opacity smoothly changes tube occlusion while the bright packet
+        // remains fragment-local.
         // Reuses the additive tube bind group + draw count (same override consts).
         if active_opaque_on {
             if let (Some(pipe_active), Some(mb)) = (
@@ -2066,49 +2112,10 @@ impl GpuBackend {
             }
         }
 
-        // ─── Morphology: soma sphere pass (Wave 2) ────────────────────────────
-        // One shader-generated UV sphere per neuron. Drawn AFTER the tube pass
-        // (order: manifold → far glow → morphology tubes → soma spheres → bloom).
-        // Gated on the same connection_layer condition as tubes (0 = off).
-        // Additive, no depth — same compositing as the tube pass.
-        if self.visual.connection_layer != 0 {
-            if let (Some(pipe_soma), Some(soma_bg), Some(mb)) = (
-                self.pipelines.render_soma_spheres.as_ref(),
-                bg.render_soma_spheres.as_ref(),
-                self.resources.morph_buffers.as_ref(),
-            ) {
-                let n_spheres = mb.sphere_count;
-                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("soma-sphere-pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: scene_view,
-                        resolve_target: None,
-                        depth_slice: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Load,
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                if n_spheres > 0 {
-                    pass.set_pipeline(pipe_soma);
-                    pass.set_bind_group(0, soma_bg, &[]);
-                    // slices * stacks * 2 * 3 verts per soma instance. v0.3.1:
-                    // runtime value kept in sync with the WGSL SPHERE_SLICES /
-                    // SPHERE_STACKS override constants.
-                    pass.draw(0..self.morph_sphere_verts, 0..n_spheres);
-                }
-            }
-        }
-
         // ─── NEW: true-opacity active soma pass ───────────────────────────────
         // Depth-tested, alpha-blended draw of the SAME somas, on top of the
-        // additive resting soma pass. Loads the depth the active-tube pass wrote
-        // (so active tubes and active somas mutually occlude correctly), and
+        // additive resting morphology passes. Loads the depth the active-tube
+        // pass wrote (so active tubes and active somas mutually occlude), and
         // writes depth itself. `fs_sphere_active` returns a firing-driven straight
         // alpha. Reuses the additive soma bind group + draw count.
         if active_opaque_on {
