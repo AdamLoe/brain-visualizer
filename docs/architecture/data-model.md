@@ -57,10 +57,10 @@ discussion in that owner instead of duplicating field math here.
 
 New neurons start with `HAS_SPIKED = 0`, type bits initialized, tick bits
 zero. Render shaders must treat `HAS_SPIKED = 0` as zero glow — never as a
-fresh spike — to preserve the silent-start look. The render path now uses this
-same packed word for both the far-body soma pulse and the morphology traveling
-impulse: shaders derive age as `tick_diff(current_tick, last_tick)` and only
-emit pulse/flash/core terms when `HAS_SPIKED != 0`.
+fresh spike — to preserve the silent-start look. Far-body soma pulse age still
+comes from this packed physics word. Morphology tube packet age comes from the
+morphology-only `visual_spike` buffer; `last_spike` remains the type/color and
+physics source for that pass.
 
 ## Fixed-point current accumulator
 
