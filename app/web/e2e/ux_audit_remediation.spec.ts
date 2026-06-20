@@ -1,6 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 
 const REQUIRE_WEBGPU_VISUAL = process.env.BV_REQUIRE_WEBGPU_VISUAL !== "0";
+const WEBGPU_BROWSER_MODE =
+  process.env.BV_WEBGPU_BROWSER_MODE ?? (REQUIRE_WEBGPU_VISUAL ? "hardware" : "software");
 
 interface AdapterState {
   gpuPresent: boolean;
@@ -121,6 +123,12 @@ test("BV-UX-AUDIT-001/006 real WebGPU boot screenshots are visibly nonblank on d
   page,
 }, testInfo) => {
   test.setTimeout(120_000);
+  if (REQUIRE_WEBGPU_VISUAL) {
+    expect(
+      WEBGPU_BROWSER_MODE,
+      "Strict visual proof must run with BV_WEBGPU_BROWSER_MODE=hardware; software mode is only for non-strict local checks",
+    ).toBe("hardware");
+  }
   const consoleErrors: string[] = [];
   page.on("console", (msg) => {
     if (msg.type() === "error") consoleErrors.push(msg.text());

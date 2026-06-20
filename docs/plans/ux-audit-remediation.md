@@ -1,6 +1,6 @@
 ---
-status:        draft
-owner:         unassigned
+status:        active
+owner:         adamg
 last_updated:  2026-06-20
 okay_to_delete: false
 long_lived:    false
@@ -24,10 +24,17 @@ diagnostics inaccessible. Done means a healthy boot visibly renders the brain on
 desktop and mobile-ish viewports, structural setting failures are recoverable and
 do not silently persist unproven state, startup failures expose readable
 reset/default recovery, keyboard and assistive workflows cover public controls
-and representative dev-panel controls, and the mobile diagnostics story is
-either supported or explicitly bounded in docs/tests.
+and representative dev-panel controls, and mobile diagnostics is explicitly
+disabled/unsupported in docs/tests for now.
 
 ## Scope
+
+Audit source note:
+
+- There is no separate UX audit source document. This plan is the authoritative
+  record for the `BV-UX-AUDIT-*` IDs, so each implementation/review pass should
+  preserve the ID mapping in commit messages, test names, or plan notes rather
+  than looking for another audit artifact.
 
 In scope:
 
@@ -155,22 +162,27 @@ Owned source/docs:
 
 Work:
 
-- Preferred default: keep the dev panel unsupported on mobile, because current
-  architecture documents "no dev panel" in the mobile profile.
-- Make that policy explicit in docs and tests, and ensure screenshot review
-  instructions use desktop for dev diagnostics.
-- If implementation discovers the mobile panel is already close to safe, it may
-  instead support a mobile-safe diagnostics path, but that is not required for
-  this plan unless the owner changes this decision.
+- Explicitly keep mobile dev diagnostics unsupported for now. The mobile profile
+  should not expose a usable dev-panel/diagnostics workflow.
+- Make the disabled/unsupported mobile policy explicit in docs and tests, and
+  ensure screenshot review instructions use desktop for dev diagnostics.
+- Do not add a mobile-safe diagnostics path under this plan. A later plan can
+  revisit mobile diagnostics if product ownership wants that workflow.
 
 Parallelism and serialization:
 
-- Streams 1 and 4 can be investigated in parallel, but edits serialize where
-  they touch `web/src/main.ts` or shared Playwright fixtures.
-- Streams 2 and 3 must serialize because both own persisted state,
-  reset/recovery behavior, and startup failure paths.
-- Stream 5 should run after Streams 3 and 4 choose the final
-  recovery/accessibility behavior.
+- Read-only investigation can run in parallel, but mutating implementation on
+  the shared tree should run serially because all streams touch or may touch
+  `web/src/main.ts`, shared Playwright fixtures, or shared startup/recovery
+  behavior.
+- Suggested mutation waves:
+  1. Add concrete boot visibility/screenshot evidence gates.
+  2. Implement startup failure recovery and structural settings rollback or
+     explicit failed/pending recovery, keeping persisted-state changes together.
+  3. Implement keyboard/focus/dev-panel accessibility behavior.
+  4. Disable/document/test mobile diagnostics as unsupported.
+  5. Touch Rust/WGSL/GPU backend code only if the boot evidence proves the
+     blank healthy boot is a render/backend problem.
 - Final e2e screenshot and accessibility gates run once after all UI,
   persistence, and docs changes land.
 
@@ -179,11 +191,16 @@ Parallelism and serialization:
 Required assertions:
 
 - Healthy boot desktop screenshot after overlay clear shows unmistakable
-  brain/visual state, is not effectively black by pixel check, and has no
-  console errors.
+  brain/visual state in a real WebGPU browser, is not effectively black by a
+  documented pixel check, and has no console errors.
 - Healthy boot mobile-ish screenshot after overlay clear shows unmistakable
-  brain/visual state, is not effectively black by pixel check, and has no
-  console errors.
+  brain/visual state in a real WebGPU browser, is not effectively black by a
+  documented pixel check, and has no console errors.
+- Screenshot/pixel gates name the desktop and mobile-ish viewport sizes, the
+  sampled region or threshold rule, and the artifact paths used for review.
+- If a real WebGPU browser/adapter is unavailable, stop and report that blocker
+  with evidence. Do not treat fallback/non-WebGPU output as equivalent for the
+  visual proof.
 - Forced structural rebuild failure preserves the running network/backend and
   either rolls back panel values plus app-owned localStorage or shows an
   explicit recoverable failed/pending state with reset/retry.
@@ -194,14 +211,14 @@ Required assertions:
 - Playwright/accessibility assertions cover public controls, representative
   dev-panel controls, drawer focus behavior, tabs, and focus-accessible
   help/tooltips.
-- Mobile diagnostics is either supported by a mobile-safe panel path or
-  explicitly documented/tested as unsupported, with screenshot reviews using
-  desktop diagnostics.
+- Mobile diagnostics is documented/tested as unsupported, with screenshot
+  reviews using desktop diagnostics.
 
 Commands:
 
 - From `app/web/`: `npm run typecheck`
 - From `app/web/`: `npm test`
+- From `app/web/`: `npm run build`
 - From `app/web/`: `npm run test:e2e`
 - From `app/`: `cargo test` if any Rust/WGSL/GPU backend code changes
 
@@ -213,17 +230,18 @@ Commands:
 - Do not make the boot overlay a diagnostics dump; keep detailed diagnostics in
   console/test hooks unless they are needed for user recovery.
 - Do not make mobile dev diagnostics implicitly available. Either support it
-  deliberately or document/test the unsupported policy.
+  deliberately in a future plan or document/test the unsupported policy here.
 - Keep new tests focused in per-feature files where practical.
 
 ## Open decisions
 
-- Mobile diagnostics default: this plan recommends documenting/testing mobile
-  dev-panel unsupported rather than building a mobile drawer. Change only if
-  product ownership wants mobile diagnostics as a supported workflow.
-- Failed structural apply UX: implementers may choose rollback-to-last-applied
-  or explicit pending/failed state. Rollback is the recommended default unless
-  the existing dev-panel structure makes pending state clearer and cheaper.
+- Failed structural apply UX: resolved as rollback-to-last-applied. Structural
+  settings and rebuild-backed morphology stay out of app-owned localStorage
+  until backend apply succeeds; failed preparation/application rolls controls and
+  storage back to the last applied state.
+- Remaining verification blocker: this host cannot provide the required real
+  WebGPU browser/adapter proof. The strict e2e gate now fails with an explicit
+  adapter-unavailable blocker instead of passing fallback/non-adapter output.
 
 ## Implementer brief
 
@@ -252,7 +270,7 @@ Expected behavior:
 Successful boot visibly renders the brain after overlay clear; failed startup
 and failed structural settings are recoverable without devtools; controls and
 dev diagnostics are keyboard/assistive usable; mobile diagnostics is
-intentionally supported or intentionally unsupported.
+intentionally disabled/unsupported for now.
 
 Implementation notes:
 Start with tests that reproduce black successful boot, forced rebuild failure,
@@ -261,18 +279,19 @@ serialized UI/recovery passes, and finish with docs migration.
 
 Cheapest sufficient checks:
 `npm run typecheck`, `npm test`, targeted then full `npm run test:e2e`,
-screenshot/pixel assertions for desktop and mobile-ish boot, and `cargo test`
-only if Rust/WGSL changes.
+`npm run build`, screenshot/pixel assertions for desktop and mobile-ish boot in
+a real WebGPU browser, and `cargo test` only if Rust/WGSL changes.
 
 Stop and report if:
 The black successful boot is caused by GPU/device behavior that cannot be
-reproduced under the available Playwright environment, or if rollback and
-pending-state recovery both require a larger settings architecture rewrite than
-this plan assumes.
+reproduced under an available real WebGPU browser, if no real WebGPU
+browser/adapter is available for the required screenshot proof, or if rollback
+and pending-state recovery both require a larger settings architecture rewrite
+than this plan assumes.
 
 Open decisions:
-Mobile diagnostics support vs documented unsupported policy; rollback vs
-explicit pending/failed state for structural apply failure.
+None for implementation. Remaining work is strict real-WebGPU visual proof on a
+machine/browser where `navigator.gpu.requestAdapter()` returns a real adapter.
 
 ## Migration notes (filled in at ship time)
 
@@ -295,7 +314,16 @@ Before setting `status: shipped`, route durable facts and decisions into:
 
 Migration record:
 
-- TBD at ship time.
+- 2026-06-20: Implementation commits `7e5b574` and `4724158` migrated durable
+  behavior into `architecture/web-frontend.md`, `architecture/dev-panel.md`,
+  `decisions/dev-tooling.md`, `decisions/interaction.md`, and
+  `agent-context/testing-how-to.md`.
+- 2026-06-20: Not shipped yet. Strict visual proof remains blocked in this
+  environment: Chromium exposes `navigator.gpu`, but
+  `navigator.gpu.requestAdapter()` returns no adapter. Run
+  `BV_WEBGPU_BROWSER_MODE=hardware USE_WEBSERVER=1 npm run test:e2e -- e2e/ux_audit_remediation.spec.ts --grep "real WebGPU boot"`
+  from `app/web/` on a real-WebGPU machine, then fill in desktop/mobile-ish
+  screenshot artifact paths and set `status: shipped` only if that gate passes.
 
 ## See also
 

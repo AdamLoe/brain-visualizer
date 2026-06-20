@@ -14,6 +14,26 @@ import { defineConfig, devices } from "@playwright/test";
  */
 
 const USE_WEBSERVER = process.env.USE_WEBSERVER === "1";
+const REQUIRE_WEBGPU_VISUAL = process.env.BV_REQUIRE_WEBGPU_VISUAL !== "0";
+const WEBGPU_BROWSER_MODE =
+  process.env.BV_WEBGPU_BROWSER_MODE ?? (REQUIRE_WEBGPU_VISUAL ? "hardware" : "software");
+
+if (WEBGPU_BROWSER_MODE !== "hardware" && WEBGPU_BROWSER_MODE !== "software") {
+  throw new Error(`BV_WEBGPU_BROWSER_MODE must be "hardware" or "software", got ${WEBGPU_BROWSER_MODE}`);
+}
+
+const webGpuArgs =
+  WEBGPU_BROWSER_MODE === "hardware"
+    ? [
+        "--ignore-gpu-blocklist",
+        "--enable-features=Vulkan,WebGPU",
+      ]
+    : [
+        "--enable-unsafe-swiftshader",
+        "--use-angle=swiftshader",
+        "--enable-features=Vulkan,WebGPU",
+        "--use-vulkan=swiftshader",
+      ];
 
 export default defineConfig({
   testDir: "./e2e",
@@ -25,9 +45,8 @@ export default defineConfig({
 
   use: {
     baseURL: "http://localhost:5173",
-    // WebGPU needs SwiftShader in headless mode (no real GPU in WSL2).
-    // With DISPLAY=:0 (WSL2 X server), non-headless mode exposes navigator.gpu
-    // on localhost even without a real GPU adapter.
+    // Strict UX visual proof defaults to hardware mode. Non-strict local e2e
+    // can set BV_REQUIRE_WEBGPU_VISUAL=0 to use the software flags below.
     headless: false,
     launchOptions: {
       executablePath:
@@ -36,10 +55,7 @@ export default defineConfig({
       args: [
         "--no-sandbox",
         "--disable-gpu-sandbox",
-        "--enable-unsafe-swiftshader",
-        "--use-angle=swiftshader",
-        "--enable-features=Vulkan,WebGPU",
-        "--use-vulkan=swiftshader",
+        ...webGpuArgs,
       ],
     },
   },
