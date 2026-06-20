@@ -1331,6 +1331,7 @@ export class DevPanel {
     },
     onApply: (value: number) => void,
     liveOnInput: boolean,
+    onResetApply?: (value: number) => void,
   ): [HTMLInputElement, HTMLInputElement] {
     const integer = spec.integer ?? Number.isInteger(spec.step);
     const decimals = spec.decimals ?? (integer ? 0 : decimalsForStep(spec.step));
@@ -1379,7 +1380,7 @@ export class DevPanel {
         const v = normalize(spec.defaultValue ?? spec.initialValue);
         slider.value = String(v);
         numInput.value = format(v);
-        onApply(v);
+        (onResetApply ?? onApply)(v);
       });
       row.appendChild(resetBtn);
     }
@@ -1589,6 +1590,12 @@ export class DevPanel {
     this._buildMorphConfigRows(root, ["generator", "renderQuality"]);
   }
 
+  private _applyMorphPendingConfig(): void {
+    this.morphConfig = structuredClone(this.morphPending);
+    saveMorphConfig(this.morphConfig);
+    this.morphHandlers?.onMorphRebuild(JSON.stringify(this.morphConfig));
+  }
+
   // ── v0.3.1: descriptor-driven morphology config rows ──────────────────────
   // Renders one row per MORPH_DESCRIPTORS entry for the requested groups.
   // Lighting (applyKind "uniform") writes live on slider input; generator +
@@ -1615,6 +1622,21 @@ export class DevPanel {
         lastGroup = d.group;
       }
       this._morphRow(root, d);
+    }
+
+    if (groups?.some((group) => group === "generator" || group === "renderQuality")) {
+      const btnRow = document.createElement("div");
+      btnRow.className = "dp-btn-row";
+      const rebuildBtn = document.createElement("button");
+      rebuildBtn.type = "button";
+      rebuildBtn.className = "dp-action-btn";
+      rebuildBtn.textContent = "Rebuild Morphology";
+      this._attachTip(rebuildBtn, "Apply pending generator and render-quality morphology changes.");
+      rebuildBtn.addEventListener("click", () => {
+        this._applyMorphPendingConfig();
+      });
+      btnRow.appendChild(rebuildBtn);
+      root.appendChild(btnRow);
     }
 
   }
@@ -1645,11 +1667,11 @@ export class DevPanel {
         this._onMorphInput(d, v);
       } else {
         this.morphPending = setMorphValue(this.morphPending, d.jsonPath, v);
-        this.morphConfig = structuredClone(this.morphPending);
-        saveMorphConfig(this.morphConfig);
-        this.morphHandlers?.onMorphRebuild(JSON.stringify(this.morphConfig));
       }
-    }, live);
+    }, live, live ? undefined : (v) => {
+      this.morphPending = setMorphValue(this.morphPending, d.jsonPath, v);
+      this._applyMorphPendingConfig();
+    });
 
     this.morphRows.set(d.jsonPath, { input, numberInput, decimals });
   }

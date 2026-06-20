@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-08
+last_updated:  2026-06-20
 okay_to_delete: false
 long_lived:    true
 owning_docs:
@@ -94,11 +94,11 @@ implementation details belong in the versioned plan docs, not here.
 
 - **Deferred.** The branching-tree morphology generator
   (`crates/brain-visualizer/src/sim/morphology.rs → generate`) is tuned for the
-  beauty-first default (~1.2k neurons) and has no high-N relief valve.
-- **Why it matters.** Per-neuron build cost is ~5× the old fan (≈57→281 ms at
-  N=1200/K=16) and grows with N, and the segment allocation cap grew ~1.5×, so
-  high tiers pay a long one-time `initialize()` and approach the GPU
-  storage-buffer ceiling — observable as "the app hangs on start" when persisted
+  accepted default in `web/src/core/types.ts → DEFAULT_CONFIG` and has no high-N
+  relief valve.
+- **Why it matters.** Per-neuron build cost grows with branch detail and scale,
+  so high tiers can pay a long one-time startup/rebuild cost and approach GPU
+  storage-buffer limits — observable as "the app hangs on start" when persisted
   N/K is high.
 - **Route.** Above an N or segment-budget threshold, degrade gracefully: drop
   `edge_subsegments` toward 1, simplify or skip the local relaxation pass, and/or

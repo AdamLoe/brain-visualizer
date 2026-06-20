@@ -104,8 +104,8 @@ from the physics `last_spike` buffer. `integrate.wgsl` updates `last_spike` on
 every real firing for simulation/metrics, but only starts a new `visual_spike`
 packet when the previous visual packet has had enough ticks to traverse the
 generated axon fanout. This prevents high-frequency source neurons from
-constantly resetting the visible packet near the soma before it reaches all K
-outgoing leaves. In the default active/recent mode, compaction keeps only
+constantly resetting the visible packet near the soma before it reaches the
+generated outgoing leaves. In the default active/recent mode, compaction keeps only
 segments whose packet band is about to light, lit, or recently lit. In
 visible-until-arrival mode, every segment owned by a recent visual spike stays
 selected until the packet front has passed that segment endpoint; non-packet
