@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-13
+last_updated:  2026-06-20
 ---
 
 # Build and Deploy
@@ -132,6 +132,10 @@ The regular verification surfaces are:
 - `crates/brain-visualizer/tests/wgsl_target_determinism.rs` — proves `target_neuron` WGSL and Rust
   `connectivity::target()` produce bit-identical synapse targets for a real
   manifold grid under llvmpipe. The definitive cross-language determinism gate.
+- `crates/brain-visualizer/tests/wgsl_weight_determinism.rs` — proves
+  `synapse_weight` WGSL and Rust `connectivity::weight()` produce bit-identical
+  fixed-point E/I weights, and locks the `ConnectUniforms` field order used by
+  the scatter path.
 - `crates/brain-visualizer/tests/gpu_sim_dynamics.rs` — drives the GPU backend through an excitability
   sweep and asserts qualitative dynamics (non-zero spikes, seizure > focused,
   no NaN/overflow).

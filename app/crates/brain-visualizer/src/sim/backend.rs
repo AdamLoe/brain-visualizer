@@ -1,7 +1,7 @@
 //! The `SimBackend` interface and shared simulation types (BV4).
 
 /// Locked fixed-point current scale factor S = 2^12 (BV19).
-pub const FIXED_POINT_SCALE: i32 = 4096;
+pub use crate::connectivity::FIXED_POINT_SCALE;
 pub const PRODUCT_MAX_N: usize = 20_000;
 
 #[inline]

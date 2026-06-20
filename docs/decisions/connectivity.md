@@ -113,18 +113,24 @@
 - **Decision.** The Rust `hash32` and `mix_key` implementations carry inline
   golden-vector tests (`crates/brain-visualizer/src/connectivity/hash.rs` test module). The WGSL
   implementations are validated against the same vectors by
-  `crates/brain-visualizer/tests/wgsl_hash_determinism.rs` and `crates/brain-visualizer/tests/wgsl_target_determinism.rs`.
+  `crates/brain-visualizer/tests/wgsl_hash_determinism.rs`,
+  `crates/brain-visualizer/tests/wgsl_target_determinism.rs`, and
+  `crates/brain-visualizer/tests/wgsl_weight_determinism.rs`.
   The `target` gate runs with the heavy-tailed long-range branch **enabled**
   (non-zero `long_range_frac`/`max_reach`) and self-checks GPU `target_neuron`
   against the live Rust `target`, so the whole reach rule — not just the local
-  path — is covered. Neither `target` implementation (Rust / WGSL) may be
-  edited without updating the other and re-running this gate.
+  path — is covered. The weight gate self-checks GPU `synapse_weight` against
+  live Rust `weight()` for representative E/I source types and locks the shared
+  fixed-point scale/layout contract. Neither target nor weight implementation
+  (Rust / WGSL) may be edited without updating the other and re-running the
+  matching gate.
 - **Why.** Rust/WGSL determinism is load-bearing: the same seed must produce the
   same network in host-prepared data and GPU kernels. A silent constant drift
   would corrupt results without any visible crash.
 - **Applies to.** [`../architecture/connectivity.md`](../architecture/connectivity.md).
 - **Code anchors.** `crates/brain-visualizer/tests/wgsl_hash_determinism.rs`,
-  `crates/brain-visualizer/tests/wgsl_target_determinism.rs`.
+  `crates/brain-visualizer/tests/wgsl_target_determinism.rs`,
+  `crates/brain-visualizer/tests/wgsl_weight_determinism.rs`.
 
 ## See also
 

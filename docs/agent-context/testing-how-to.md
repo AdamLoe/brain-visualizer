@@ -12,10 +12,11 @@ itself is owned by
 Run `cargo` from `app/` (workspace root) and `npm` from `app/web/`.
 
 - **`cargo test`** — host unit tests plus the integration gates in `crates/brain-visualizer/tests/`:
-  the Rust/WGSL hash + target determinism gates
+  the Rust/WGSL hash + target + weight determinism gates
   (`crates/brain-visualizer/tests/wgsl_hash_determinism.rs`, `crates/brain-visualizer/tests/wgsl_target_determinism.rs`),
-  sim dynamics (`crates/brain-visualizer/tests/gpu_sim_dynamics.rs`), fixed-point
-  current overflow stress (`crates/brain-visualizer/tests/gpu_current_overflow.rs`),
+  `crates/brain-visualizer/tests/wgsl_weight_determinism.rs`), sim dynamics
+  (`crates/brain-visualizer/tests/gpu_sim_dynamics.rs`), fixed-point current
+  overflow stress (`crates/brain-visualizer/tests/gpu_current_overflow.rs`),
   and 24-bit tick wrap (`crates/brain-visualizer/tests/wgsl_tick_wrap.rs`). These
   run under **llvmpipe** in headless/WSL2 — no real GPU needed (a software Vulkan
   adapter validates the WGSL).

@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-15
+last_updated:  2026-06-20
 ---
 
 # Connectivity
@@ -31,7 +31,9 @@ path and the WGSL GPU path, producing bit-identical results.
   `crates/brain-visualizer/src/connectivity/mod.rs → salt`.
 - The per-tier out-degree knob K and the store-once vs regenerate tradeoff.
 - The determinism gate tests:
-  `crates/brain-visualizer/tests/wgsl_hash_determinism.rs`, `crates/brain-visualizer/tests/wgsl_target_determinism.rs`.
+  `crates/brain-visualizer/tests/wgsl_hash_determinism.rs`,
+  `crates/brain-visualizer/tests/wgsl_target_determinism.rs`,
+  `crates/brain-visualizer/tests/wgsl_weight_determinism.rs`.
 
 ## What it does NOT own
 
@@ -133,13 +135,16 @@ implementation in `crates/brain-visualizer/src/connectivity/hash.rs` and the WGS
 the shared Rust `target_with_cell` and the GPU WGSL `target_neuron`
 (`crates/brain-visualizer/src/sim/gpu/shaders/scatter.wgsl`).
 The determinism gate `crates/brain-visualizer/tests/wgsl_hash_determinism.rs`
-embeds the WGSL source and asserts the GPU output equals the Rust golden vectors;
+embeds the WGSL source and asserts the GPU output equals the Rust golden vectors.
 `crates/brain-visualizer/tests/wgsl_target_determinism.rs` does the same
 end-to-end for `target()` and **runs with the long-range tail enabled**
 (`LONG_RANGE_FRAC = 64`, `MAX_REACH = 6`) so the contract is proven with the
 branch live, self-checking GPU `target_neuron` against the live Rust `target`.
+`crates/brain-visualizer/tests/wgsl_weight_determinism.rs` compares the live WGSL
+`synapse_weight` helper against Rust `weight()` for representative E/I source
+types and locks the `ConnectUniforms` layout/scale contract used by both paths.
 No side (Rust / WGSL) may be edited without updating the other and re-running
-the gate.
+the matching gate.
 
 ## Per-tier K and store-once vs regenerate
 
@@ -154,13 +159,13 @@ regenerates targets by hashing, trading storage for deterministic compute.
 - `hash32` or `mix_key` constants change (must update both `hash.rs` and
   `hash.wgsl` and re-derive golden vectors).
 - `LOCAL_D` or `ANTERIOR_BIAS_NUM / ANTERIOR_BIAS_DEN` change.
-- The `target` or `weight` algorithm changes (edit Rust `target_with_cell` and
-  WGSL `target_neuron` together, then recheck
-  `crates/brain-visualizer/tests/wgsl_target_determinism.rs`).
+- The `target` or `weight` algorithm changes (edit Rust `target_with_cell` /
+  `weight` and WGSL `target_neuron` / `synapse_weight` together, then recheck
+  `crates/brain-visualizer/tests/wgsl_target_determinism.rs` and
+  `crates/brain-visualizer/tests/wgsl_weight_determinism.rs`).
 - The heavy-tailed reach rule, `REACH_FRAC_DEN`, the `REACH_COIN`/`REACH_OFFSET`
   salts, or the `ConnectUniforms` `long_range_frac` / `max_reach` fields change
-  (Rust `resources.rs` ↔ WGSL `scatter.wgsl` struct ↔ the inline copy in the
-  determinism test).
+  (Rust `resources.rs` ↔ WGSL `scatter.wgsl` struct ↔ the determinism tests).
 - `SpatialGrid` packing formula changes.
 - Per-tier K ranges or the store-once threshold change.
 - `target` / `target_with_cell` start returning a per-synapse long-range flag

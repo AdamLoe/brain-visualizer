@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-15
+last_updated:  2026-06-20
 ---
 
 # Data Model
@@ -24,7 +24,9 @@ All fields live in `wgpu::Buffer` handles managed by
   Rust and WGSL wrap behavior is gated by
   `crates/brain-visualizer/tests/wgsl_tick_wrap.rs`.
 - The fixed-point current scale `FIXED_POINT_SCALE = 4096`
-  (`crates/brain-visualizer/src/connectivity/mod.rs → FIXED_POINT_SCALE`).
+  (`crates/brain-visualizer/src/connectivity/mod.rs → FIXED_POINT_SCALE`);
+  `crates/brain-visualizer/src/sim/backend.rs → FIXED_POINT_SCALE` re-exports
+  that same authority for `SimConfig`.
 - The shared chunked-buffer split math used by large GPU storage fields —
   `crates/brain-visualizer/src/buffers.rs → ChunkLayout`.
 
@@ -78,7 +80,9 @@ and fails unless the observed current stays well below `i32::MAX`.
 
 Rust host tests and WGSL shaders use the same fixed-point scale and wrapping
 helpers so deterministic gates can compare the live GPU kernels against Rust
-golden behavior.
+golden behavior. `crates/brain-visualizer/tests/wgsl_weight_determinism.rs`
+locks the scale authority, `ConnectUniforms` field offsets, and live WGSL
+`synapse_weight` outputs against Rust `weight()`.
 
 ## Chunked storage layout
 
@@ -105,8 +109,9 @@ break the compact per-neuron budget.
   `integrate.wgsl`, `render_far.wgsl`, and any other shader that reads
   the masks).
 - The fixed-point scale S changes (update `FIXED_POINT_SCALE` in
-  `crates/brain-visualizer/src/connectivity/mod.rs` and `fixed_point_scale` in the uniform struct
-  in `integrate.wgsl`).
+  `crates/brain-visualizer/src/connectivity/mod.rs`, keep the backend re-export
+  in `crates/brain-visualizer/src/sim/backend.rs`, and update `fixed_point_scale`
+  consumers in `integrate.wgsl` / `scatter.wgsl`).
 - `MAX_CHUNK_BYTES` in `crates/brain-visualizer/src/buffers.rs` changes.
 
 ## See also

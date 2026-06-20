@@ -26,7 +26,10 @@
   replace the division with a multiply by a compile-time constant.
 - **Applies to.** [`../architecture/data-model.md`](../architecture/data-model.md).
 - **Code anchors.** `crates/brain-visualizer/src/connectivity/mod.rs → FIXED_POINT_SCALE`;
-  `crates/brain-visualizer/src/sim/gpu/shaders/integrate.wgsl → fixed_point_scale` (uniform field).
+  `crates/brain-visualizer/src/sim/backend.rs → FIXED_POINT_SCALE`;
+  `crates/brain-visualizer/src/sim/gpu/shaders/integrate.wgsl → fixed_point_scale`;
+  `crates/brain-visualizer/src/sim/gpu/shaders/scatter.wgsl → synapse_weight`;
+  `crates/brain-visualizer/tests/wgsl_weight_determinism.rs`.
 
 ## Fixed-point overflow policy
 

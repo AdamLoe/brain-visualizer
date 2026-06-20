@@ -30,7 +30,9 @@ Per-commit gates (full detail in
 [`../agent-context/testing-how-to.md`](../agent-context/testing-how-to.md)):
 
 - `cargo test` — host unit tests + the determinism gates
-  (`crates/brain-visualizer/tests/wgsl_hash_determinism.rs`, `crates/brain-visualizer/tests/wgsl_target_determinism.rs`) +
+  (`crates/brain-visualizer/tests/wgsl_hash_determinism.rs`,
+  `crates/brain-visualizer/tests/wgsl_target_determinism.rs`,
+  `crates/brain-visualizer/tests/wgsl_weight_determinism.rs`) +
   `crates/brain-visualizer/tests/gpu_sim_dynamics.rs`. Runs under llvmpipe headless.
 - `npm run typecheck` — `tsc --noEmit` over `web/`.
 - `npm test` — vitest unit tests.
@@ -45,7 +47,7 @@ Consult before declaring a commit done. "If you changed X → update Y."
 | `crates/brain-visualizer/src/manifold/*` (icosphere, gyrify, placement), `crates/brain-visualizer/src/manifold/regions.rs` | `architecture/manifold.md`, `decisions/manifold.md` |
 | `crates/brain-visualizer/src/sim/morphology.rs` (`MorphSegment` layout, the Prim-tree axon arbor in `generate`, `MorphSphereInstance` layout/`emit_soma_spheres`) | `architecture/manifold.md`, `architecture/gpu-rendering.md` (both morphology sub-passes), and the WGSL structs in `render_morphology.wgsl` |
 | `crates/brain-visualizer/src/buffers.rs`, the packed-word / mask helpers (`crates/brain-visualizer/src/sim/backend.rs`, `integrate.wgsl`) | `architecture/data-model.md`, `decisions/data-layout.md` |
-| `crates/brain-visualizer/src/connectivity/*` (hash, spatial grid, `target`/`weight`, the heavy-tailed `ReachParams`/`long_offset_component` long-range branch + `salt::REACH_*`), `hash.wgsl`, and the WGSL `target_neuron` twin in `scatter.wgsl` (`long_range_frac`/`max_reach` in `ConnectUniforms`) | `architecture/connectivity.md`, `decisions/connectivity.md`, regenerate/verify the determinism gates |
+| `crates/brain-visualizer/src/connectivity/*` (hash, spatial grid, `target`/`weight`, the heavy-tailed `ReachParams`/`long_offset_component` long-range branch + `salt::REACH_*`), `hash.wgsl`, and the WGSL `target_neuron` / `synapse_weight` twins in `scatter.wgsl` (`long_range_frac`/`max_reach`/`fixed_point_scale` in `ConnectUniforms`) | `architecture/connectivity.md`, `decisions/connectivity.md`, regenerate/verify the determinism gates |
 | `integrate.wgsl`, `scatter.wgsl`, `stimulate.wgsl` (LIF math, heterogeneity, weight norm, input modes) | `architecture/simulation.md`, `decisions/dynamics.md` |
 | `crates/brain-visualizer/src/sim/backend.rs` (`SimBackend`, `SimConfig`, `TickStats`), the `VisualSettings` Float32Array contract | `architecture/simulation.md`, `architecture/web-frontend.md`, `architecture/dev-panel.md` (the settings index) |
 | `crates/brain-visualizer/src/sim/gpu/mod.rs` (frame graph, pass ordering, readback) | `architecture/gpu-backend.md`; `architecture/gpu-rendering.md` if a render pass changes |

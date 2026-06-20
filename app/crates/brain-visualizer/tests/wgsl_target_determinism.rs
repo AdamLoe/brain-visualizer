@@ -10,10 +10,11 @@
 
 mod common;
 
-use brain_visualizer::connectivity::{target, ReachParams};
+use brain_visualizer::connectivity::{target, ReachParams, FIXED_POINT_SCALE};
 use brain_visualizer::manifold::{Manifold, ManifoldParams};
 use brain_visualizer::sim::backend::neuron_type_byte;
 use brain_visualizer::sim::gpu::pipelines::{HASH_WGSL, SCATTER_WGSL};
+use brain_visualizer::sim::gpu::resources::ConnectUniforms;
 use wgpu::util::DeviceExt;
 
 const N: usize = 4_000;
@@ -48,19 +49,6 @@ fn check(@builtin(global_invocation_id) gid: vec3<u32>) {
 struct Pair {
     i: u32,
     j: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct ConnectUniforms {
-    n: u32,
-    k: u32,
-    fixed_point_scale: f32,
-    seed_lo: u32,
-    grid_dim: u32,
-    long_range_frac: u32,
-    max_reach: u32,
-    _pad: [u32; 1],
 }
 
 #[test]
@@ -150,7 +138,7 @@ async fn run() {
     let cu = ConnectUniforms {
         n: N as u32,
         k: K,
-        fixed_point_scale: 4096.0,
+        fixed_point_scale: FIXED_POINT_SCALE as f32,
         seed_lo: SEED,
         grid_dim: grid.dim,
         long_range_frac: LONG_RANGE_FRAC,
