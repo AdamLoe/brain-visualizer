@@ -37,6 +37,19 @@
   [`../architecture/cpu-backend.md`](../architecture/cpu-backend.md).
 - **Code anchors.** `web/src/core/types.ts → loadConfig`.
 
+## Unsupported WebGPU fails closed with visitor guidance
+
+- **Decision.** Browsers without `navigator.gpu`, or devices that fail WebGPU
+  startup, keep the startup overlay visible with visitor-facing WebGPU guidance
+  and do not attempt a CPU/WebGL fallback.
+- **Why.** The product has one honest runtime path. A clear unsupported state is
+  better than reviving a second backend or exposing raw adapter diagnostics as
+  the page-level message.
+- **Applies to.** [`../architecture/web-frontend.md`](../architecture/web-frontend.md),
+  [`../architecture/cpu-backend.md`](../architecture/cpu-backend.md).
+- **Code anchors.** `web/src/boot-failure.ts → hasWebGpuSupport, webGpuUnsupportedStage`;
+  `web/src/main.ts → startGpuBackend`.
+
 ## Same-seed backend switching is no longer a runtime contract
 
 - **Decision.** Backend switching, parity examples for a second runtime, and threaded-WASM

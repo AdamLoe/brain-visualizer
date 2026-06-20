@@ -94,12 +94,14 @@
 - **Code anchors.** `web/src/ui/controls.ts → BRAIN_STATES`, `tickExcitability`,
   `setExcitabilityTarget`.
 
-## Scaling is an explicit, persisted user action — not automatic
+## Scaling is explicit or mobile-capped — not automatic
 
-- **Decision.** N (and the tier/backend/speed/excitability that go with it) change
-  only when the user acts — picking a tier or editing N/K in the dev panel — and
-  the chosen config is persisted to localStorage so a reload restores the
-  last-used network. There is no automatic, frame-time-driven N change.
+- **Decision.** N (and the tier/backend/speed/excitability that go with it)
+  changes only when the user acts — picking a tier or editing N/K in the dev
+  panel — or when mobile boot clamps a saved desktop-scale config down to no
+  heavier than `DEFAULT_CONFIG`. The chosen bounded config is persisted to
+  localStorage so a reload restores the last-used network. There is no automatic,
+  frame-time-driven N change.
 - **Why.** A runtime auto-scaler was tried and pulled (see
   [`scaling.md`](scaling.md)); fixing N until the user decides keeps the
   experience predictable and the morphology target stable. Persisting the choice
@@ -107,6 +109,7 @@
 - **Applies to.** [`../architecture/web-frontend.md`](../architecture/web-frontend.md),
   [`../architecture/scaling.md`](../architecture/scaling.md).
 - **Code anchors.** `web/src/core/types.ts → CONFIG_LS_KEY, loadConfig, saveConfig`;
+  `web/src/core/mobile-config.ts → applyMobileConfig`;
   `web/src/ui/controls.ts → setTier, setSpeed`.
 
 ## See also

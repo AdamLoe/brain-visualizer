@@ -110,9 +110,11 @@ any heavy work. The overlay is intentionally product-facing: title, progress,
 percent, and current stage only. `web/src/main.ts → updateStartupOverlay` accepts
 `{ status?, stage?, progress? }`, updates `window.__bvStartup`, and keeps
 `__bvFrameCounter` / `__bvStartup.status` available as E2E hooks. On success the
-overlay fades out after the first GPU frame; on backend failure it stays visible
-with the error in the stage row and `failed` in the percent slot. Detailed timing
-state lives in `web/src/boot-timings.ts`, not in overlay DOM.
+overlay fades out after the first GPU frame. On missing WebGPU support or backend
+startup failure it stays visible with visitor-facing WebGPU guidance from
+`web/src/boot-failure.ts`, `failed` in the percent slot, and raw diagnostics only
+in the console. Detailed timing state lives in `web/src/boot-timings.ts`, not in
+overlay DOM.
 
 `web/src/main.ts → boot` starts a lightweight startup rAF before `init()` so the
 frame counter advances while wasm and backend work are pending. GPU startup then
@@ -248,8 +250,11 @@ counters are not persisted.
 Wiring:
 
 `web/src/main.ts → boot` seeds `config` from `loadConfig()`, applies/saves the
-mobile profile override, and wires mutation handlers to `saveConfig`. The
-dev-panel excitability handler saves `config.excitability`; at boot,
+mobile profile override through `web/src/core/mobile-config.ts → applyMobileConfig`,
+and wires mutation handlers to `saveConfig`. The mobile profile lowers render DPR
+and disables cursor stimulation without increasing `n` above
+`web/src/core/types.ts → DEFAULT_CONFIG`. The dev-panel excitability handler
+saves `config.excitability`; at boot,
 `web/src/ui/controls.ts → seedExcitability` primes both the current and target
 of the excitability lerp so a restored value applies immediately. `setBrainState`
 and `scalerDecide` are retained compatibility paths, not active DOM controls.

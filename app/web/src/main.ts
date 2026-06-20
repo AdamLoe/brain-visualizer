@@ -50,6 +50,12 @@ import {
 import { getSettings, parseMetrics, subscribe, toFloat32Array } from "./core/settings";
 import { loadMorphConfig, morphConfigToJson } from "./core/morph-config";
 import { DevPanel } from "./ui/dev-panel"; // V2 Phase A / Phase B
+import {
+  hasWebGpuSupport,
+  webGpuStartupFailureStage,
+  webGpuUnsupportedStage,
+} from "./boot-failure";
+import { applyMobileConfig } from "./core/mobile-config";
 
 // v0.3.1: morphology-config WASM entry point. The Rust agent adds
 // `set_morphology_config(json: &str)` to WasmGpuBackend in parallel; until the
@@ -326,8 +332,8 @@ async function boot(): Promise<void> {
   markPhaseA("Check browser isolation");
   updateStartupOverlay({ stage: "Loading saved configuration...", progress: 28 });
 
-  // 3. Mobile detection — apply full mobile profile (Phase 7 / BV spec):
-  //    Low tier, 0.75×DPR render res, no stim.
+  // 3. Mobile detection: lower DPR and disable stim on phones, without
+  // increasing the accepted default neuron count.
   const mobile = isMobile();
   // 0.1.1: restore the user's last-used config from localStorage (n/k/tier/
   // backend/speed/excitability). Stale CPU backend saves normalize to GPU in
@@ -337,13 +343,9 @@ async function boot(): Promise<void> {
   // restores the user's last brain-state/excitability (no ramp from default).
   seedExcitability(config.excitability);
   if (mobile) {
-    config.tier = "low";
-    config.n    = 10_000;  // Mobile profile remains below the 20k product cap.
-    config.k    = 16;
-    config.backend = "gpu";
-    config.regionAssignmentMode = "hash-random";
-    console.log("[main] mobile detected → Low tier (N=10k K=16, 0.75×DPR)");
-    saveConfig(config); // persist the mobile-forced profile so it survives reload
+    applyMobileConfig(config);
+    console.log(`[main] mobile detected -> ${config.tier} tier (N=${config.n} K=${config.k}, 0.75xDPR)`);
+    saveConfig(config);
   }
   markPhaseA("Load saved configuration");
   updateStartupOverlay({
@@ -491,6 +493,17 @@ async function boot(): Promise<void> {
    */
   async function startGpuBackend(): Promise<void> {
     const backendStartedAt = performance.now();
+    if (!hasWebGpuSupport(navigator)) {
+      console.error("[main] WebGPU unavailable: navigator.gpu is missing");
+      showToast("WebGPU is required for this experience");
+      updateStartupOverlay({
+        status: "failed",
+        stage: webGpuUnsupportedStage(),
+        progress: 100,
+      });
+      gpuBackend = null;
+      return;
+    }
     // Boot-load overhaul: the staged-startup orchestration lives in
     // `boot-sequencer.ts` (runGpuStartup) so the real runStage / onSubStage /
     // onProgress wiring can be exercised in a GPU-free integration test. The
@@ -574,11 +587,10 @@ async function boot(): Promise<void> {
     if (result.error !== null) {
       const e = result.error;
       console.error("[main] GPU backend creation failed:", e);
-      showToast("WebGPU init failed — check browser support");
-      const message = e instanceof Error ? e.message : String(e);
+      showToast("WebGPU startup failed");
       updateStartupOverlay({
         status: "failed",
-        stage: `WebGPU startup failed: ${message}`,
+        stage: webGpuStartupFailureStage(),
         progress: 100,
       });
       gpuBackend = null;

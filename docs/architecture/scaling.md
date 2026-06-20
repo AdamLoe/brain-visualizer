@@ -1,15 +1,16 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-15
+last_updated:  2026-06-20
 ---
 
 # Scaling
 
 Neuron count (N) and synaptic out-degree (K) are fixed at startup and changed
 **only** by deliberate rebuild actions. Today that means direct N/K edits in the
-dev panel, the mobile low-tier override in `web/src/main.ts`, or legacy preset
-calls through `web/src/ui/controls.ts → setTier`. There is no runtime
+dev panel, the mobile profile clamp in
+`web/src/core/mobile-config.ts → applyMobileConfig`, or legacy preset calls
+through `web/src/ui/controls.ts → setTier`. There is no runtime
 auto-scaler in the rAF loop, and the UI never silently changes scale after a
 network is built.
 
@@ -55,6 +56,9 @@ The dormant scaler proposal ranges in `crates/brain-visualizer/src/sim/scaler.rs
 TierRange::for_tier` also stay under that cap. `TIER_PRESETS` fixes K=16 across
 its web preset labels; the Rust `TierRange` table still carries wider K ranges
 for its dormant Low/Balanced/Max proposal math.
+Mobile boot uses the same accepted default as a ceiling: `applyMobileConfig`
+preserves lighter persisted `n` values but never raises a phone to a count above
+`DEFAULT_CONFIG.n`.
 
 **Active/recent rendering makes high-N affordable.** Morphology tube render cost
 no longer scales with total generated segment count. A GPU compaction pass selects

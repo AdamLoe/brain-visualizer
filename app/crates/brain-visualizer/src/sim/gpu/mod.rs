@@ -1496,7 +1496,7 @@ impl GpuBackend {
             &state.manifold.vertices,
             &state.manifold.faces,
             state.config.n as u32,
-            state.manifold.spatial_grid.dim,
+            &state.manifold.spatial_grid,
         );
     }
 

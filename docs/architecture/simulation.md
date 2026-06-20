@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-15
+last_updated:  2026-06-20
 ---
 
 # Simulation model
@@ -121,7 +121,11 @@ any of these; association/output neurons are driven purely recurrently.
 start (`stimulate.wgsl`). It finds neurons inside the sphere via a bounded
 brute-force over the spatial-grid CSR cells overlapping the sphere's bounding box
 — cheap and exact, no per-neuron cell-id upload. The bump is fixed-point and adds
-to the same accumulator scatter writes.
+to the same accumulator scatter writes. The stimulation grid uniform uploads the
+actual `SpatialGrid` minimum corner and cell size
+(`crates/brain-visualizer/src/sim/gpu/resources.rs → StimGridUniform`), so
+`stimulate.wgsl → world_to_cell` must use the same bounds that built the CSR
+rather than hard-coded world extents.
 
 ## The boundary contract (wasm↔JS)
 

@@ -299,6 +299,29 @@ pub struct StimUniform {
     pub _pad: [u32; 2],
 }
 
+/// Grid lookup constants for `stimulate.wgsl`; matches `GridUniforms`.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct StimGridUniform {
+    pub grid_min: [f32; 3],
+    pub cell_size: f32,
+    pub grid_dim: u32,
+    pub n: u32,
+    pub _pad: [u32; 2],
+}
+
+impl StimGridUniform {
+    pub fn from_grid(grid: &SpatialGrid, n: u32) -> Self {
+        Self {
+            grid_min: grid.min,
+            cell_size: grid.cell_size,
+            grid_dim: grid.dim,
+            n,
+            _pad: [0; 2],
+        }
+    }
+}
+
 /// Render far-LOD uniform — layout must match `Uniforms` in render_far.wgsl.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -991,7 +1014,7 @@ impl GpuResources {
         manifold_vertices: &[[f32; 3]],
         manifold_faces: &[[u32; 3]],
         n: u32,
-        grid_dim: u32,
+        grid: &SpatialGrid,
     ) {
         use wgpu::util::DeviceExt;
 
@@ -1036,10 +1059,10 @@ impl GpuResources {
             mapped_at_creation: false,
         });
 
-        // Grid uniform: static (grid_dim, n). Written once.
+        let stim_grid = StimGridUniform::from_grid(grid, n);
         let stim_grid_uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("stim_grid_uniform"),
-            contents: bytemuck::cast_slice(&[grid_dim, n, 0u32, 0u32]),
+            contents: bytemuck::bytes_of(&stim_grid),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 

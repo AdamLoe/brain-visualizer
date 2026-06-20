@@ -6,9 +6,8 @@
 //
 // Spatial lookup strategy: bounded brute-force over the spatial grid CSR.
 // We query only cells overlapping the bounding box of the sphere, limiting
-// work to a small neighborhood (radius ~0.15 world units, cell_size ~0.125 at
-// dim=16 → ~(2*radius/cell_size+1)^3 ≈ 27 cells, each with ~N/4096 neurons).
-// This is O(27 * (N/4096)) ≈ O(N/150) per dispatch — cheap and correct.
+// work to a small neighborhood (radius ~0.15 world units).
+// This stays proportional to the queried grid neighborhood, not full N.
 // No separate per-neuron cell-id upload needed: we use the existing grid CSR.
 
 struct StimUniforms {
@@ -20,6 +19,8 @@ struct StimUniforms {
 }
 
 struct GridUniforms {
+    grid_min: vec3<f32>,
+    cell_size: f32,
     grid_dim: u32,
     n: u32,
     _pad: vec2<u32>,
@@ -35,15 +36,9 @@ struct GridUniforms {
 @group(0) @binding(7) var<storage, read>    cell_neurons: array<u32>;
 @group(0) @binding(8) var<storage, read_write> i_current: array<atomic<i32>>;
 
-// World-space bounding box of the grid (must match SpatialGrid build).
-// Neurons lie near the unit sphere surface (r ~ 0.7..1.3 after gyrification).
-// The grid covers [-1.5, 1.5]^3 (a safe margin around the folded surface).
-const GRID_MIN: f32 = -1.5;
-const GRID_MAX: f32 =  1.5;
-
-fn world_to_cell(p: f32, dim: u32) -> i32 {
-    let frac = (p - GRID_MIN) / (GRID_MAX - GRID_MIN);
-    return i32(clamp(frac * f32(dim), 0.0, f32(dim) - 1.0));
+fn world_to_cell(p: f32, axis: u32, dim: u32) -> i32 {
+    let coord = floor((p - grid_u.grid_min[axis]) / grid_u.cell_size);
+    return i32(clamp(coord, 0.0, f32(dim) - 1.0));
 }
 
 fn cell_id(cx: i32, cy: i32, cz: i32, dim: u32) -> u32 {
@@ -60,12 +55,12 @@ fn stimulate() {
     let r   = stim.radius;
 
     // Bounding box in cell coordinates.
-    let cx0 = max(world_to_cell(stim.pos.x - r, dim), 0);
-    let cy0 = max(world_to_cell(stim.pos.y - r, dim), 0);
-    let cz0 = max(world_to_cell(stim.pos.z - r, dim), 0);
-    let cx1 = min(world_to_cell(stim.pos.x + r, dim), i32(dim) - 1);
-    let cy1 = min(world_to_cell(stim.pos.y + r, dim), i32(dim) - 1);
-    let cz1 = min(world_to_cell(stim.pos.z + r, dim), i32(dim) - 1);
+    let cx0 = max(world_to_cell(stim.pos.x - r, 0u, dim), 0);
+    let cy0 = max(world_to_cell(stim.pos.y - r, 1u, dim), 0);
+    let cz0 = max(world_to_cell(stim.pos.z - r, 2u, dim), 0);
+    let cx1 = min(world_to_cell(stim.pos.x + r, 0u, dim), i32(dim) - 1);
+    let cy1 = min(world_to_cell(stim.pos.y + r, 1u, dim), i32(dim) - 1);
+    let cz1 = min(world_to_cell(stim.pos.z + r, 2u, dim), i32(dim) - 1);
 
     let r2 = r * r;
     let n  = grid_u.n;
