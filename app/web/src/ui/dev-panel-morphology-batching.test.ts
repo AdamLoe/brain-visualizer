@@ -211,7 +211,7 @@ describe("DevPanel morphology batching", () => {
       expect(rebuilds).toHaveLength(1);
       const rebuilt = JSON.parse(rebuilds[0]) as MorphologyConfig;
       expect(rebuilt.generator.baseRadius).toBe(0.008);
-      expect(loadMorphConfig().generator.baseRadius).toBe(0.008);
+      expect(loadMorphConfig().generator.baseRadius).toBe(DEFAULT_MORPH_CONFIG.generator.baseRadius);
       panel.destroy();
     });
   });

@@ -280,13 +280,15 @@ storage readout shows the app-owned keys,
 including `bv2_morph_v2`.
 
 **Rollback on failed structural apply:** structural settings and morphology
-generator changes may temporarily update controls/localStorage while a
-worker-prepared payload is being built. `web/src/main.ts →
-rollbackStructuralState` restores the last applied `VisualizerSettings`,
-`AppConfig`, and morphology JSON if worker preparation or
-`apply_prepared_network` fails. The dev panel syncs controls back through
-`_syncSliders`, `setInitialValues`, and `rollbackMorphologyConfig`, so reloads do
-not silently trust an unproven structural state.
+generator/render-quality changes may temporarily update controls while a
+worker-prepared payload or morphology rebuild is being applied, but app-owned
+localStorage stays on the last applied structural state until the backend apply
+succeeds. `web/src/main.ts → rollbackStructuralState` restores the last applied
+`VisualizerSettings`, `AppConfig`, and morphology JSON if worker preparation,
+`apply_prepared_network`, or morphology apply fails. The dev panel syncs controls
+back through `_syncSliders`, `setInitialValues`, and
+`rollbackMorphologyConfig`, so reloads do not silently trust an unproven
+structural state.
 
 ## Float32Array index contract (corruption risk)
 

@@ -59,9 +59,10 @@
   prototype is an `AppConfig` dev-panel checkbox, not a `VisualizerSettings`
   field, and also rebuilds through the worker-prepared network path. The old
   brain-reset Apply API and pending UI are removed; structural changes go
-  through the network/morphology rebuild controls. Failed structural preparation
-  or application rolls controls and app-owned localStorage back to the last
-  applied settings/config/morphology state.
+  through the network/morphology rebuild controls. Unproven structural values
+  stay out of app-owned localStorage until backend apply succeeds, and failed
+  structural preparation or application rolls controls back to the last applied
+  settings/config/morphology state.
 - **Why.** `heterogeneity`, `weightNormalization`, and `inputMode` are `"live"`
   because the integrate uniform is read from GPU memory every tick rather than
   cached at init. Reach knobs change target ids and generated geometry,

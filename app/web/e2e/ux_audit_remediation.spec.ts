@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const REQUIRE_WEBGPU_VISUAL = process.env.BV_REQUIRE_WEBGPU_VISUAL === "1";
+const REQUIRE_WEBGPU_VISUAL = process.env.BV_REQUIRE_WEBGPU_VISUAL !== "0";
 
 interface AdapterState {
   gpuPresent: boolean;
@@ -161,13 +161,13 @@ test("BV-UX-AUDIT-001/006 real WebGPU boot screenshots are visibly nonblank on d
   expect(consoleErrors, `console/page errors during boot/render:\n${consoleErrors.join("\n")}`).toHaveLength(0);
 });
 
-test("BV-UX-AUDIT-002/007 forced structural rollback restores controls and app-owned storage", async ({
+test("BV-UX-AUDIT-002/007 prepared-network failure rolls back controls, storage, and reload state", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1000, height: 720 });
   await page.goto("/", { waitUntil: "networkidle", timeout: 30_000 });
   await page.waitForFunction(
-    () => typeof (window as unknown as { __bvForceStructuralRollback?: unknown }).__bvForceStructuralRollback === "function",
+    () => typeof (window as unknown as { __bvFailLatestPreparedNetworkForTesting?: unknown }).__bvFailLatestPreparedNetworkForTesting === "function",
     { timeout: 20_000 },
   );
   await page.waitForFunction(
@@ -190,10 +190,12 @@ test("BV-UX-AUDIT-002/007 forced structural rollback restores controls and app-o
 
   await setDevPanelSlider(page, "Long-range fraction", "0.42");
   await expect(page.locator('#dev-panel input[aria-label="Long-range fraction"]')).toHaveValue("0.42");
+  const pendingPersisted = await page.evaluate(() => JSON.parse(localStorage.getItem("bv2_settings_v2") ?? "{}"));
+  expect(pendingPersisted.dev?.longRangeReachFrac).not.toBe(0.42);
 
   await page.evaluate(() => {
-    (window as unknown as { __bvForceStructuralRollback: (reason?: string) => void })
-      .__bvForceStructuralRollback("BV-UX-AUDIT-002 forced failure");
+    (window as unknown as { __bvFailLatestPreparedNetworkForTesting: (message?: string) => void })
+      .__bvFailLatestPreparedNetworkForTesting("BV-UX-AUDIT-002 forced prepared-network failure");
   });
 
   await expect(page.locator('#dev-panel input[aria-label="Long-range fraction"]')).toHaveValue("0.14");
@@ -204,19 +206,22 @@ test("BV-UX-AUDIT-002/007 forced structural rollback restores controls and app-o
   );
   expect(rollback?.reason).toContain("BV-UX-AUDIT-002");
 
-  await page.locator('#dev-panel .dp-tab[data-tab-id="morphology"]').click();
-  await setDevPanelSlider(page, "Dendrite twigs", "2");
-  await page.locator("#dev-panel .dp-action-btn", { hasText: "Rebuild Morphology" }).click();
-  await expect(page.locator('#dev-panel input[aria-label="Dendrite twigs"]')).toHaveValue("2");
-
+  await page.reload({ waitUntil: "networkidle", timeout: 30_000 });
+  await page.waitForFunction(
+    () => typeof (window as unknown as { __bvFailLatestPreparedNetworkForTesting?: unknown }).__bvFailLatestPreparedNetworkForTesting === "function",
+    { timeout: 20_000 },
+  );
   await page.evaluate(() => {
-    (window as unknown as { __bvForceStructuralRollback: (reason?: string) => void })
-      .__bvForceStructuralRollback("BV-UX-AUDIT-007 forced morphology failure");
+    const overlay = document.getElementById("startup-overlay");
+    overlay?.classList.add("ready");
+    overlay?.classList.remove("failed");
+    if (overlay instanceof HTMLElement) overlay.style.pointerEvents = "none";
   });
-
-  await expect(page.locator('#dev-panel input[aria-label="Dendrite twigs"]')).toHaveValue("1");
-  const morphPersisted = await page.evaluate(() => JSON.parse(localStorage.getItem("bv2_morph_v2") ?? "{}"));
-  expect(morphPersisted.config?.generator?.dendriteTwigCount).toBe(1);
+  await page.locator("#settings-toggle").click();
+  await page.locator('#dev-panel .dp-tab[data-tab-id="network"]').click();
+  await expect(page.locator('#dev-panel input[aria-label="Long-range fraction"]')).toHaveValue("0.14");
+  const reloadedPersisted = await page.evaluate(() => JSON.parse(localStorage.getItem("bv2_settings_v2") ?? "{}"));
+  expect(reloadedPersisted.dev?.longRangeReachFrac).toBe(0.14);
 });
 
 test("BV-UX-AUDIT-003 startup failure actions are readable at narrow width and reset storage", async ({

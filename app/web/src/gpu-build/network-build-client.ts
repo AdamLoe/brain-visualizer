@@ -64,6 +64,16 @@ export class NetworkBuildClient {
     return this.status;
   }
 
+  failLatestForTesting(message: string): void {
+    if (this.latestRequested <= 0) return;
+    this.readyPayload = null;
+    this.status = {
+      kind: "failed",
+      sequence: this.latestRequested,
+      message,
+    };
+  }
+
   /**
    * Subscribe to real payload-build progress for the latest request. Additive:
    * existing consumers that never call this are unaffected. Only ticks whose

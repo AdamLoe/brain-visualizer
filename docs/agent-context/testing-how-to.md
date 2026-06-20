@@ -46,6 +46,10 @@ Run `cargo` from `app/` (workspace root) and `npm` from `app/web/`.
 - **`npm run build`** — production-equivalent `wasm-pack build` + TypeScript check +
   Vite bundle. This is the shipping static-bundle gate, not just a dev-server check.
 - **`npm run test:e2e`** — Playwright e2e (`web/e2e/*.spec.ts`). Needs a browser.
+  The UX audit visual-proof spec requires a real WebGPU adapter by default and
+  fails with an explicit adapter-unavailable blocker when Chromium only exposes
+  fallback/non-adapter WebGPU; set `BV_REQUIRE_WEBGPU_VISUAL=0` only for local
+  non-strict verification of the rest of that spec.
 - **`npm run test:e2e:smoke`** — focused real-hardware/browser smoke. Writes a
   JSON artifact and screenshot with adapter availability, startup timings,
   nonblank canvas evidence, and frame-health samples; `BV_REQUIRE_WEBGPU=1`

@@ -1685,7 +1685,6 @@ export class DevPanel {
 
   private _applyMorphPendingConfig(): void {
     this.morphConfig = structuredClone(this.morphPending);
-    saveMorphConfig(this.morphConfig);
     this.morphHandlers?.onMorphRebuild(JSON.stringify(this.morphConfig));
   }
 
@@ -1839,7 +1838,6 @@ export class DevPanel {
       this.morphConfig = cloneMorphologyConfig(preset.morphologyConfig);
       this.morphPending = cloneMorphologyConfig(preset.morphologyConfig);
       this._syncMorphRows();
-      saveMorphConfig(this.morphConfig);
       this.morphHandlers?.onMorphRebuild(JSON.stringify(this.morphConfig));
     }
 
@@ -1913,7 +1911,7 @@ export class DevPanel {
       integer: spec.decimals === 0,
     }, (value) => {
       // setSetting triggers the subscribe callback in main.ts -> pendingSettingsPush.
-      setSetting(spec.key, value as never);
+      setSetting(spec.key, value as never, { persist: impact === "live" });
     }, !spec.changeOnly);
 
     this.sliderElements.set(spec.key, {

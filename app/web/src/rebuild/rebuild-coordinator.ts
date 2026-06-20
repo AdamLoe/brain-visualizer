@@ -31,7 +31,7 @@ export type RebuildStep =
   | { kind: "idle" }
   | { kind: "network"; request: NetworkRebuildRequest; sequence: number }
   | { kind: "settings"; sequence: number }
-  | { kind: "morphology"; sequence: number };
+  | { kind: "morphology"; sequence: number; json: string };
 
 export class RebuildCoordinator {
   private pendingNetwork: (NetworkRebuildRequest & { sequence: number }) | null = null;
@@ -95,7 +95,7 @@ export class RebuildCoordinator {
       this.pendingMorphConfig = null;
       this.needsMorphRefresh = false;
       backend.applyMorphConfig(json);
-      return { kind: "morphology", sequence: this.nextSequence - 1 };
+      return { kind: "morphology", sequence: this.nextSequence - 1, json };
     }
 
     return { kind: "idle" };

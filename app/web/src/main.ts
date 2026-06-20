@@ -47,8 +47,8 @@ import {
   type BackendKind,
   type RegionAssignmentMode,
 } from "./core/types";
-import { getSettings, parseMetrics, replaceSettings, subscribe, toFloat32Array } from "./core/settings";
-import { loadMorphConfig, morphConfigToJson } from "./core/morph-config";
+import { getSettings, parseMetrics, replaceSettings, saveSettings, subscribe, toFloat32Array } from "./core/settings";
+import { loadMorphConfig, morphConfigToJson, saveMorphConfig, type MorphologyConfig } from "./core/morph-config";
 import { DevPanel } from "./ui/dev-panel"; // V2 Phase A / Phase B
 import {
   diagnosticsPolicyForViewport,
@@ -130,6 +130,7 @@ interface BrainVisualizerTestHooks {
   __bvDiagnosticsPolicy?: "desktop-supported" | "unsupported-mobile";
   __bvRollbackState?: { reason: string; settings: Readonly<ReturnType<typeof getSettings>>; config: AppConfig };
   __bvForceStructuralRollback?: (reason?: string) => void;
+  __bvFailLatestPreparedNetworkForTesting?: (message?: string) => void;
   __bvRequestPreparedNetworkSmoke?: (request: {
     n?: number;
     k?: number;
@@ -528,6 +529,10 @@ async function boot(): Promise<void> {
 
   (window as unknown as BrainVisualizerTestHooks).__bvOnNetworkBuildProgress = (listener) => {
     networkBuildClient.onProgress(listener);
+  };
+  (window as unknown as BrainVisualizerTestHooks).__bvFailLatestPreparedNetworkForTesting = (message = "forced prepared-network failure") => {
+    networkBuildClient.failLatestForTesting(message);
+    publishNetworkBuildStatus();
   };
 
   /**
@@ -963,6 +968,8 @@ async function boot(): Promise<void> {
     appliedMorphConfigJson = payload.morphConfigJson;
     lastSettingsSnapshot = getSettings();
     lastAppliedConfig = { ...config };
+    saveSettings({ ...lastSettingsSnapshot });
+    saveAppliedMorphConfigJson(appliedMorphConfigJson);
     saveConfig(config);
     rebuildCoordinator.requestSettingsPush();
     rebuildCoordinator.requestMorphConfig(morphConfigToJson(loadMorphConfig()));
@@ -970,6 +977,14 @@ async function boot(): Promise<void> {
     console.log(
       `[main] prepared network applied: seq=${payload.sequence} n=${payload.n} k=${payload.k} seed=0x${payload.seed.toString(16)} segments=${payload.segmentPathLen.length}`,
     );
+  }
+
+  function saveAppliedMorphConfigJson(json: string): void {
+    try {
+      saveMorphConfig(JSON.parse(json) as MorphologyConfig);
+    } catch {
+      console.warn("[main] applied morphology config was not valid JSON; localStorage not updated");
+    }
   }
 
   // UX round 2: time-based ticks/sec scheduling (replaces frame-count multiplier).
@@ -1025,30 +1040,40 @@ async function boot(): Promise<void> {
       showToast(`Network prepare failed: ${networkBuildStatus.message}`);
     }
     if (gpuBackend && rebuildCoordinator.hasPendingWork()) {
-      const rebuildStep = rebuildCoordinator.applyNext({
-        reinitialize(n, k, seed, iExt, synapticScale): void {
-          gpuBackend!.reinitialize(n, k, seed, iExt, synapticScale);
-        },
-        updateSettings(settings): void {
-          gpuBackend!.update_settings(settings);
-        },
-        applyMorphConfig(json): void {
-          (gpuBackend! as unknown as MorphCapableBackend).set_morphology_config(json);
-        },
-      }, {
-        visualSettings: () => toFloat32Array(getSettings()),
-        simulationSettings: () => {
-          const settings = getSettings();
-          return {
-            iExt: settings.iExt,
-            synapticScale: settings.synapticScale,
-          };
-        },
-        morphConfigJson: () => morphConfigToJson(loadMorphConfig()),
-      });
-      if (rebuildStep.kind === "network") {
-        const request = rebuildStep.request;
-        console.log(`[main] network rebuild: n=${request.n} k=${request.k} seed=0x${request.seed.toString(16)}`);
+      try {
+        const rebuildStep = rebuildCoordinator.applyNext({
+          reinitialize(n, k, seed, iExt, synapticScale): void {
+            gpuBackend!.reinitialize(n, k, seed, iExt, synapticScale);
+          },
+          updateSettings(settings): void {
+            gpuBackend!.update_settings(settings);
+          },
+          applyMorphConfig(json): void {
+            (gpuBackend! as unknown as MorphCapableBackend).set_morphology_config(json);
+          },
+        }, {
+          visualSettings: () => toFloat32Array(getSettings()),
+          simulationSettings: () => {
+            const settings = getSettings();
+            return {
+              iExt: settings.iExt,
+              synapticScale: settings.synapticScale,
+            };
+          },
+          morphConfigJson: () => morphConfigToJson(loadMorphConfig()),
+        });
+        if (rebuildStep.kind === "network") {
+          const request = rebuildStep.request;
+          console.log(`[main] network rebuild: n=${request.n} k=${request.k} seed=0x${request.seed.toString(16)}`);
+        } else if (rebuildStep.kind === "morphology") {
+          appliedMorphConfigJson = rebuildStep.json;
+          saveAppliedMorphConfigJson(rebuildStep.json);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error("[main] rebuild apply failed:", error);
+        rollbackStructuralState(`rebuild failed: ${message}`);
+        showToast(`Rebuild failed: ${message}`);
       }
     }
     if (pendingStim !== null) {

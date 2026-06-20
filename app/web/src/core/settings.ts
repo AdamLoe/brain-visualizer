@@ -273,13 +273,14 @@ export function getSettings(): Readonly<VisualizerSettings> {
   return current;
 }
 
-/** Update one setting, persist, and notify all subscribers. */
+/** Update one setting, optionally persist, and notify all subscribers. */
 export function setSetting<K extends keyof VisualizerSettings>(
   key: K,
   value: VisualizerSettings[K],
+  opts: { persist?: boolean } = {},
 ): void {
   current = normalizeVisualSettings({ ...current, [key]: value });
-  saveSettings(current);
+  if (opts.persist !== false) saveSettings(current);
   notify();
 }
 
