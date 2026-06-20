@@ -38,6 +38,20 @@ canvas; the overlay never intercepts input.
 (`web/src/main.ts`) **only when `isOpen()` returns true** — no DOM work is done
 when the panel is hidden.
 
+The drawer is a desktop diagnostics surface only. `web/src/main.ts` does not
+construct `DevPanel` when `isMobile()` is true and hides the gear button; mobile
+diagnostics are intentionally unsupported until a future design owns that
+workflow. Screenshot review of diagnostics uses desktop viewports.
+
+Open/close focus is deterministic: `DevPanel._setOpen` remembers the opener,
+focuses the close button after opening, and returns focus to the opener after
+close. The tab strip is a real `tablist`/`tab`/`tabpanel` set with roving
+`tabIndex`, `aria-selected`, and Arrow/Home/End keyboard handling. Tooltips are
+still body-appended, but `_attachTip` also makes them focus-readable through
+`focusin`/`focusout`, so keyboard users can discover the same help as hover
+users. Sliders, number inputs, selects, reset buttons, and the public gear/pause
+buttons carry explicit accessible names.
+
 ## Tabs
 
 Tabs are defined by `web/src/ui/dev-panel.ts → TABS`. The IA separates metrics,
@@ -264,6 +278,15 @@ the Network tab controls to `DEFAULT_CONFIG`, updates `main.ts`'s in-memory
 the live network to the clean default values, not only the stored controls. The
 storage readout shows the app-owned keys,
 including `bv2_morph_v2`.
+
+**Rollback on failed structural apply:** structural settings and morphology
+generator changes may temporarily update controls/localStorage while a
+worker-prepared payload is being built. `web/src/main.ts →
+rollbackStructuralState` restores the last applied `VisualizerSettings`,
+`AppConfig`, and morphology JSON if worker preparation or
+`apply_prepared_network` fails. The dev panel syncs controls back through
+`_syncSliders`, `setInitialValues`, and `rollbackMorphologyConfig`, so reloads do
+not silently trust an unproven structural state.
 
 ## Float32Array index contract (corruption risk)
 

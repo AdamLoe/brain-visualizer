@@ -438,6 +438,7 @@ export class DevPanel {
 
   // UX overhaul: visibility callback(s) for main.ts canvas shrinking.
   private visibilityCallbacks: Array<(open: boolean) => void> = [];
+  private previousFocus: HTMLElement | null = null;
 
   // UX round 2: initial values set by main.ts via setInitialValues().
   private _initN = 10_000;
@@ -563,6 +564,18 @@ export class DevPanel {
     });
   }
 
+  rollbackMorphologyConfig(json: string): void {
+    try {
+      const config = JSON.parse(json) as MorphologyConfig;
+      this.morphConfig = structuredClone(config);
+      this.morphPending = structuredClone(config);
+      saveMorphConfig(this.morphConfig);
+      this._syncMorphRows();
+    } catch {
+      // Best effort UI rollback; malformed applied state should not break recovery.
+    }
+  }
+
   /** Called from main.ts once-per-second when the panel is open. */
   update(m: Metrics, sys?: SysInfo): void {
     if (!this.monitorFields) return;
@@ -627,6 +640,11 @@ export class DevPanel {
   private _setOpen(open: boolean): void {
     const was = this.isOpen();
     if (open) {
+      if (!was) {
+        this.previousFocus = document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
+      }
       this.container.classList.add("dp--open");
     } else {
       this.container.classList.remove("dp--open");
@@ -634,6 +652,19 @@ export class DevPanel {
     // Fire visibility callbacks only on actual state change.
     if (open !== was) {
       for (const cb of this.visibilityCallbacks) cb(open);
+      if (open) {
+        window.requestAnimationFrame(() => {
+          const closeBtn = this.container.querySelector<HTMLButtonElement>(".dp-close");
+          closeBtn?.focus();
+        });
+      } else {
+        const target = this.previousFocus;
+        this.previousFocus = null;
+        if (target && document.contains(target)) {
+          window.requestAnimationFrame(() => target.focus());
+        }
+        this._hideTip();
+      }
     }
   }
 
@@ -664,6 +695,20 @@ export class DevPanel {
 
     // Delegated hide: hide whenever the pointer leaves a tipped element.
     document.addEventListener("mouseout", (e) => {
+      const el = (e.target as HTMLElement | null)?.closest?.("[data-tip]") as HTMLElement | null;
+      if (!el) return;
+      this._hideTip();
+    });
+
+    document.addEventListener("focusin", (e) => {
+      const el = (e.target as HTMLElement | null)?.closest?.("[data-tip]") as HTMLElement | null;
+      if (!el) return;
+      const text = el.getAttribute("data-tip");
+      if (!text) return;
+      this._showTip(el, text);
+    });
+
+    document.addEventListener("focusout", (e) => {
       const el = (e.target as HTMLElement | null)?.closest?.("[data-tip]") as HTMLElement | null;
       if (!el) return;
       this._hideTip();
@@ -712,11 +757,14 @@ export class DevPanel {
    */
   private _attachTip(el: HTMLElement, text: string): void {
     el.setAttribute("data-tip", text);
+    el.setAttribute("aria-description", text);
   }
 
   private _buildPanel(): HTMLDivElement {
     const panel = document.createElement("div");
     panel.id = "dev-panel";
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-label", "Developer diagnostics");
 
     // ── Header ──────────────────────────────────────────────────────────────
     const header = document.createElement("div");
@@ -731,6 +779,7 @@ export class DevPanel {
     closeBtn.className = "dp-close";
     closeBtn.textContent = "×";
     closeBtn.title = "Close (` or ·)";
+    closeBtn.setAttribute("aria-label", "Close developer diagnostics");
     closeBtn.addEventListener("click", () => this.close());
     header.appendChild(closeBtn);
 
@@ -739,14 +788,23 @@ export class DevPanel {
     // ── Tab bar ─────────────────────────────────────────────────────────────
     const tabBar = document.createElement("div");
     tabBar.className = "dp-tabbar";
+    tabBar.setAttribute("role", "tablist");
+    tabBar.setAttribute("aria-label", "Developer diagnostics sections");
 
     for (const tab of TABS) {
       const btn = document.createElement("button");
       btn.className = "dp-tab";
       btn.textContent = tab.label;
       btn.dataset.tabId = tab.id;
+      btn.id = `dp-tab-${tab.id}`;
+      btn.type = "button";
+      btn.setAttribute("role", "tab");
+      btn.setAttribute("aria-controls", `dp-panel-${tab.id}`);
+      btn.setAttribute("aria-selected", String(tab.id === this.activeTab));
+      btn.tabIndex = tab.id === this.activeTab ? 0 : -1;
       if (tab.id === this.activeTab) btn.classList.add("dp-tab--active");
       btn.addEventListener("click", () => this._switchTab(tab.id));
+      btn.addEventListener("keydown", (event) => this._onTabKeydown(event, tab.id));
       tabBar.appendChild(btn);
       this.tabButtons.set(tab.id, btn);
     }
@@ -760,7 +818,11 @@ export class DevPanel {
     for (const tab of TABS) {
       const content = document.createElement("div");
       content.className = "dp-content";
+      content.id = `dp-panel-${tab.id}`;
+      content.setAttribute("role", "tabpanel");
+      content.setAttribute("aria-labelledby", `dp-tab-${tab.id}`);
       if (tab.id !== this.activeTab) content.style.display = "none";
+      content.hidden = tab.id !== this.activeTab;
 
       if (tab.id === "monitor") {
         this._buildMonitorTab(content);
@@ -797,17 +859,41 @@ export class DevPanel {
     const prevContent = this.tabContents.get(this.activeTab);
     const prevBtn = this.tabButtons.get(this.activeTab);
     if (prevContent) prevContent.style.display = "none";
-    if (prevBtn) prevBtn.classList.remove("dp-tab--active");
+    if (prevContent) prevContent.hidden = true;
+    if (prevBtn) {
+      prevBtn.classList.remove("dp-tab--active");
+      prevBtn.setAttribute("aria-selected", "false");
+      prevBtn.tabIndex = -1;
+    }
 
     // Show new.
     this.activeTab = id;
     const nextContent = this.tabContents.get(id);
     const nextBtn = this.tabButtons.get(id);
     if (nextContent) nextContent.style.display = "";
-    if (nextBtn) nextBtn.classList.add("dp-tab--active");
+    if (nextContent) nextContent.hidden = false;
+    if (nextBtn) {
+      nextBtn.classList.add("dp-tab--active");
+      nextBtn.setAttribute("aria-selected", "true");
+      nextBtn.tabIndex = 0;
+    }
 
     // V2 Phase B: refresh storage readout when switching to storage tab.
     if (id === "storage") this._refreshStorageReadout();
+  }
+
+  private _onTabKeydown(event: KeyboardEvent, current: TabId): void {
+    const index = TABS.findIndex((tab) => tab.id === current);
+    let nextIndex = index;
+    if (event.key === "ArrowRight") nextIndex = (index + 1) % TABS.length;
+    else if (event.key === "ArrowLeft") nextIndex = (index - 1 + TABS.length) % TABS.length;
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = TABS.length - 1;
+    else return;
+    event.preventDefault();
+    const next = TABS[nextIndex].id;
+    this._switchTab(next);
+    this.tabButtons.get(next)?.focus();
   }
 
   // ── Monitor tab DOM ────────────────────────────────────────────────────────
@@ -1127,6 +1213,7 @@ export class DevPanel {
     const seedInput = document.createElement("input");
     seedInput.type = "number";
     seedInput.className = "dp-num-input";
+    seedInput.setAttribute("aria-label", "Seed");
     seedInput.min = "0";
     seedInput.max = "4294967295";
     seedInput.step = "1";
@@ -1150,8 +1237,10 @@ export class DevPanel {
     const regenRow = document.createElement("div");
     regenRow.style.cssText = "display:flex;gap:4px;padding:3px 10px 6px;";
     const regenBtn = document.createElement("button");
+    regenBtn.type = "button";
     regenBtn.className = "dp-regen-btn";
     regenBtn.textContent = "Regenerate network";
+    regenBtn.setAttribute("aria-label", "Regenerate network");
     this._attachTip(regenBtn, "Pick a new random seed and rebuild the network.");
     regenBtn.addEventListener("click", () => {
       // Simple seed mutation: add a large prime, wrap in u32. UX round 2.
@@ -1177,6 +1266,7 @@ export class DevPanel {
     regionRow.appendChild(regionLabel);
     const regionInput = document.createElement("input");
     regionInput.type = "checkbox";
+    regionInput.setAttribute("aria-label", "A/P region prototype");
     regionInput.checked = this._currentRegionAssignmentMode === "anterior-posterior-prototype";
     regionInput.addEventListener("change", () => {
       this._currentRegionAssignmentMode = regionInput.checked
@@ -1357,6 +1447,7 @@ export class DevPanel {
     const slider = document.createElement("input");
     slider.type = "range";
     slider.className = "dp-slider";
+    slider.setAttribute("aria-label", spec.label);
     slider.min = String(spec.min);
     slider.max = String(spec.max);
     slider.step = String(spec.step);
@@ -1365,6 +1456,7 @@ export class DevPanel {
     const numInput = document.createElement("input");
     numInput.type = "number";
     numInput.className = "dp-num-input";
+    numInput.setAttribute("aria-label", `${spec.label} value`);
     numInput.min = String(spec.min);
     numInput.max = String(spec.max);
     numInput.step = String(spec.step);
@@ -1375,6 +1467,7 @@ export class DevPanel {
       resetBtn.type = "button";
       resetBtn.className = "dp-regen-btn";
       resetBtn.textContent = "Reset";
+      resetBtn.setAttribute("aria-label", `Reset ${spec.label}`);
       if (spec.tooltip) this._attachTip(resetBtn, `${spec.tooltip} Reset to ${format(spec.defaultValue)}.`);
       resetBtn.addEventListener("click", () => {
         const v = normalize(spec.defaultValue ?? spec.initialValue);
@@ -1855,6 +1948,7 @@ export class DevPanel {
     // <select>.
     const sel = document.createElement("select");
     sel.className = "dp-select";
+    sel.setAttribute("aria-label", spec.label);
     for (const opt of spec.options) {
       const el = document.createElement("option");
       el.value = String(opt.value);

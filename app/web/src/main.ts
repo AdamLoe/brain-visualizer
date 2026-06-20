@@ -47,11 +47,13 @@ import {
   type BackendKind,
   type RegionAssignmentMode,
 } from "./core/types";
-import { getSettings, parseMetrics, subscribe, toFloat32Array } from "./core/settings";
+import { getSettings, parseMetrics, replaceSettings, subscribe, toFloat32Array } from "./core/settings";
 import { loadMorphConfig, morphConfigToJson } from "./core/morph-config";
 import { DevPanel } from "./ui/dev-panel"; // V2 Phase A / Phase B
 import {
+  diagnosticsPolicyForViewport,
   hasWebGpuSupport,
+  resetAppOwnedStorage,
   webGpuStartupFailureStage,
   webGpuUnsupportedStage,
 } from "./boot-failure";
@@ -125,6 +127,9 @@ interface BrainVisualizerTestHooks {
   __bvFrameCounter?: number;
   __bvStartup?: StartupState;
   __bvNetworkBuildStatus?: PreparedNetworkStatus;
+  __bvDiagnosticsPolicy?: "desktop-supported" | "unsupported-mobile";
+  __bvRollbackState?: { reason: string; settings: Readonly<ReturnType<typeof getSettings>>; config: AppConfig };
+  __bvForceStructuralRollback?: (reason?: string) => void;
   __bvRequestPreparedNetworkSmoke?: (request: {
     n?: number;
     k?: number;
@@ -202,6 +207,7 @@ const BOOT_STARTED_AT_MS = performance.now();
 /** The live dev-only boot stall watchdog (module-scoped so both the "Ready"
  * path and the top-level boot().catch can clear its interval). */
 let activeBootWatchdog: BootWatchdog | null = null;
+let startupRecoveryActionsWired = false;
 let startupState: StartupState = {
   status: "loading",
   stage: "Starting…",
@@ -251,6 +257,36 @@ function clampProgress(progress: number): number {
   return Math.max(0, Math.min(100, progress));
 }
 
+function wireStartupRecoveryActions(): void {
+  if (startupRecoveryActionsWired) return;
+  startupRecoveryActionsWired = true;
+  const resetStorage = document.getElementById("startup-reset-storage") as HTMLButtonElement | null;
+  const loadDefaults = document.getElementById("startup-load-defaults") as HTMLButtonElement | null;
+  const retry = document.getElementById("startup-retry") as HTMLButtonElement | null;
+
+  resetStorage?.addEventListener("click", () => {
+    resetAppOwnedStorage();
+    updateStartupOverlay({
+      status: "failed",
+      stage: "Saved app settings were reset. Reload defaults or retry startup.",
+      progress: 100,
+    });
+  }, { once: true });
+
+  loadDefaults?.addEventListener("click", () => {
+    resetAppOwnedStorage();
+    window.location.assign(window.location.pathname);
+  });
+
+  retry?.addEventListener("click", () => {
+    window.location.reload();
+  });
+}
+
+function setDiagnosticsPolicy(policy: "desktop-supported" | "unsupported-mobile"): void {
+  (window as unknown as BrainVisualizerTestHooks).__bvDiagnosticsPolicy = policy;
+}
+
 /** Parse the morphology stats JSON and record its MorphTimer sub-phase ms into
  * __bvBootTimings (prefixed so they group under the payload stage). Best effort:
  * a bad/empty stats string is silently ignored — observability must not break
@@ -281,6 +317,10 @@ function nextAnimationFrame(): Promise<void> {
 }
 
 async function boot(): Promise<void> {
+  wireStartupRecoveryActions();
+  if (new URLSearchParams(window.location.search).get("bv_force_startup_failure") === "1") {
+    throw new Error("forced startup failure");
+  }
   // Boot observability: record per-step wall-clock ms into __bvBootTimings.
   // `markPhaseA(name)` records the time since the previous mark, attributing it
   // to the step that just finished. Phase-B (boot-sequencer) stages and the
@@ -335,6 +375,7 @@ async function boot(): Promise<void> {
   // 3. Mobile detection: lower DPR and disable stim on phones, without
   // increasing the accepted default neuron count.
   const mobile = isMobile();
+  setDiagnosticsPolicy(diagnosticsPolicyForViewport(window.innerWidth, mobile));
   // 0.1.1: restore the user's last-used config from localStorage (n/k/tier/
   // backend/speed/excitability). Stale CPU backend saves normalize to GPU in
   // loadConfig(); the mobile override is applied AFTER load.
@@ -435,6 +476,7 @@ async function boot(): Promise<void> {
   let lastReportedNetworkBuildFailure = 0;
   let appliedMorphConfigJson = morphConfigToJson(loadMorphConfig());
   let lastSettingsSnapshot = getSettings();
+  let lastAppliedConfig: AppConfig = { ...config };
   rebuildCoordinator.requestSettingsPush();
   rebuildCoordinator.requestMorphConfig(appliedMorphConfigJson);
 
@@ -457,28 +499,31 @@ async function boot(): Promise<void> {
     reason: string,
     morphConfigJson = morphConfigToJson(loadMorphConfig()),
     visualSettings = toFloat32Array(getSettings()),
+    requestConfig: AppConfig = config,
   ): number {
     const sequence = nextNetworkBuildSequence++;
     networkBuildClient.request({
       sequence,
-      n: config.n,
-      k: config.k,
-      seed: config.seed >>> 0,
-      regionAssignmentMode: config.regionAssignmentMode,
+      n: requestConfig.n,
+      k: requestConfig.k,
+      seed: requestConfig.seed >>> 0,
+      regionAssignmentMode: requestConfig.regionAssignmentMode,
       visualSettings,
       morphConfigJson,
     });
     publishNetworkBuildStatus();
-    console.log(`[main] network prepare requested (${reason}): seq=${sequence} n=${config.n} k=${config.k} seed=0x${(config.seed >>> 0).toString(16)}`);
+    console.log(`[main] network prepare requested (${reason}): seq=${sequence} n=${requestConfig.n} k=${requestConfig.k} seed=0x${(requestConfig.seed >>> 0).toString(16)}`);
     return sequence;
   }
 
   (window as unknown as BrainVisualizerTestHooks).__bvRequestPreparedNetworkSmoke = (request) => {
-    config.n = clampNeuronCount(request.n ?? config.n);
-    config.k = request.k ?? config.k;
-    config.seed = (request.seed ?? config.seed) >>> 0;
-    config.regionAssignmentMode = request.regionAssignmentMode ?? config.regionAssignmentMode;
-    return requestPreparedNetwork("smoke");
+    return requestPreparedNetwork("smoke", morphConfigToJson(loadMorphConfig()), toFloat32Array(getSettings()), {
+      ...config,
+      n: clampNeuronCount(request.n ?? config.n),
+      k: request.k ?? config.k,
+      seed: (request.seed ?? config.seed) >>> 0,
+      regionAssignmentMode: request.regionAssignmentMode ?? config.regionAssignmentMode,
+    });
   };
 
   (window as unknown as BrainVisualizerTestHooks).__bvOnNetworkBuildProgress = (listener) => {
@@ -611,6 +656,7 @@ async function boot(): Promise<void> {
   const gpuStartupPromise = startGpuBackend();
 
   window.addEventListener("resize", () => {
+    setDiagnosticsPolicy(diagnosticsPolicyForViewport(window.innerWidth, mobile));
     // UX overhaul: when the settings panel is open, the canvas occupies only the
     // left portion of the viewport.  Account for the panel width so the canvas
     // does not overflow behind the open drawer.
@@ -624,7 +670,7 @@ async function boot(): Promise<void> {
       : 0;
     const dprScale = mobile ? 0.75 : 1.0;
     const dpr = (window.devicePixelRatio || 1) * dprScale;
-    const targetCssW = window.innerWidth - panelWidth;
+    const targetCssW = Math.max(1, window.innerWidth - panelWidth);
     canvas.style.width  = `${targetCssW}px`;
     canvas.style.height = `${window.innerHeight}px`;
     canvas.width  = Math.floor(targetCssW * dpr) || 800;
@@ -691,12 +737,13 @@ async function boot(): Promise<void> {
           saveConfig(config);
         },
         onNetwork(p: { n: number; k: number; seed: number; regionAssignmentMode: RegionAssignmentMode }): void {
-          config.n    = clampNeuronCount(p.n);
-          config.k    = p.k;
-          config.seed = p.seed >>> 0;
-          config.regionAssignmentMode = p.regionAssignmentMode;
-          saveConfig(config); // 0.1.1: persist user-chosen N/K so it survives reload
-          requestPreparedNetwork("network controls");
+          requestPreparedNetwork("network controls", morphConfigToJson(loadMorphConfig()), toFloat32Array(getSettings()), {
+            ...config,
+            n: clampNeuronCount(p.n),
+            k: p.k,
+            seed: p.seed >>> 0,
+            regionAssignmentMode: p.regionAssignmentMode,
+          });
         },
         onConfigReset(defaultConfig: AppConfig): void {
           config.n = defaultConfig.n;
@@ -747,7 +794,7 @@ async function boot(): Promise<void> {
       }).onVisibilityChange((open: boolean) => {
         const panelWidth = (DevPanel as unknown as { PANEL_WIDTH_PX?: number }).PANEL_WIDTH_PX ?? 360;
         const targetCssW = open
-          ? window.innerWidth - panelWidth
+          ? Math.max(1, window.innerWidth - panelWidth)
           : window.innerWidth;
         const dprScale = mobile ? 0.75 : 1.0;
         const dpr = (window.devicePixelRatio || 1) * dprScale;
@@ -783,6 +830,7 @@ async function boot(): Promise<void> {
       paused = !paused;
       pauseBtn.textContent = paused ? "▶" : "⏸";
       pauseBtn.title = paused ? "Resume simulation" : "Pause simulation";
+      pauseBtn.setAttribute("aria-label", paused ? "Resume simulation" : "Pause simulation");
       pauseBtn.setAttribute("aria-pressed", String(paused));
     });
   }
@@ -815,7 +863,6 @@ async function boot(): Promise<void> {
   // backend directly from the callback — it may fire while rafLoop holds &mut).
   subscribe((settings) => {
     if (settingsRequirePreparedNetwork(lastSettingsSnapshot, settings)) {
-      lastSettingsSnapshot = { ...settings };
       requestPreparedNetwork(
         "structural settings",
         morphConfigToJson(loadMorphConfig()),
@@ -847,6 +894,39 @@ async function boot(): Promise<void> {
     duringRestart = false;
     rafHandle = requestAnimationFrame(rafLoop);
   }
+
+  function rollbackStructuralState(reason: string): void {
+    Object.assign(config, lastAppliedConfig);
+    replaceSettings({ ...lastSettingsSnapshot });
+    saveConfig(config);
+    if (devPanel && typeof (devPanel as unknown as { setInitialValues: unknown }).setInitialValues === "function") {
+      (devPanel as unknown as {
+        setInitialValues(opts: {
+          n: number; k: number; seed: number; regionAssignmentMode: RegionAssignmentMode;
+          excitability: number; tps: number;
+        }): void;
+      }).setInitialValues({
+        n: config.n,
+        k: config.k,
+        seed: config.seed >>> 0,
+        regionAssignmentMode: config.regionAssignmentMode,
+        excitability: config.excitability,
+        tps: config.ticksPerSec,
+      });
+    }
+    if (devPanel && typeof (devPanel as unknown as { rollbackMorphologyConfig: unknown }).rollbackMorphologyConfig === "function") {
+      (devPanel as unknown as { rollbackMorphologyConfig(json: string): void })
+        .rollbackMorphologyConfig(appliedMorphConfigJson);
+    }
+    (window as unknown as BrainVisualizerTestHooks).__bvRollbackState = {
+      reason,
+      settings: { ...lastSettingsSnapshot },
+      config: { ...config },
+    };
+  }
+  (window as unknown as BrainVisualizerTestHooks).__bvForceStructuralRollback = (reason = "forced rollback") => {
+    rollbackStructuralState(reason);
+  };
 
   function applyPreparedNetworkPayload(payload: PreparedNetworkPayload): void {
     if (!gpuBackend) return;
@@ -882,6 +962,8 @@ async function boot(): Promise<void> {
     config.regionAssignmentMode = payload.regionAssignmentMode;
     appliedMorphConfigJson = payload.morphConfigJson;
     lastSettingsSnapshot = getSettings();
+    lastAppliedConfig = { ...config };
+    saveConfig(config);
     rebuildCoordinator.requestSettingsPush();
     rebuildCoordinator.requestMorphConfig(morphConfigToJson(loadMorphConfig()));
     profiler.setConfig(config.backend, config.tier, payload.n, payload.k);
@@ -926,6 +1008,7 @@ async function boot(): Promise<void> {
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           console.error("[main] prepared network apply failed:", error);
+          rollbackStructuralState(`apply failed: ${message}`);
           showToast(`Network rebuild failed: ${message}`);
         }
       }
@@ -938,6 +1021,7 @@ async function boot(): Promise<void> {
     ) {
       lastReportedNetworkBuildFailure = networkBuildStatus.sequence;
       console.error(`[main] network prepare failed: seq=${networkBuildStatus.sequence}: ${networkBuildStatus.message}`);
+      rollbackStructuralState(`prepare failed: ${networkBuildStatus.message}`);
       showToast(`Network prepare failed: ${networkBuildStatus.message}`);
     }
     if (gpuBackend && rebuildCoordinator.hasPendingWork()) {
@@ -1172,6 +1256,7 @@ function resizeCanvas(canvas: HTMLCanvasElement, dprScale = 1.0): void {
 
 boot().catch((e) => {
   console.error("[main] boot failed:", e);
+  wireStartupRecoveryActions();
   activeBootWatchdog?.stop();
   activeBootWatchdog = null;
   const message = e instanceof Error ? e.message : String(e);

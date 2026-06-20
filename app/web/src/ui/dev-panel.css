@@ -44,7 +44,7 @@
   position: fixed;
   top: 0;
   right: 0;
-  width: 360px; /* = DevPanel.PANEL_WIDTH_PX — keep in sync */
+  width: min(360px, 100vw); /* = DevPanel.PANEL_WIDTH_PX — keep in sync */
   height: 100vh;
   background: rgba(10, 10, 14, 0.96);
   border-left: 1px solid rgba(255, 255, 255, 0.10);
@@ -101,6 +101,17 @@
 
 .dp-close:hover {
   color: rgba(255, 255, 255, 0.8);
+}
+
+.dp-close:focus-visible,
+.dp-tab:focus-visible,
+.dp-action-btn:focus-visible,
+.dp-regen-btn:focus-visible,
+.dp-slider:focus-visible,
+.dp-num-input:focus-visible,
+.dp-select:focus-visible {
+  outline: 2px solid rgba(79, 208, 200, 0.95);
+  outline-offset: 2px;
 }
 
 /* ── Tab bar ─────────────────────────────────────────────────────────────── */

@@ -145,6 +145,21 @@ variants compile off the boot-critical path; `render_full` guards deferred
 pipeline access until those pipelines exist. See [`gpu-backend.md`](gpu-backend.md)
 and [`../decisions/rendering.md`](../decisions/rendering.md).
 
+Startup failure is recoverable without devtools. When the overlay enters
+`failed`, `web/index.html → #startup-actions` exposes reset-saved-settings,
+reload-defaults, and retry controls while preserving the `aria-live` status
+region. `web/src/boot-failure.ts → resetAppOwnedStorage` owns the app-key reset
+list. The stage copy wraps at narrow widths instead of truncating, and
+`web/src/main.ts → wireStartupRecoveryActions` keeps the product overlay separate
+from raw diagnostics.
+
+The browser smoke for successful boot is
+`web/e2e/ux_audit_remediation.spec.ts`, which records desktop and mobile-ish
+viewport names, screenshot paths, and a center-canvas luma/variance check after
+`#startup-overlay.ready`. That visual proof is valid only when
+`navigator.gpu.requestAdapter()` returns a real adapter; fallback or no-adapter
+output is an environment skip/blocker, not accepted evidence.
+
 ## Wasm call boundary
 
 The JS-facing backend surface is owned by
@@ -212,6 +227,13 @@ per-frame tick count and drains `tickAccumulator` (so resume doesn't burst), but
 `render_frame` and the camera keep running — the sculpture freezes mid-flight
 while orbit/zoom stay live. It is a pure JS flag (no backend `&mut` call) and so
 is available on mobile too.
+
+Public controls have explicit accessible names. The dev-panel gear is hidden on
+mobile because diagnostics are desktop-only for now; `web/src/main.ts` publishes
+`window.__bvDiagnosticsPolicy` so tests can assert that mobile diagnostics are
+unsupported rather than accidentally available. Resize handling clamps the
+canvas CSS width when a desktop diagnostics drawer is open and the viewport
+shrinks, avoiding negative or zero-width canvas targets.
 
 ## Renderer (canvas + device acquisition)
 

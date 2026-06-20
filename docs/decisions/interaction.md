@@ -52,8 +52,9 @@
   driven through measured `WasmGpuBackend.create_staged` / `startup_*` stages,
   with a browser frame yield between stages and structured boot timings recorded
   in `window.__bvBootTimings`. The overlay itself remains product-facing status
-  UI, not a diagnostics surface. The frontend fallback renderer does not acquire
-  WebGPU, WebGL2, or 2D canvas contexts during GPU startup.
+  UI, not a diagnostics surface. Failure state exposes reset-saved-settings,
+  reload-defaults, and retry actions. The frontend fallback renderer does not
+  acquire WebGPU, WebGL2, or 2D canvas contexts during GPU startup.
 - **Why.** Users should never see a blank or hung page while the heavy backend
   initializes, but the wasm backend must remain the single WebGPU surface owner.
   DOM/CSS feedback plus staged backend calls gives paintable, measured progress
@@ -62,10 +63,26 @@
   resource stages finish.
 - **Applies to.** [`../architecture/web-frontend.md`](../architecture/web-frontend.md).
 - **Code anchors.** `web/index.html → #startup-overlay`;
-  `web/src/main.ts → updateStartupOverlay, startGpuBackend`;
+  `web/src/main.ts → updateStartupOverlay, startGpuBackend, wireStartupRecoveryActions`;
+  `web/src/boot-failure.ts → resetAppOwnedStorage`;
   `web/src/boot-timings.ts → recordBootTiming, logBootSummary`;
   `crates/brain-visualizer/src/lib.rs → WasmGpuBackend::create_staged`;
   `web/src/render/renderer.ts → Renderer`.
+
+## Keyboard focus is first-class for controls and diagnostics
+
+- **Decision.** Public controls and the desktop diagnostics drawer must be
+  operable and understandable by keyboard: named buttons, deterministic
+  open/close focus return, tablist keyboard semantics, selected-state exposure,
+  and focus-readable help matching hover tooltips.
+- **Why.** The app is visually led, but recovery and diagnostics cannot depend
+  on pointer hover or hidden focus. The desktop-only panel is dense enough that
+  roving tabs and focus help are cheaper and more reliable than a separate
+  explanatory UI.
+- **Applies to.** [`../architecture/web-frontend.md`](../architecture/web-frontend.md),
+  [`../architecture/dev-panel.md`](../architecture/dev-panel.md).
+- **Code anchors.** `web/index.html → #settings-toggle, #pause-toggle`;
+  `web/src/ui/dev-panel.ts → _setOpen, _onTabKeydown, _attachTip, _buildTooltip`.
 
 ## Speed is target ticks/sec, not frame-count presets
 

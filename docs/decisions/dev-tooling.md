@@ -3,8 +3,9 @@
 ## Hidden dev panel, not a public settings page
 
 - **Decision.** All tuning controls, sim-drive knobs, and diagnostic readouts
-  live in a hidden overlay (`?dev=1` / backtick / gear button) rather than the
-  public UI.
+  live in a hidden desktop overlay (`?dev=1` / backtick / gear button) rather
+  than the public UI. Mobile diagnostics are unsupported: the app does not
+  construct the panel or expose the gear on mobile-width/touch profiles.
 - **Why.** The public surface is intentionally minimal — just the visualisation,
   transport, and top-level toggles. Exposing dozens of sliders or review
   presets to all visitors adds visual noise and invites accidental mis-tuning.
@@ -12,7 +13,10 @@
   surface.
 - **Applies to.** [`../architecture/dev-panel.md`](../architecture/dev-panel.md).
 - **Code anchors.** `web/src/ui/dev-panel.ts → DevPanel` (open triggers);
-  `web/src/main.ts` (wires the gear button via `onVisibilityChange`).
+  `web/src/main.ts` (wires the gear button via `onVisibilityChange`,
+  `__bvDiagnosticsPolicy`).
+- **Revisit when.** A mobile diagnostics workflow gets an explicit product
+  owner and design.
 
 ## Boot overlay is a clean status panel, not a diagnostics surface
 
@@ -55,7 +59,9 @@
   prototype is an `AppConfig` dev-panel checkbox, not a `VisualizerSettings`
   field, and also rebuilds through the worker-prepared network path. The old
   brain-reset Apply API and pending UI are removed; structural changes go
-  through the network/morphology rebuild controls.
+  through the network/morphology rebuild controls. Failed structural preparation
+  or application rolls controls and app-owned localStorage back to the last
+  applied settings/config/morphology state.
 - **Why.** `heterogeneity`, `weightNormalization`, and `inputMode` are `"live"`
   because the integrate uniform is read from GPU memory every tick rather than
   cached at init. Reach knobs change target ids and generated geometry,
@@ -66,6 +72,9 @@
 - **Applies to.** [`../architecture/dev-panel.md`](../architecture/dev-panel.md).
 - **Revisit when.** A truly structural setting is added (e.g. one that changes
   buffer sizes or requires re-uploading connectivity).
+- **Code anchors.** `web/src/main.ts → requestPreparedNetwork,
+  rollbackStructuralState, applyPreparedNetworkPayload`;
+  `web/src/ui/dev-panel.ts → rollbackMorphologyConfig`.
 
 ## Versioned localStorage with merge-over-defaults; static hidden review presets only
 
