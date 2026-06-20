@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-13
+last_updated:  2026-06-20
 ---
 
 # Web Frontend
@@ -224,10 +224,10 @@ is a no-op before backend readiness; the startup overlay owns visible feedback.
 `web/src/core/types.ts → DEFAULT_CONFIG` is the authoritative boot scale and
 runtime-default snapshot. `PRODUCT_MAX_N`, `clampNeuronCount()`, `loadConfig()`,
 and `saveConfig()` enforce the product neuron-count cap for persisted or incoming
-`n`, so old high-N localStorage payloads cannot exceed the current cap. Tier
-presets and the per-tier N bounds are in `web/src/ui/controls.ts →
-TIER_PRESETS`, `N_MIN`, `N_MAX`; tier→N/K logic belongs to
-[`scaling.md`](scaling.md).
+`n`, while `loadConfig()` / `saveConfig()` also normalize the persisted runtime
+knobs to the same bounded domains the dev panel exposes. Tier presets and the
+per-tier N bounds are in `web/src/ui/controls.ts → TIER_PRESETS`, `N_MIN`,
+`N_MAX`; tier→N/K logic belongs to [`scaling.md`](scaling.md).
 
 ## AppConfig persistence
 
@@ -235,8 +235,8 @@ The user-chosen runtime knobs in `AppConfig` are persisted to localStorage so a
 reload restores the last-used network.
 `web/src/core/types.ts → loadConfig`, `saveConfig`, `resetConfig` own this; the key is
 `web/src/core/types.ts → CONFIG_LS_KEY` (`bv2_config_v2`). The loader uses a
-version gate, merge-over-defaults, `n` clamping, and silent storage failure
-handling, matching the dev-panel persistence pattern.
+version gate, merge-over-defaults, bounded value normalization, and silent
+storage failure handling, matching the dev-panel persistence pattern.
 
 The persisted subset is defined by `web/src/core/types.ts → SavedConfig`. The
 only live backend value is `"gpu"`; stale saved backend values are normalized by

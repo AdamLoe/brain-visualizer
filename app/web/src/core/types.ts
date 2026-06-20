@@ -43,6 +43,10 @@ export interface AppConfig {
 }
 
 export const PRODUCT_MAX_N = 20_000;
+const CONFIG_K_MIN = 4;
+const CONFIG_K_MAX = 64;
+const CONFIG_TICKS_PER_SEC_MIN = 1;
+const CONFIG_TICKS_PER_SEC_MAX = 60;
 
 export function clampNeuronCount(n: number): number {
   const value = Number.isFinite(n) ? Math.round(n) : DEFAULT_CONFIG.n;
@@ -89,10 +93,40 @@ function normalizeBackend(_backend: unknown): BackendKind {
   return "gpu";
 }
 
+function normalizeSpeedPreset(value: unknown): SpeedPreset {
+  if (value === "quarter" || value === "half" || value === "normal" || value === "double") {
+    return value;
+  }
+  return DEFAULT_CONFIG.speed;
+}
+
+function normalizeTier(value: unknown): Tier {
+  if (value === "basic" || value === "low" || value === "balanced" || value === "max") {
+    return value;
+  }
+  return DEFAULT_CONFIG.tier;
+}
+
 export function normalizeRegionAssignmentMode(value: unknown): RegionAssignmentMode {
   return value === "anterior-posterior-prototype"
     ? "anterior-posterior-prototype"
     : "hash-random";
+}
+
+function normalizedNumber(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function normalizedRange(
+  value: unknown,
+  min: number,
+  max: number,
+  fallback: number,
+  integer = false,
+): number {
+  const finite = normalizedNumber(value, fallback);
+  const rounded = integer ? Math.round(finite) : finite;
+  return Math.max(min, Math.min(max, rounded));
 }
 
 /** Load persisted config merged over DEFAULT_CONFIG. Returns a full AppConfig;
@@ -107,13 +141,19 @@ export function loadConfig(): AppConfig {
     return {
       ...base,
       n:            clampNeuronCount(parsed.n ?? base.n),
-      k:            parsed.k            ?? base.k,
-      tier:         parsed.tier         ?? base.tier,
+      k:            normalizedRange(parsed.k, CONFIG_K_MIN, CONFIG_K_MAX, base.k, true),
+      tier:         normalizeTier(parsed.tier),
       backend:      normalizeBackend(parsed.backend ?? base.backend),
       regionAssignmentMode: normalizeRegionAssignmentMode(parsed.regionAssignmentMode ?? base.regionAssignmentMode),
-      speed:        parsed.speed        ?? base.speed,
-      excitability: parsed.excitability ?? base.excitability,
-      ticksPerSec:  parsed.ticksPerSec  ?? base.ticksPerSec,
+      speed:        normalizeSpeedPreset(parsed.speed),
+      excitability: normalizedRange(parsed.excitability, 0, 1, base.excitability),
+      ticksPerSec:  normalizedRange(
+        parsed.ticksPerSec,
+        CONFIG_TICKS_PER_SEC_MIN,
+        CONFIG_TICKS_PER_SEC_MAX,
+        base.ticksPerSec,
+        true,
+      ),
     };
   } catch {
     return { ...DEFAULT_CONFIG };
@@ -126,13 +166,19 @@ export function saveConfig(c: AppConfig): void {
     const saved: SavedConfig = {
       version: 1,
       n: clampNeuronCount(c.n),
-      k: c.k,
-      tier: c.tier,
-      backend: c.backend,
+      k: normalizedRange(c.k, CONFIG_K_MIN, CONFIG_K_MAX, DEFAULT_CONFIG.k, true),
+      tier: normalizeTier(c.tier),
+      backend: normalizeBackend(c.backend),
       regionAssignmentMode: normalizeRegionAssignmentMode(c.regionAssignmentMode),
-      speed: c.speed,
-      excitability: c.excitability,
-      ticksPerSec: c.ticksPerSec,
+      speed: normalizeSpeedPreset(c.speed),
+      excitability: normalizedRange(c.excitability, 0, 1, DEFAULT_CONFIG.excitability),
+      ticksPerSec: normalizedRange(
+        c.ticksPerSec,
+        CONFIG_TICKS_PER_SEC_MIN,
+        CONFIG_TICKS_PER_SEC_MAX,
+        DEFAULT_CONFIG.ticksPerSec,
+        true,
+      ),
     };
     localStorage.setItem(CONFIG_LS_KEY, JSON.stringify(saved));
   } catch {

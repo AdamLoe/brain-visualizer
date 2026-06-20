@@ -257,7 +257,17 @@ interface SavedMorphConfig {
   config: MorphologyConfig;
 }
 
+function clampMorphValue(value: number, descriptor: MorphDescriptor): number {
+  const clamped = Math.max(descriptor.min, Math.min(descriptor.max, value));
+  return descriptor.type === "int" ? Math.round(clamped) : clamped;
+}
+
+function descriptorFor(group: MorphGroup, key: string): MorphDescriptor | undefined {
+  return MORPH_DESCRIPTORS.find((descriptor) => descriptor.group === group && descriptor.jsonPath === `${group}.${key}`);
+}
+
 function mergeKnownNumberGroup<T extends object>(
+  group: MorphGroup,
   defaults: T,
   saved: unknown,
   ignoredKeys: readonly string[] = [],
@@ -270,7 +280,10 @@ function mergeKnownNumberGroup<T extends object>(
     if (ignoredKeys.includes(key)) continue;
     const value = source[key];
     if (typeof value === "number" && Number.isFinite(value)) {
-      (result as Record<string, number>)[key] = value;
+      const descriptor = descriptorFor(group, key);
+      (result as Record<string, number>)[key] = descriptor
+        ? clampMorphValue(value, descriptor)
+        : value;
     }
   }
   return result;
@@ -281,9 +294,9 @@ function normalizeMorphConfig(config: unknown): MorphologyConfig {
     ? config as Partial<Record<MorphGroup, unknown>>
     : {};
   return {
-    generator:     mergeKnownNumberGroup(DEFAULT_MORPH_CONFIG.generator,     saved.generator, ["axonCurveLift"]),
-    renderQuality: mergeKnownNumberGroup(DEFAULT_MORPH_CONFIG.renderQuality, saved.renderQuality),
-    lighting:      mergeKnownNumberGroup(DEFAULT_MORPH_CONFIG.lighting,      saved.lighting),
+    generator:     mergeKnownNumberGroup("generator",     DEFAULT_MORPH_CONFIG.generator,     saved.generator, ["axonCurveLift"]),
+    renderQuality: mergeKnownNumberGroup("renderQuality", DEFAULT_MORPH_CONFIG.renderQuality, saved.renderQuality),
+    lighting:      mergeKnownNumberGroup("lighting",      DEFAULT_MORPH_CONFIG.lighting,      saved.lighting),
   };
 }
 

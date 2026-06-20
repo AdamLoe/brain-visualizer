@@ -129,32 +129,80 @@ const LS_KEY = SETTINGS_LS_KEY;
 
 // ─── persistence helpers ─────────────────────────────────────────────────────
 
+function normalizedNumber(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function normalizedRange(
+  value: unknown,
+  min: number,
+  max: number,
+  fallback: number,
+  integer = false,
+): number {
+  const finite = normalizedNumber(value, fallback);
+  const rounded = integer ? Math.round(finite) : finite;
+  return Math.max(min, Math.min(max, rounded));
+}
+
+function normalizeEnum(value: unknown, allowed: readonly number[], fallback: number): number {
+  return typeof value === "number" && allowed.includes(value) ? value : fallback;
+}
+
+function normalizeVisualSettings(settings: VisualizerSettings): VisualizerSettings {
+  const base = DEFAULT_SETTINGS;
+  return {
+    ...base,
+    glowTau:                  normalizedRange(settings.glowTau, 1, 200, base.glowTau, true),
+    neuronVisualRadius:       normalizedRange(settings.neuronVisualRadius, 0.001, 0.02, base.neuronVisualRadius),
+    activeNeuronRadiusBoost:  normalizedRange(settings.activeNeuronRadiusBoost, 1, 5, base.activeNeuronRadiusBoost),
+    inactiveNeuronOpacity:    normalizedRange(settings.inactiveNeuronOpacity, 0, 1, base.inactiveNeuronOpacity),
+    voltageGlowStrength:      normalizedRange(settings.voltageGlowStrength, 0, 2, base.voltageGlowStrength),
+    connectionVisualWidth:    normalizedRange(settings.connectionVisualWidth, 0.1, 4, base.connectionVisualWidth),
+    connectionCurveLift:      normalizedRange(settings.connectionCurveLift, 0, 0.5, base.connectionCurveLift),
+    connectionLightNext:      normalizeEnum(settings.connectionLightNext, [0, 1], base.connectionLightNext),
+    iExt:                     normalizedRange(settings.iExt, 0, 0.3, base.iExt),
+    synapticScale:            normalizedRange(settings.synapticScale, 0, 0.2, base.synapticScale),
+    heterogeneity:            normalizedRange(settings.heterogeneity, 0, 1, base.heterogeneity),
+    morphRestingOpacity:      normalizedRange(settings.morphRestingOpacity, 0, 1, base.morphRestingOpacity),
+    connectionLayer:          normalizeConnectionLayer(settings.connectionLayer),
+    colorBy:                  normalizeEnum(settings.colorBy, [0, 1, 2, 3, 4, 5, 6], base.colorBy),
+    neuronVisibility:         normalizeEnum(settings.neuronVisibility, [0, 1, 2], base.neuronVisibility),
+    weightNormalization:      normalizeEnum(settings.weightNormalization, [0, 1, 2], base.weightNormalization),
+    inputMode:                normalizeEnum(settings.inputMode, [0, 1, 2, 3, 4, 5], base.inputMode),
+    longRangeReachFrac:       normalizedRange(settings.longRangeReachFrac, 0, 1, base.longRangeReachFrac),
+    maxReachCells:            normalizedRange(settings.maxReachCells, 2, 16, base.maxReachCells, true),
+    arrivalHoldTicks:         normalizedRange(settings.arrivalHoldTicks, 0, 180, base.arrivalHoldTicks, true),
+  };
+}
+
 function settingsToSaved(s: VisualizerSettings): SavedVisualizerSettings {
+  const normalized = normalizeVisualSettings(s);
   return {
     version: 5,
     public: {
-      glowTau:           s.glowTau,
-      connectionLayer:   normalizeConnectionLayer(s.connectionLayer),
-      colorBy:           s.colorBy,
-      neuronVisibility:  s.neuronVisibility,
+      glowTau:           normalized.glowTau,
+      connectionLayer:   normalized.connectionLayer,
+      colorBy:           normalized.colorBy,
+      neuronVisibility:  normalized.neuronVisibility,
     },
     dev: {
-      neuronVisualRadius:       s.neuronVisualRadius,
-      activeNeuronRadiusBoost:  s.activeNeuronRadiusBoost,
-      inactiveNeuronOpacity:    s.inactiveNeuronOpacity,
-      voltageGlowStrength:      s.voltageGlowStrength,
-      connectionVisualWidth:    s.connectionVisualWidth,
-      connectionCurveLift:      s.connectionCurveLift,
-      connectionLightNext:      s.connectionLightNext,
-      iExt:                     s.iExt,
-      synapticScale:            s.synapticScale,
-      heterogeneity:            s.heterogeneity,
-      morphRestingOpacity:      s.morphRestingOpacity,
-      weightNormalization:      s.weightNormalization,
-      inputMode:                s.inputMode,
-      longRangeReachFrac:       s.longRangeReachFrac,
-      maxReachCells:            s.maxReachCells,
-      arrivalHoldTicks:         s.arrivalHoldTicks,
+      neuronVisualRadius:       normalized.neuronVisualRadius,
+      activeNeuronRadiusBoost:  normalized.activeNeuronRadiusBoost,
+      inactiveNeuronOpacity:    normalized.inactiveNeuronOpacity,
+      voltageGlowStrength:      normalized.voltageGlowStrength,
+      connectionVisualWidth:    normalized.connectionVisualWidth,
+      connectionCurveLift:      normalized.connectionCurveLift,
+      connectionLightNext:      normalized.connectionLightNext,
+      iExt:                     normalized.iExt,
+      synapticScale:            normalized.synapticScale,
+      heterogeneity:            normalized.heterogeneity,
+      morphRestingOpacity:      normalized.morphRestingOpacity,
+      weightNormalization:      normalized.weightNormalization,
+      inputMode:                normalized.inputMode,
+      longRangeReachFrac:       normalized.longRangeReachFrac,
+      maxReachCells:            normalized.maxReachCells,
+      arrivalHoldTicks:         normalized.arrivalHoldTicks,
     },
   };
 }
@@ -162,12 +210,12 @@ function settingsToSaved(s: VisualizerSettings): SavedVisualizerSettings {
 function mergeOver(base: VisualizerSettings, saved: SavedVisualizerSettings): VisualizerSettings {
   // Merge saved fields over defaults field-by-field.  Never trust missing fields
   // (each key access is guarded: if the key is undefined it falls back to base).
-  const p = saved.public;
-  const d = saved.dev;
-  return {
+  const p: Partial<SavedPublic> = saved.public ?? {};
+  const d: Partial<SavedDev> = saved.dev ?? {};
+  return normalizeVisualSettings({
     ...base,
     // public
-    glowTau:              p.glowTau              ?? base.glowTau,
+    glowTau:              p.glowTau               ?? base.glowTau,
     connectionLayer:      normalizeConnectionLayer(p.connectionLayer ?? base.connectionLayer),
     colorBy:              p.colorBy               ?? base.colorBy,
     neuronVisibility:     p.neuronVisibility      ?? base.neuronVisibility,
@@ -188,7 +236,7 @@ function mergeOver(base: VisualizerSettings, saved: SavedVisualizerSettings): Vi
     longRangeReachFrac:       d.longRangeReachFrac       ?? base.longRangeReachFrac,
     maxReachCells:            d.maxReachCells            ?? base.maxReachCells,
     arrivalHoldTicks:         d.arrivalHoldTicks         ?? base.arrivalHoldTicks,
-  };
+  });
 }
 
 /** Load from localStorage.  Returns defaults on version mismatch or parse error. */
@@ -230,18 +278,14 @@ export function setSetting<K extends keyof VisualizerSettings>(
   key: K,
   value: VisualizerSettings[K],
 ): void {
-  current = { ...current, [key]: value };
-  if (key === "connectionLayer") {
-    current.connectionLayer = normalizeConnectionLayer(Number(value));
-  }
+  current = normalizeVisualSettings({ ...current, [key]: value });
   saveSettings(current);
   notify();
 }
 
 /** Replace the full settings payload, persist once, and notify subscribers once. */
 export function replaceSettings(next: VisualizerSettings): void {
-  current = { ...next };
-  current.connectionLayer = normalizeConnectionLayer(current.connectionLayer);
+  current = normalizeVisualSettings({ ...next });
   saveSettings(current);
   notify();
 }

@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-17
+last_updated:  2026-06-20
 ---
 
 # Dev Panel
@@ -222,11 +222,11 @@ Removed fields (`pointRadius`, `surfaceOpacity`, `surface`, `bloomStrength`) are
 ignored and fall back to defaults because they are absent from the saved schema.
 
 **Merge-over-defaults:** on load, each saved key is merged over
-`DEFAULT_SETTINGS` with `?? base_value` guards (`web/src/core/settings.ts → mergeOver`).
-Missing fields (from older saves or partial schemas) fall back silently. Adding a
-new field to `VisualizerSettings` is safe without a version bump; only
-semantically breaking changes (changed defaults, repurposed indices) require a
-bump.
+`DEFAULT_SETTINGS` with `?? base_value` guards (`web/src/core/settings.ts → mergeOver`),
+then normalized to the finite ranges/enums exposed by the panel. Missing fields
+(from older saves or partial schemas) fall back silently. Adding a new field to
+`VisualizerSettings` is safe without a version bump; only semantically breaking
+changes (changed defaults, repurposed indices) require a bump.
 
 **Never persist counters:** `VisualizerSettings` contains only durable
 configuration knobs. Runtime metrics live on `Metrics` and are never written to
@@ -239,10 +239,11 @@ controls above) persists under its **own** key `bv2_morph_v2`, independent of
 with a `version` sentinel and `MorphologyConfig` defaults. Additive fields such
 as the active-opacity lighting knobs and the dendrite branching controls are
 backfilled from defaults when saved `bv2_morph_v2` payloads omit them. The
-loader also normalizes to the current known key set, so obsolete morphology
-fields are ignored on load and omitted on the next save/send to WASM. It is
-deliberately NOT folded into `bv2_settings_v2` because it does not cross the
-frozen Float32Array boundary — see
+loader also normalizes to the current known key set and descriptor ranges, so
+obsolete morphology fields are ignored on load and omitted on the next save/send
+to WASM, while stale out-of-range values are clamped to the current control
+bounds. It is deliberately NOT folded into `bv2_settings_v2` because it does not
+cross the frozen Float32Array boundary — see
 [`../decisions/dev-tooling.md`](../decisions/dev-tooling.md).
 
 At boot, `web/src/main.ts` queues `morphConfigToJson(loadMorphConfig())` before

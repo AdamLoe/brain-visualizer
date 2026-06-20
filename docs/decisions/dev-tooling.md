@@ -73,7 +73,8 @@
   (`bv2_settings_v2`), morphology config persists under `bv2_morph_v2`, and app
   runtime config persists under `bv2_config_v2`; this includes the hidden
   region-assignment review mode. On load, saved fields are merged over defaults
-  field-by-field with `?? base` guards. There is still no
+  field-by-field with `?? base` guards and normalized to current bounded
+  control domains. There is still no
   public preset manager; the only presets are the static hidden review buttons
   `accepted-default`, `performance-review`, and `hero-review` in the Storage tab.
 - **Why.** Merge-over-defaults means adding a new field is safe without a
@@ -81,19 +82,19 @@
   its default for existing saves. A version bump is reserved for semantically
   breaking changes (repurposed indices, changed defaults) where old data would
   actively mislead. Morphology loading also filters each group to known current
-  fields, and app config normalizes stale backend values to GPU, so obsolete
-  config keys from older saves are ignored rather than sent back to Rust. The
-  review presets cover the reproducibility need without growing a user-editable
-  preset system.
+  fields and descriptor ranges, visual settings reject stale enum values, and
+  app config normalizes stale backend values to GPU, so obsolete config keys from
+  older saves are ignored rather than sent back to Rust. The review presets cover
+  the reproducibility need without growing a user-editable preset system.
 - **Applies to.** [`../architecture/dev-panel.md`](../architecture/dev-panel.md).
 - **Code anchors.** `web/src/core/settings.ts → loadSettings, mergeOver, resetSettings`;
   `web/src/core/morph-config.ts → loadMorphConfig, resetMorphConfig`;
   `web/src/core/types.ts → loadConfig, resetConfig`;
   `web/src/ui/dev-panel.ts → HIDDEN_REVIEW_PRESETS`.
 - **Tradeoffs.** Default changes do not automatically reset old saved
-  visual/morph values unless the version sentinel is bumped. App config is the
-  exception for scale safety: saved `n` is clamped to the product cap on
-  load/save.
+  visual/morph values unless the version sentinel is bumped; valid values inside
+  the current bounds remain user-owned. App config is the exception for scale
+  safety: saved `n` is clamped to the product cap on load/save.
 
 ## Region assignment mode stays in AppConfig, not VisualSettings
 
