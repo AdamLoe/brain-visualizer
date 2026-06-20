@@ -24,6 +24,10 @@ slot-data the rules read from [`../_meta/manifest.md`](../_meta/manifest.md).
   decisions — git keeps them.
 - **One owner per concept.** [`../_meta/ownership.json`](../_meta/ownership.json)
   names it. Non-owners link, never redefine.
+- **README is a short orientation, not the fact owner.** If README changes, keep
+  it aligned with [`../index.md`](../index.md),
+  [`../repository-layout.md`](../repository-layout.md), and the relevant
+  architecture docs; durable runtime facts still belong under `docs/`.
 - **No literal counts** unless a named gate fails when the number is wrong.
 - **Each leaf ~1–2k tokens, one subsystem per file.** Split past ~2k.
 
