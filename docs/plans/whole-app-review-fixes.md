@@ -6,7 +6,9 @@ okay_to_delete: true
 long_lived:    false
 owning_docs:
   - ../README.md
+  - index.md
   - agent-context/maintaining-docs.md
+  - agent-context/repo-rules.md
   - agent-context/testing-how-to.md
   - architecture/build-and-deploy.md
   - architecture/connectivity.md
@@ -23,6 +25,7 @@ owning_docs:
   - decisions/interaction.md
   - decisions/rendering.md
   - decisions/scaling.md
+  - repository-layout.md
 ---
 
 # Whole-app review fixes
