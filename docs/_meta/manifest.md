@@ -1,7 +1,7 @@
 # Agent-docs manifest — brain_visualizer
 
 App-specific bindings for the global agent-docs kit. The generic skills and
-rules in `~/agent-docs/v1/` read the slots below; everything
+rules in `~/.agentdocs/` read the slots below; everything
 app-specific lives here, nothing generic does.
 
 ```yaml
@@ -85,6 +85,6 @@ spot-checks these against code:
 ## Notes
 
 - The generic kit (authoring rules, coding-style, repo-rules, orchestrating)
-  lives at `~/agent-docs/v1/`; workflow commands are global skills. This
+  lives at `~/.agentdocs/`; workflow commands are global skills. This
   manifest is the only app-specific binding the kit reads.
 - `ownership.md` is a thin pointer; the owner data is `_meta/ownership.json`.

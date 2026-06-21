@@ -7,7 +7,7 @@ Procedural docs: when working on X, do Y, don't do Z.
 Load only the procedural doc that matches the situation you're in. Each opens
 with a "when does this apply" framing. Under **agent-docs v1** the generic
 workflow discipline lives in the global kit
-(`~/agent-docs/v1/rules/`); the docs below hold what's specific to
+(`~/.agentdocs/rules/`); the docs below hold what's specific to
 **this** app and link up to the matching global rule.
 
 ## Routing

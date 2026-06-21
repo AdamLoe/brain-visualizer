@@ -7,7 +7,7 @@ or you are about to write a "v2 added…" / "previously this was…" sentence in
 an architecture doc. Stop and read this first.
 
 The **enforceable authoring rules are generic** and live in the global kit:
-[`~/agent-docs/v1/rules/authoring-rules.md`](~/agent-docs/v1/rules/authoring-rules.md).
+[`~/.agentdocs/rules/authoring-rules.md`](~/.agentdocs/rules/authoring-rules.md).
 This doc is the thin app-specific binding: it points at the rules and at the
 slot-data the rules read from [`../_meta/manifest.md`](../_meta/manifest.md).
 
@@ -49,7 +49,7 @@ surface and you're unsure which doc owns it, query
 
 ## See also
 
-- [`~/agent-docs/v1/rules/authoring-rules.md`](~/agent-docs/v1/rules/authoring-rules.md) — the generic rules (authoritative).
-- [`~/agent-docs/v1/agent-docs-guide.md`](~/agent-docs/v1/agent-docs-guide.md) — why the system is shaped this way.
+- [`~/.agentdocs/rules/authoring-rules.md`](~/.agentdocs/rules/authoring-rules.md) — the generic rules (authoritative).
+- [`~/.agentdocs/agent-docs-guide.md`](~/.agentdocs/agent-docs-guide.md) — why the system is shaped this way.
 - [`../_meta/manifest.md`](../_meta/manifest.md) — app slot-data (`change-to-doc`, `drift-gates`, `decisions-domains`).
 - [`index.md`](index.md) — agent-context router.

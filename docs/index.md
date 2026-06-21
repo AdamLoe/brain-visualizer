@@ -4,7 +4,7 @@ This tree is the canonical, current-state snapshot of the brain_visualizer
 stack, optimized for LLM consumption: start small, route by task, load only the
 subtree that matches the work. It follows **agent-docs v1** — the generic
 authoring rules and the workflow/maintenance commands live in the global kit
-(`~/agent-docs/v1/` and the global skills); this tree holds only what's
+(`~/.agentdocs/` and the global skills); this tree holds only what's
 specific to **this** app.
 
 If you are a fresh AI chat: run **`/fresh-chat`**. It routes you here, then to

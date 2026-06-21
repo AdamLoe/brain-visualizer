@@ -4,7 +4,7 @@
 
 You're editing Rust, WGSL, or TypeScript in this repo. The generic style rules
 are in the global kit
-([`~/agent-docs/v1/rules/coding-style.md`](~/agent-docs/v1/rules/coding-style.md));
+([`~/.agentdocs/rules/coding-style.md`](~/.agentdocs/rules/coding-style.md));
 below are the app-specific ones that the global rules don't cover.
 
 ## App-specific rules
@@ -33,6 +33,6 @@ below are the app-specific ones that the global rules don't cover.
 
 ## See also
 
-- [`~/agent-docs/v1/rules/coding-style.md`](~/agent-docs/v1/rules/coding-style.md) — generic rules.
+- [`~/.agentdocs/rules/coding-style.md`](~/.agentdocs/rules/coding-style.md) — generic rules.
 - [`repo-rules.md`](repo-rules.md), [`testing-how-to.md`](testing-how-to.md).
 - [`index.md`](index.md) — agent-context router.

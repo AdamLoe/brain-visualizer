@@ -4,7 +4,7 @@
 
 You're committing, staging, or about to do something hard to reverse. The
 generic repo discipline is in the global kit
-([`~/agent-docs/v1/rules/repo-rules.md`](~/agent-docs/v1/rules/repo-rules.md));
+([`~/.agentdocs/rules/repo-rules.md`](~/.agentdocs/rules/repo-rules.md));
 below is what's specific to this repo.
 
 ## App-specific
@@ -32,5 +32,5 @@ below is what's specific to this repo.
 
 ## See also
 
-- [`~/agent-docs/v1/rules/repo-rules.md`](~/agent-docs/v1/rules/repo-rules.md) — generic rules.
+- [`~/.agentdocs/rules/repo-rules.md`](~/.agentdocs/rules/repo-rules.md) — generic rules.
 - [`testing-how-to.md`](testing-how-to.md), [`maintaining-docs.md`](maintaining-docs.md), [`index.md`](index.md).
