@@ -294,6 +294,11 @@ function normalizeMorphConfig(config: unknown): MorphologyConfig {
     ? config as Partial<Record<MorphGroup, unknown>>
     : {};
   return {
+    // axonCurveLift is carried at its default and never user-editable (no
+    // descriptor): a persisted override is ignored, so the value sent to Rust
+    // is always DEFAULT_MORPH_CONFIG's 0.15, matching the Rust serde default
+    // (GeneratorConfig::default → axon_curve_lift: 0.15). Both defaults are
+    // locked at 0.15 on each side; do not unpin without adding a descriptor.
     generator:     mergeKnownNumberGroup("generator",     DEFAULT_MORPH_CONFIG.generator,     saved.generator, ["axonCurveLift"]),
     renderQuality: mergeKnownNumberGroup("renderQuality", DEFAULT_MORPH_CONFIG.renderQuality, saved.renderQuality),
     lighting:      mergeKnownNumberGroup("lighting",      DEFAULT_MORPH_CONFIG.lighting,      saved.lighting),
