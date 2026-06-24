@@ -141,6 +141,26 @@ const SOMA_CORE_TICKS: f32 = 2.2;
 const SOMA_RADIUS_GLOW: f32 = 0.08;
 const SOMA_RADIUS_FLASH: f32 = 0.16;
 const LEGACY_WHOLE_GLOW: f32 = 0.10;
+// ── Firing-soma soft bloom-core falloff ───────────────────────────────────────
+// A firing soma reads as a real glowing light source, not a flat white sticker.
+// Drive the firing emission by `r` = the impostor-equivalent screen-radial
+// distance from the sphere centre (0 at the centre facing the camera → 1 at the
+// silhouette), recovered from the view-facing factor as r = sqrt(1 - dot(N,V)^2).
+// Two Gaussian lobes in r give the look:
+//   • a HOT TIGHT CORE (high tightness → confined to r≈0, goes near white-hot),
+//   • a WIDER, GENTLER HALO shoulder that fades to ~0 well before the disc edge,
+//     so there is NO hard circular boundary for the bloom to bite on.
+// The core HDR emission is scaled past the bloom bright-pass knee
+// (BLOOM_THRESHOLD = 0.55 luma in gpu/mod.rs) so the existing bloom pass blurs
+// the centre into a glowing halo. Only the firing terms (`flash`/`core`) drive
+// this, so resting somas stay calm. White is confined to the core; the shoulder
+// carries the active/firing COLOUR (mode-agnostic — composes with every
+// core_color select, including the Brain-2 red path).
+const SOMA_FLASH_CORE_TIGHTNESS: f32 = 13.0; // higher → smaller white-hot centre
+const SOMA_FLASH_HALO_WIDTH: f32 = 1.7;      // lower → wider, softer coloured glow
+const SOMA_CORE_HDR_GAIN: f32 = 2.8;         // pushes the centre past the bloom knee
+const SOMA_HALO_GAIN: f32 = 1.15;            // coloured shoulder contribution
+const SOMA_WHITE_HOT_TIGHTNESS: f32 = 24.0;  // white tint confined tighter than the core
 // ── Travelling-packet timing ──────────────────────────────────────────────────
 // A single moving Gaussian "packet" sweeps each lit path at `*_SPEED` path-units
 // per tick, with a Gaussian half-width of `*_WIDTH` path-units. Two regimes:
@@ -399,6 +419,32 @@ fn soma_material(
     let speckle = smoothstep(0.86, 1.0, speck) * 0.08;
     let shade = 0.92 + (membrane - 0.5) * 0.18 + (mottle - 0.5) * 0.12 + speckle;
     return base * shade + vec3<f32>(flash * 0.10 + glow * 0.04);
+}
+
+// Soft bloom-core firing emission for a soma. Returns the additive HDR colour to
+// lay over the lit body. `nv` is the view-facing factor dot(N,V); `r` recovered
+// from it is the screen-radial distance from the sphere centre (0 → 1). Two
+// energies gate it so a resting soma emits 0:
+//   • `core_energy` (tight `soma_core` envelope) drives the HOT, near-white-hot
+//     CENTRE — confined to r≈0 and scaled into HDR so it clears the bloom
+//     bright-pass knee and blurs into a glowing halo.
+//   • `halo_energy` (broader `soma_flash` envelope) drives the WIDE, gentle,
+//     fully-COLOURED shoulder that fades to ~0 before the disc edge — no hard
+//     ring. White is confined to the core, never smeared across the shoulder.
+fn soma_firing_emission(core_color: vec3<f32>, core_energy: f32, halo_energy: f32, nv: f32) -> vec3<f32> {
+    if core_energy <= 0.0 && halo_energy <= 0.0 {
+        return vec3<f32>(0.0);
+    }
+    let r2 = clamp(1.0 - nv * nv, 0.0, 1.0); // r^2 = sin^2 of the surface angle
+    let core_lobe = exp(-SOMA_FLASH_CORE_TIGHTNESS * r2);
+    let halo_lobe = exp(-SOMA_FLASH_HALO_WIDTH * r2);
+    let white_t = exp(-SOMA_WHITE_HOT_TIGHTNESS * r2);
+    // Tint the core: white only at the very centre, the firing colour everywhere
+    // else in the lobe. The shoulder stays fully coloured.
+    let hot = mix(core_color, vec3<f32>(1.0), white_t);
+    let core = hot * core_lobe * SOMA_CORE_HDR_GAIN * core_energy;
+    let halo = core_color * halo_lobe * SOMA_HALO_GAIN * halo_energy;
+    return core + halo;
 }
 
 // Per-segment packet speed. Long-range axon segments sweep faster so one bolus
@@ -980,14 +1026,17 @@ fn fs_sphere(in: SphereVertOut) -> @location(0) vec4<f32> {
     let nv = max(dot(N, V), 0.0);
     let rim = pow(1.0 - nv, su.rim_power) * su.rim_intensity * (1.0 + in.flash * 0.45);
     let lighting = su.ambient + su.diffuse_intensity * lambert + rim;
+    // Firing colour for the soft bloom-core. Mode-agnostic: tinted toward the
+    // active material for the default/identity paths, the active blue in Brain-1
+    // (color_by==6), and the firing red in Brain-2 (color_by==7).
     let core_color = select(
-        select(mix(material, vec3<f32>(1.0), 0.70), BRAIN_ACTIVE_BLUE, su.color_by == 6u),
+        select(mix(material, vec3<f32>(1.0), 0.45), BRAIN_ACTIVE_BLUE, su.color_by == 6u),
         BRAIN2_FIRING_RED,
         su.color_by == 7u,
     );
-    let core = core_color * in.core * 0.85;
+    let core = soma_firing_emission(core_color, in.core, in.flash, nv);
 
-    let c = (material * brightness + core) * lighting;
+    let c = material * brightness * lighting + core;
     if c.r + c.g + c.b < 0.002 { discard; }
     return vec4<f32>(c, 1.0);
 }
@@ -1015,14 +1064,15 @@ fn fs_sphere_active(in: SphereVertOut) -> @location(0) vec4<f32> {
     let nv = max(dot(N, V), 0.0);
     let rim = pow(1.0 - nv, su.rim_power) * su.rim_intensity * (1.0 + in.flash * 0.45);
     let lighting = su.ambient + su.diffuse_intensity * lambert + rim;
+    // Same firing colour + soft bloom-core as fs_sphere (see there).
     let core_color = select(
-        select(mix(material, vec3<f32>(1.0), 0.70), BRAIN_ACTIVE_BLUE, su.color_by == 6u),
+        select(mix(material, vec3<f32>(1.0), 0.45), BRAIN_ACTIVE_BLUE, su.color_by == 6u),
         BRAIN2_FIRING_RED,
         su.color_by == 7u,
     );
-    let core = core_color * in.core * 0.85;
+    let core = soma_firing_emission(core_color, in.core, in.flash, nv);
 
-    let c = (material * brightness + core) * lighting;
+    let c = material * brightness * lighting + core;
     let activity = clamp(in.glow + in.flash + in.core, 0.0, 1.0);
     let inactive_floor = clamp(su.inactive_opacity_floor, 0.0, 1.0);
     let active_ceiling = active_opacity_ceiling(su.active_opacity, inactive_floor);

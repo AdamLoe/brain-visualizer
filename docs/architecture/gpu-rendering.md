@@ -46,7 +46,12 @@ current docs must not describe those as dormant runtime surfaces.
 5. **Soma spheres** when `connection_layer != 0`; additive, one shader-built
    sphere per neuron. The sphere is a bold cell body (`emit_soma_spheres` scales
    the radius by `params::SOMA_RADIUS_FRACTION`), and `vs_sphere` adds the firing
-   pulse on top so a firing soma visibly swells.
+   pulse on top so a firing soma visibly swells. A firing soma reads as a glowing
+   light source, not a flat white disc: `render_morphology.wgsl →
+   soma_firing_emission` adds a two-lobe radial Gaussian (tight near-white-hot
+   core + wider firing-coloured halo) keyed to the screen-radial distance from the
+   sphere centre, with the core emitted in HDR above the bloom knee so pass 8
+   blurs it into a halo (see `decisions/rendering.md`).
 6. **Active tube redraw** when the active pipelines exist; depth-tested alpha
    over both additive morphology passes.
 7. **Active soma redraw**; depth-tested alpha, loading the active-tube depth.

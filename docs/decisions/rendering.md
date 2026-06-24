@@ -127,8 +127,18 @@
   pulse first and a traveling morphology impulse second. `render_far.wgsl` and
   `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl →
   vs_sphere / fs_sphere` derive a slower `glow` envelope plus a faster `flash`
-  and brief white-core lift from the existing packed `last_spike` word and
-  `tick`. Morphology tubes use a separate `visual_spike` clock for packet age:
+  and a tight `core` envelope from the existing packed `last_spike` word and
+  `tick`. The firing soma is drawn as a soft bloom-core glow, not a flat white
+  disc: `fs_sphere`/`fs_sphere_active` call `soma_firing_emission`, which lays a
+  two-lobe radial Gaussian (tight near-white-hot core driven by `core`, wider
+  firing-coloured halo driven by `flash`) over the lit body using the
+  screen-radial distance `r = sqrt(1 - dot(N,V)^2)`. The core is emitted in HDR
+  above the bloom bright-pass knee (`BLOOM_THRESHOLD`, `gpu/mod.rs`) so the
+  existing bloom pass blurs it into a halo — shader-side brightness only, no
+  bloom-pass change. White stays confined to the core; the coloured shoulder
+  composes with every `core_color` select (default/identity, Brain-1 blue,
+  Brain-2 red). The look is tunable through the `SOMA_FLASH_*` / `SOMA_*_GAIN`
+  shader constants. Morphology tubes use a separate `visual_spike` clock for packet age:
   `integrate.wgsl` keeps the first unresolved visual tick until the previous
   packet has had time to reach the generated axon leaves, while physics,
   metrics, refractory checks, and scatter continue to use the latest
