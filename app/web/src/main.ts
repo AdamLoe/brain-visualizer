@@ -1031,6 +1031,9 @@ async function boot(): Promise<void> {
     if (
       networkBuildStatus.kind === "failed"
       && networkBuildStatus.sequence !== lastReportedNetworkBuildFailure
+      // A superseded request's leftover failure must not revert a newer build
+      // that already applied. Only the latest requested sequence rolls back.
+      && !networkBuildClient.isStaleFailure(networkBuildStatus.sequence)
     ) {
       lastReportedNetworkBuildFailure = networkBuildStatus.sequence;
       console.error(`[main] network prepare failed: seq=${networkBuildStatus.sequence}: ${networkBuildStatus.message}`);

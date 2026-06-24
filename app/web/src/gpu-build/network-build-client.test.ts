@@ -16,6 +16,10 @@ class MockWorker {
   emit(message: unknown): void {
     this.onmessage?.({ data: message } as MessageEvent);
   }
+
+  emitError(event: Partial<ErrorEvent>): void {
+    this.onerror?.(event as ErrorEvent);
+  }
 }
 
 function request(sequence: number): PreparedNetworkRequest {
@@ -88,6 +92,32 @@ describe("NetworkBuildClient", () => {
     client.request(request(4));
     worker.emit({ type: "failed", sequence: 3, message: "old" });
     expect(client.currentStatus()).toEqual({ kind: "preparing", sequence: 4 });
+  });
+
+  test("surfaces a non-empty message when worker.onerror has none", () => {
+    const worker = new MockWorker();
+    const client = new NetworkBuildClient(() => worker as unknown as Worker);
+
+    client.request(request(7));
+    worker.emitError({ message: "", filename: "", lineno: 0 });
+    const status = client.currentStatus();
+    expect(status.kind).toBe("failed");
+    if (status.kind === "failed") {
+      expect(status.message.length).toBeGreaterThan(0);
+      expect(status.message).toContain("out of memory");
+    }
+  });
+
+  test("flags a non-latest failed sequence as stale so it does not roll back", () => {
+    const worker = new MockWorker();
+    const client = new NetworkBuildClient(() => worker as unknown as Worker);
+
+    client.request(request(8));
+    client.request(request(9));
+    // A leftover failure from the superseded request 8 is stale; the latest
+    // request 9 is not.
+    expect(client.isStaleFailure(8)).toBe(true);
+    expect(client.isStaleFailure(9)).toBe(false);
   });
 
   test("delivers progress ticks for the latest request and drops stale ones", () => {

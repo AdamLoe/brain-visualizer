@@ -39,7 +39,7 @@ export class NetworkBuildClient {
       this.status = {
         kind: "failed",
         sequence: this.latestRequested,
-        message: event.message || "network build worker failed",
+        message: workerErrorMessage(event),
       };
     };
     // Boot-load overhaul (A4): warm the worker's WASM instance immediately on
@@ -62,6 +62,15 @@ export class NetworkBuildClient {
 
   currentStatus(): PreparedNetworkStatus {
     return this.status;
+  }
+
+  /**
+   * A `failed` sequence is stale once a later request has superseded it. The
+   * rafLoop uses this to refuse rolling back an already-applied newer build on
+   * a leftover failure from an abandoned request.
+   */
+  isStaleFailure(sequence: number): boolean {
+    return sequence !== this.latestRequested;
   }
 
   failLatestForTesting(message: string): void {
@@ -121,6 +130,20 @@ export class NetworkBuildClient {
       message: message.message,
     };
   }
+}
+
+/**
+ * `worker.onerror` fires with an empty `event.message` for many uncaught worker
+ * crashes (e.g. WASM out-of-memory at high N), which would otherwise surface as
+ * a blank toast. Fall back to the source location, then a generic OOM-leaning
+ * message, so the failure is never silent.
+ */
+function workerErrorMessage(event: ErrorEvent): string {
+  if (event.message) return event.message;
+  if (event.filename) {
+    return `network build worker crashed at ${event.filename}:${event.lineno}`;
+  }
+  return "network build worker crashed (likely out of memory at this N)";
 }
 
 function defaultWorkerFactory(): Worker {
