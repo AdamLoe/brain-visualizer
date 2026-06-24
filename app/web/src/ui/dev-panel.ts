@@ -101,6 +101,33 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "storage",    label: "Storage"   },
 ];
 
+// Two-tier curation: ?dev=1 (or backtick/gear) opens the Essentials view;
+// ?dev=true additionally reveals every Advanced row. Tabs that hold only
+// Advanced controls (Network, Morphology) are omitted entirely in Essentials.
+const ADVANCED_ONLY_TABS: ReadonlySet<TabId> = new Set(["network", "morphology"]);
+
+// The Essentials keep-list, the single source of truth for tier gating.
+// Appearance VisualizerSettings rows, keyed by VisualizerSettings key.
+const ESSENTIALS_SETTINGS: ReadonlySet<string> = new Set([
+  "colorBy",
+  "neuronVisibility",
+  "glowTau",
+  "neuronVisualRadius",
+  "activeNeuronRadiusBoost",
+  "inactiveNeuronOpacity",
+  "connectionLayer",
+  "revealOnArrival",
+]);
+
+// Morphology-lighting descriptor rows, keyed by jsonPath.
+const ESSENTIALS_MORPH: ReadonlySet<string> = new Set([
+  "lighting.ambient",
+  "lighting.diffuseIntensity",
+  "lighting.rimIntensity",
+  "lighting.activeBoost",
+  "lighting.restingBrightness",
+]);
+
 export type HiddenReviewPresetId =
   | "accepted-default"
   | "performance-review"
@@ -365,6 +392,9 @@ export class DevPanel {
   static readonly PANEL_WIDTH_PX = 360;
 
   private container: HTMLDivElement;
+  // Two-tier curation: true when the boot URL was ?dev=true (Advanced). Backtick
+  // and the gear open at whatever tier the URL established at boot.
+  private readonly _advanced: boolean;
   private activeTab: TabId = "monitor";
   private tabContents: Map<TabId, HTMLDivElement> = new Map();
   private tabButtons: Map<TabId, HTMLButtonElement> = new Map();
@@ -481,6 +511,11 @@ export class DevPanel {
       this._currentSeed = initialValues.seed >>> 0;
     }
 
+    // Two-tier gate: dev=true → Advanced (Full), dev=1 → Essentials. Resolve
+    // before building so the row/tab builders can read this._advanced.
+    const devFlag = new URLSearchParams(window.location.search).get("dev");
+    this._advanced = devFlag === "true";
+
     // UX round 2: affordance circle removed; gear button is the only opener.
     // Build the main panel container.
     this.container = this._buildPanel();
@@ -489,8 +524,8 @@ export class DevPanel {
     // v0.1.2: build the instant-tooltip element + wire delegated listeners.
     this._buildTooltip();
 
-    // Open via ?dev=1.
-    if (new URLSearchParams(window.location.search).get("dev") === "1") {
+    // Open via ?dev=1 (Essentials) or ?dev=true (Advanced).
+    if (devFlag === "1" || devFlag === "true") {
       this._setOpen(true);
     }
 
@@ -760,6 +795,22 @@ export class DevPanel {
     el.setAttribute("aria-description", text);
   }
 
+  /** Tabs visible at the current tier — Advanced-only tabs are omitted in Essentials. */
+  private _visibleTabs(): { id: TabId; label: string }[] {
+    if (this._advanced) return TABS;
+    return TABS.filter((tab) => !ADVANCED_ONLY_TABS.has(tab.id));
+  }
+
+  /** True when a row keyed by `key` should render at the current tier. */
+  private _showSetting(key: string): boolean {
+    return this._advanced || ESSENTIALS_SETTINGS.has(key);
+  }
+
+  /** True when a morph descriptor (by jsonPath) should render at the current tier. */
+  private _showMorph(jsonPath: string): boolean {
+    return this._advanced || ESSENTIALS_MORPH.has(jsonPath);
+  }
+
   private _buildPanel(): HTMLDivElement {
     const panel = document.createElement("div");
     panel.id = "dev-panel";
@@ -791,7 +842,8 @@ export class DevPanel {
     tabBar.setAttribute("role", "tablist");
     tabBar.setAttribute("aria-label", "Developer diagnostics sections");
 
-    for (const tab of TABS) {
+    const visibleTabs = this._visibleTabs();
+    for (const tab of visibleTabs) {
       const btn = document.createElement("button");
       btn.className = "dp-tab";
       btn.textContent = tab.label;
@@ -815,7 +867,7 @@ export class DevPanel {
     const body = document.createElement("div");
     body.className = "dp-body";
 
-    for (const tab of TABS) {
+    for (const tab of visibleTabs) {
       const content = document.createElement("div");
       content.className = "dp-content";
       content.id = `dp-panel-${tab.id}`;
@@ -883,15 +935,16 @@ export class DevPanel {
   }
 
   private _onTabKeydown(event: KeyboardEvent, current: TabId): void {
-    const index = TABS.findIndex((tab) => tab.id === current);
+    const tabs = this._visibleTabs();
+    const index = tabs.findIndex((tab) => tab.id === current);
     let nextIndex = index;
-    if (event.key === "ArrowRight") nextIndex = (index + 1) % TABS.length;
-    else if (event.key === "ArrowLeft") nextIndex = (index - 1 + TABS.length) % TABS.length;
+    if (event.key === "ArrowRight") nextIndex = (index + 1) % tabs.length;
+    else if (event.key === "ArrowLeft") nextIndex = (index - 1 + tabs.length) % tabs.length;
     else if (event.key === "Home") nextIndex = 0;
-    else if (event.key === "End") nextIndex = TABS.length - 1;
+    else if (event.key === "End") nextIndex = tabs.length - 1;
     else return;
     event.preventDefault();
-    const next = TABS[nextIndex].id;
+    const next = tabs[nextIndex].id;
     this._switchTab(next);
     this.tabButtons.get(next)?.focus();
   }
@@ -1747,6 +1800,7 @@ export class DevPanel {
 
   /** One descriptor-driven slider row for a morphology config control. */
   private _morphRow(parent: HTMLElement, d: MorphDescriptor): void {
+    if (!this._showMorph(d.jsonPath)) return;
     const isInt = d.type === "int";
     const decimals = isInt ? 0 : decimalsForStep(d.step);
     const live = d.applyKind === "uniform";
@@ -1910,6 +1964,7 @@ export class DevPanel {
     initialValue: number,
     impact: SettingImpact,
   ): void {
+    if (!this._showSetting(spec.key)) return;
     const [input, numberInput] = this._sliderWithInput(parent, {
       label: spec.label,
       tooltip: spec.tooltip,
@@ -1941,6 +1996,7 @@ export class DevPanel {
     initialValue: number,
     impact: SettingImpact,
   ): void {
+    if (!this._showSetting(spec.key)) return;
     const row = document.createElement("div");
     row.className = "dp-ctrl-row";
     if (spec.tooltip) this._attachTip(row, spec.tooltip); // v0.1.2: instant tooltip

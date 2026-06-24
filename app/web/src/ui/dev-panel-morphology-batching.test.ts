@@ -101,12 +101,17 @@ class FakeElement {
 
 class FakeDocument {
   readonly body = new FakeElement();
+  readonly activeElement: FakeElement | null = null;
 
   createElement(): FakeElement {
     return new FakeElement();
   }
 
   addEventListener(): void {}
+
+  contains(): boolean {
+    return false;
+  }
 
   getElementById(id: string): FakeElement | null {
     return allElements(this.body).find((el) => el.id === id) ?? null;
@@ -158,8 +163,12 @@ function findControl(root: FakeElement, label: string): {
 function withFakeDom(run: (body: FakeElement) => void): void {
   const previousDocument = globalThis.document;
   const previousWindow = globalThis.window;
+  const previousHtmlElement = (globalThis as { HTMLElement?: unknown }).HTMLElement;
   const document = new FakeDocument();
 
+  // ?dev=true so the Advanced tier renders the generator + lighting rows these
+  // tests drive (Base radius, Active coverage, Rebuild Morphology).
+  Object.defineProperty(globalThis, "HTMLElement", { configurable: true, value: FakeElement });
   Object.defineProperty(globalThis, "document", {
     configurable: true,
     value: document,
@@ -167,8 +176,9 @@ function withFakeDom(run: (body: FakeElement) => void): void {
   Object.defineProperty(globalThis, "window", {
     configurable: true,
     value: {
-      location: { search: "" },
+      location: { search: "?dev=true" },
       addEventListener: () => {},
+      requestAnimationFrame: () => 0,
       innerWidth: 1200,
       innerHeight: 800,
     },
@@ -177,6 +187,10 @@ function withFakeDom(run: (body: FakeElement) => void): void {
   try {
     run(document.body);
   } finally {
+    Object.defineProperty(globalThis, "HTMLElement", {
+      configurable: true,
+      value: previousHtmlElement,
+    });
     Object.defineProperty(globalThis, "document", {
       configurable: true,
       value: previousDocument,
