@@ -152,8 +152,9 @@ the render pipelines owned by [`gpu-rendering.md`](gpu-rendering.md). The tube
 pass draws compacted active/recent branch instances as shader-built curved
 multi-ring tubes; the soma pass draws one shader-built sphere per neuron. Both
 use `last_spike`, path length, material noise, and `MorphUniforms` lighting
-values, but pass order, blend/depth policy, compaction, bloom, and active-opacity
-behavior are owned by the rendering docs.
+values, but pass order, blend/depth policy, compaction, bloom, active-opacity, and
+the until-arrival visibility modes (including the `reveal_on_arrival` front-gate)
+are owned by the rendering docs.
 
 ## Update When
 

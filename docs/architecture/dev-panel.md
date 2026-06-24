@@ -68,7 +68,12 @@ and the fresh-state default is **until-arrival** (mode 2). Until-arrival keeps a
 subdued view of the whole fired arbor until the aggregate packet arrives, then
 fades it out over the live "Arrival hold" window; the "Arrival hold" slider is
 the **fade-out duration** in ticks (the subdued branch ramps brightness and
-opacity to nothing over those ticks, not "extra ticks kept fully visible").
+opacity to nothing over those ticks, not "extra ticks kept fully visible"). The
+"Reveal on arrival" On/Off toggle (right after "Arrival hold", `live`) layers on
+until-arrival: when on, each segment stays hidden until the impulse front reaches
+it (reveal-as-drawn), so the arbor draws in along the pulse instead of appearing
+at once. It is off by default and inert in the off / active-recent modes; the
+render-side front-gate is owned by [`gpu-rendering.md`](gpu-rendering.md).
 Its current values and normalization live in
 `web/src/core/settings.ts → normalizeConnectionLayer` and
 `crates/brain-visualizer/src/sim/gpu/mod.rs → normalize_connection_layer`. The

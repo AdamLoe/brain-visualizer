@@ -59,6 +59,8 @@ export const SETTING_IMPACT: Record<keyof VisualizerSettings, SettingImpact> = {
   maxReachCells:            "brain-reset",
   // ── Until-arrival visibility — live compaction/render timing ──────────────
   arrivalHoldTicks:         "live",
+  // ── Until-arrival reveal-on-arrival sub-option — live render gate ─────────
+  revealOnArrival:          "live",
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

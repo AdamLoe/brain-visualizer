@@ -1605,6 +1605,18 @@ export class DevPanel {
       decimals: 0,
     }, s.arrivalHoldTicks, "live");
 
+    // revealOnArrival: layers on Until arrival (connectionLayer=2). On → each fired
+    // segment stays hidden until the impulse front reaches it (reveal-as-drawn).
+    this._selectRow(root, {
+      key: "revealOnArrival",
+      label: "Reveal on arrival",
+      tooltip: "Until-arrival sub-option (only with Connections = Until arrival). On: each segment of a fired arbor stays hidden until the impulse front reaches it, so the branch draws in along the travelling pulse instead of appearing all at once. Off (default): the whole fired arbor appears immediately and holds until arrival.",
+      options: [
+        { value: 0, label: "Off" },
+        { value: 1, label: "On" },
+      ],
+    }, s.revealOnArrival, "live");
+
     // v0.1.2: whole-connection spike lighting toggles (replace the retired
     // traveling-pulse "Signal speed" / "Recent trail" sliders).
     this._selectRow(root, {

@@ -54,7 +54,7 @@ struct MorphSegment {
 //  80:   camera_up     vec3<f32>      (12 B) | width_scale f32 (4 B)
 //  96:   camera_pos    vec3<f32>      (12 B) | light_next  u32 (4 B)
 // 112:   light_past u32 | glow_tau f32 | base_brightness f32 | connection_layer u32
-// 128:   color_by u32 | arrival_hold_ticks f32 | _pad_b u32 | _pad_c u32
+// 128:   color_by u32 | arrival_hold_ticks f32 | reveal_on_arrival u32 | _pad_c u32
 // 144:   light_dir     vec3<f32>      (12 B) | ambient         f32 (4 B)
 // 160:   diffuse_intensity f32 | rim_intensity f32 | rim_power f32 | _pad3 u32
 // 176:   resting_brightness f32 | active_boost f32 | active_opacity f32 | inactive_opacity_floor f32
@@ -72,7 +72,7 @@ struct MorphUniforms {
     connection_layer: u32, // Morphology controls: 0 = off, 1 = on (structure + signal lighting)
     color_by: u32,
     arrival_hold_ticks: f32, // until-arrival fade duration; mirrors CompactUniforms (was _pad_a)
-    _pad_b: u32,
+    reveal_on_arrival: u32,  // 1 = hard front-gate mode-2 segments until the front arrives (was _pad_b)
     _pad_c: u32,
     // Stage 0 lighting fields (v0.3.0 defaults; dev-panel exposure in v0.3.1)
     light_dir: vec3<f32>,
@@ -455,6 +455,27 @@ fn arrival_fade_factor(arrival_age: f32, hold_ticks: f32) -> f32 {
     return 1.0 - clamp((arrival_age - ARRIVAL_MODE_MAX_TRAVEL_TICKS) / denom, 0.0, 1.0);
 }
 
+// Reveal-on-arrival gate (until-arrival sub-option). Returns false only when the
+// reveal_on_arrival mode is on, the segment is mode-2 eligible, AND the impulse
+// front has not yet reached the segment's start. A hard front-gate (reveal as the
+// front is drawn), not a soft fade-in: `travel = impulse_travel(arrival_age)` and
+// the segment reveals when `travel >= segment_start`. Modes 0/1 and the off case
+// are unconditionally revealed (the caller still keys the whole effect on layer >= 2u).
+fn reveal_gated(
+    reveal_on: u32,
+    connection_layer: u32,
+    arrival_age: f32,
+    segment_start: f32,
+    kind: u32,
+    long_range: bool,
+) -> bool {
+    if reveal_on != 1u || connection_layer < 2u {
+        return true;
+    }
+    let travel = impulse_travel(arrival_age, kind, long_range);
+    return travel >= segment_start;
+}
+
 struct TubeVertOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) base_color: vec3<f32>,
@@ -678,7 +699,14 @@ fn fs_main(in: TubeVertOut) -> @location(0) vec4<f32> {
     // (`activity * active_boost`) is left unfaded — a still-traveling pulse should
     // punch through. Modes 0/1 are byte-identical (fade factor selected off).
     let arrival_fade = arrival_fade_factor(in.arrival_age, u.arrival_hold_ticks);
-    let resting_brightness = select(resting_base, resting_base * arrival_fade, u.connection_layer >= 2u);
+    // Reveal-on-arrival: hard front-gate the subdued resting term to nothing until
+    // the impulse front has reached this segment's start (mode-2 only). The packet
+    // term is left intact — it is zero ahead of the front anyway.
+    let revealed = reveal_gated(
+        u.reveal_on_arrival, u.connection_layer, in.arrival_age, in.segment_start, in.kind, long_range,
+    );
+    let resting_fade = select(0.0, arrival_fade, revealed);
+    let resting_brightness = select(resting_base, resting_base * resting_fade, u.connection_layer >= 2u);
     let brightness = resting_brightness + activity * u.active_boost;
 
     let lambert = max(dot(N, L), 0.0);
@@ -717,7 +745,13 @@ fn fs_main_active(in: TubeVertOut) -> @location(0) vec4<f32> {
     let resting_base = tube_resting_brightness(u.connection_layer, u.resting_brightness);
     // Same mode-2 resting fade as fs_main (see there). Resting-only; packet unfaded.
     let arrival_fade = arrival_fade_factor(in.arrival_age, u.arrival_hold_ticks);
-    let resting_brightness = select(resting_base, resting_base * arrival_fade, u.connection_layer >= 2u);
+    // Reveal-on-arrival: hard front-gate as in fs_main. Zeroes the resting term AND
+    // the selection alpha floor (below) so the segment is fully hidden pre-arrival.
+    let revealed = reveal_gated(
+        u.reveal_on_arrival, u.connection_layer, in.arrival_age, in.segment_start, in.kind, long_range,
+    );
+    let resting_fade = select(0.0, arrival_fade, revealed);
+    let resting_brightness = select(resting_base, resting_base * resting_fade, u.connection_layer >= 2u);
     let brightness = resting_brightness + activity * u.active_boost;
 
     let lambert = max(dot(N, L), 0.0);
@@ -734,16 +768,20 @@ fn fs_main_active(in: TubeVertOut) -> @location(0) vec4<f32> {
         in.kind,
         long_range,
     ) * in.flow_strength;
-    let inactive_floor = clamp(u.inactive_opacity_floor, 0.0, 1.0);
+    // Reveal-on-arrival zeroes the inactive coverage floor pre-arrival too, so an
+    // unrevealed segment contributes no alpha (no resting floor, no selection floor)
+    // and hits the discard below — a true hard front-gate, not a dimmed segment.
+    let inactive_floor = select(0.0, clamp(u.inactive_opacity_floor, 0.0, 1.0), revealed);
     let active_ceiling = active_opacity_ceiling(u.active_opacity, inactive_floor);
     // Packet proximity drives opacity continuously from the inactive floor to
     // the active ceiling. active_opacity=0 maps to a soft low-end ceiling so the
     // active pass still damps additive blowout instead of disappearing.
     // Mode-2: the selection floor was a constant 1.0 (segment fully opaque until
-    // compaction dropped it). Ramp it with arrival_fade so opacity fades to 0 over
-    // the hold window; the active packet term still drives alpha up via the mix.
-    // As arrival_fade → 0 the floor reaches 0 and the discard below cleanly drops it.
-    let visible_selected = select(0.0, arrival_fade, u.connection_layer >= 2u);
+    // compaction dropped it). `resting_fade` ramps it with arrival_fade so opacity
+    // fades to 0 over the hold window AND (with reveal-on-arrival) holds at 0 until
+    // the front arrives; the active packet term still drives alpha up via the mix.
+    // As resting_fade → 0 the floor reaches 0 and the discard below cleanly drops it.
+    let visible_selected = select(0.0, resting_fade, u.connection_layer >= 2u);
     let active_alpha = max(mix(inactive_floor, active_ceiling, segment_activity), visible_selected);
     // Below epsilon, write neither color nor depth (in-shader inactive skip).
     if active_alpha < 0.004 { discard; }

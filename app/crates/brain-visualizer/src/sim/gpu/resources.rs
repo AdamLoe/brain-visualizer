@@ -88,7 +88,7 @@ pub use crate::sim::morphology::{MorphSegment, MorphSphereInstance};
 ///  80:   camera_up:[f32;3] + width_scale:f32 (16 B)
 ///  96:   camera_pos:[f32;3] + light_next:u32 (16 B)
 /// 112:   light_past:u32 + glow_tau:f32 + base_brightness:f32 + connection_layer:u32 (16 B)
-/// 128:   color_by:u32 + arrival_hold_ticks:f32 + _pad_b:u32 + _pad_c:u32 (16 B)
+/// 128:   color_by:u32 + arrival_hold_ticks:f32 + reveal_on_arrival:u32 + _pad_c:u32 (16 B)
 /// 144:   light_dir:[f32;3] + ambient:f32 (16 B)
 /// 160:   diffuse_intensity:f32 + rim_intensity:f32 + rim_power:f32 + _pad3:u32 (16 B)
 /// 176:   resting_brightness:f32 + active_boost:f32 + active_opacity:f32 + inactive_opacity_floor:f32 (16 B)
@@ -122,8 +122,13 @@ pub struct MorphUniforms {
     // Same value `CompactUniforms.arrival_hold_ticks` carries; repurposed from the
     // former `_pad_a` (u32→f32 in place, so the 192 B layout is unchanged).
     pub arrival_hold_ticks: f32,
-    pub _pad_b: u32, // pad block to 16-B boundary before light_dir
-    pub _pad_c: u32,
+    // Reveal-on-arrival (until-arrival sub-option). When 1 AND connection_layer >= 2u,
+    // a tube segment is hard front-gated: hidden until the impulse front reaches its
+    // start (`impulse_travel(arrival_age) >= segment_start`), then it follows the
+    // existing arrival-hold + fade path unchanged. 0 = current behavior. Repurposed
+    // from the former `_pad_b` (u32 in place), so the 192 B layout is unchanged.
+    pub reveal_on_arrival: u32,
+    pub _pad_c: u32, // pad block to 16-B boundary before light_dir
     // ── Lighting preset (Stage 0 / v0.3.0) ────────────────────────────────────
     // Defaults locked here; dev-panel exposure in v0.3.1.
     pub light_dir: [f32; 3], // world-space directional light direction (normalised)

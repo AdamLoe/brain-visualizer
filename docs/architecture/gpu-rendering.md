@@ -121,7 +121,19 @@ drops as compaction stops selecting it. The fade is render-only (compaction
 selection is unchanged) and applies only when `connection_layer >= 2`, so the
 off / active-recent paths are byte-identical. `arrival_hold_ticks` reaches render
 through the repurposed `_pad_a` slot of `MorphUniforms` (the same value
-`CompactUniforms` carries). Both modes write chunk-local `DrawIndirectArgs`, and
+`CompactUniforms` carries).
+
+The `reveal_on_arrival` boolean is an opt-in mode-2 sub-option (default off,
+ignored in modes 0/1). When on, a segment is **hard front-gated**: hidden until
+the impulse front reaches its start
+(`impulse_travel(arrival_age) >= segment_start`), so the fired arbor draws in
+along the travelling pulse instead of appearing at once. The gate
+(`render_morphology.wgsl → reveal_gated`, in both `fs_main` and `fs_main_active`)
+zeroes the resting brightness, selection alpha floor, and inactive opacity floor
+before arrival; after reveal the segment follows the arrival-hold + fade path
+unchanged. It is render-only — compaction still selects the whole fired arbor and
+has no `reveal_on_arrival` field, so the geometry is held ready and revealed
+without a recompute. Both modes write chunk-local `DrawIndirectArgs`, and
 both additive and active tube passes use the same indirect args, so per-frame
 selected counts stay GPU-side. `GpuBackend::read_active_segment_count` is
 diagnostics-only.
@@ -168,7 +180,8 @@ existing 192 B `MorphUniforms` layout (repurposed from the former trailing
 `_pad4`/`_pad5`). They now act as coverage/emphasis inputs for the solid redraw
 rather than allowing see-through tube fragments. `arrival_hold_ticks` (the
 until-arrival fade duration) rides the same trick — it repurposes the former
-`_pad_a` slot (`u32`→`f32` in place), so the 192 B layout and its
+`_pad_a` slot (`u32`→`f32` in place). `reveal_on_arrival` likewise repurposes the
+former `_pad_b` slot (kept as `u32`), so the 192 B layout and its
 `morph_layouts_locked` assert are unchanged. See
 `crates/brain-visualizer/src/sim/gpu/resources.rs → MorphUniforms` for the field
 order.

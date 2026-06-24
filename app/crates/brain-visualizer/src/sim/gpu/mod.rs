@@ -623,6 +623,11 @@ pub struct VisualSettings {
     /// index 26 — Until-arrival visibility hold in simulation ticks after the
     /// aggregate packet arrival point.
     pub arrival_hold_ticks: f32,
+    /// index 27 — Reveal-on-arrival (0/1, default 0). Until-arrival sub-option:
+    /// when 1 (and connection_layer >= 2), a tube segment stays hidden until the
+    /// impulse front reaches it, then follows the arrival-hold + fade path. 0 =
+    /// current behavior. Ignored in modes 0/1 (the shader gate keys on layer >= 2u).
+    pub reveal_on_arrival: u32,
 }
 
 impl Default for VisualSettings {
@@ -661,6 +666,7 @@ impl Default for VisualSettings {
             long_range_reach_frac: 0.14,
             max_reach_cells: 14.0,
             arrival_hold_ticks: 30.0,
+            reveal_on_arrival: 0,
         }
     }
 }
@@ -702,13 +708,14 @@ impl VisualSettings {
             long_range_reach_frac: f(24, d.long_range_reach_frac),
             max_reach_cells: f(25, d.max_reach_cells),
             arrival_hold_ticks: f(26, d.arrival_hold_ticks).clamp(0.0, 300.0),
+            reveal_on_arrival: u(27, d.reveal_on_arrival).min(1),
         }
     }
 
     /// Compact JSON snapshot for review artifacts.
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"glow_tau\":{:.6},\"point_radius\":{:.6},\"neuron_visual_radius\":{:.6},\"active_neuron_radius_boost\":{:.6},\"inactive_neuron_opacity\":{:.6},\"voltage_glow_strength\":{:.6},\"connection_visual_width\":{:.6},\"connection_curve_lift\":{:.6},\"connection_light_next\":{},\"bloom_strength\":{:.6},\"surface_opacity\":{:.6},\"i_ext\":{:.6},\"synaptic_scale\":{:.6},\"heterogeneity\":{:.6},\"morph_resting_opacity\":{:.6},\"signal_source\":{},\"connection_layer\":{},\"color_by\":{},\"neuron_visibility\":{},\"surface\":{},\"weight_normalization\":{},\"input_mode\":{},\"adaptive_scaler_enabled\":{},\"long_range_reach_frac\":{:.6},\"max_reach_cells\":{:.6},\"arrival_hold_ticks\":{:.6}}}",
+            "{{\"glow_tau\":{:.6},\"point_radius\":{:.6},\"neuron_visual_radius\":{:.6},\"active_neuron_radius_boost\":{:.6},\"inactive_neuron_opacity\":{:.6},\"voltage_glow_strength\":{:.6},\"connection_visual_width\":{:.6},\"connection_curve_lift\":{:.6},\"connection_light_next\":{},\"bloom_strength\":{:.6},\"surface_opacity\":{:.6},\"i_ext\":{:.6},\"synaptic_scale\":{:.6},\"heterogeneity\":{:.6},\"morph_resting_opacity\":{:.6},\"signal_source\":{},\"connection_layer\":{},\"color_by\":{},\"neuron_visibility\":{},\"surface\":{},\"weight_normalization\":{},\"input_mode\":{},\"adaptive_scaler_enabled\":{},\"long_range_reach_frac\":{:.6},\"max_reach_cells\":{:.6},\"arrival_hold_ticks\":{:.6},\"reveal_on_arrival\":{}}}",
             self.glow_tau,
             self.point_radius,
             self.neuron_visual_radius,
@@ -735,6 +742,7 @@ impl VisualSettings {
             self.long_range_reach_frac,
             self.max_reach_cells,
             self.arrival_hold_ticks,
+            self.reveal_on_arrival,
         )
     }
 }
@@ -1965,7 +1973,9 @@ impl GpuBackend {
                     // Until-arrival fade duration (mirrors the CompactUniforms clamp
                     // at the compaction site); render ramps mode-2 over this window.
                     arrival_hold_ticks: self.visual.arrival_hold_ticks.clamp(0.0, 300.0),
-                    _pad_b: 0,
+                    // Reveal-on-arrival (until-arrival sub-option); shader gate keys
+                    // this on connection_layer >= 2u, so it is inert in modes 0/1.
+                    reveal_on_arrival: self.visual.reveal_on_arrival.min(1),
                     _pad_c: 0,
                     // v0.3.1: lighting + brightness from the morphology config
                     // (set_morphology_config), not the Float32Array. light_dir is
@@ -2978,7 +2988,7 @@ mod tests {
 
     #[test]
     fn visual_settings_from_slice_maps_locked_indices() {
-        let data: Vec<f32> = (1..=27).map(|v| v as f32).collect();
+        let data: Vec<f32> = (1..=28).map(|v| v as f32).collect();
         let settings = VisualSettings::from_slice(&data);
 
         assert_eq!(settings.glow_tau, 1.0);
@@ -3008,6 +3018,8 @@ mod tests {
         assert_eq!(settings.long_range_reach_frac, 25.0);
         assert_eq!(settings.max_reach_cells, 26.0);
         assert_eq!(settings.arrival_hold_ticks, 27.0);
+        // index 27 → reveal_on_arrival, clamped to {0,1} (28.0 → 1).
+        assert_eq!(settings.reveal_on_arrival, 1);
     }
 
     #[test]

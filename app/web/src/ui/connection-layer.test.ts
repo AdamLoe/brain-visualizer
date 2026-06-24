@@ -47,9 +47,9 @@ describe("connectionLayer index contract", () => {
     }
   });
 
-  test("Float32Array length remains 27 after connectionLayer change", () => {
+  test("Float32Array length remains 28 after connectionLayer change", () => {
     const arr = toFloat32Array({ ...DEFAULT_SETTINGS, connectionLayer: 2 });
-    expect(arr.length).toBe(27);
+    expect(arr.length).toBe(28);
   });
 });
 

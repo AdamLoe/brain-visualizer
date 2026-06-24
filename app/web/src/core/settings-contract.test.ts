@@ -20,8 +20,8 @@ function expectFloatArrayClose(actual: Float32Array, expected: readonly number[]
 }
 
 describe("VisualSettings Float32Array contract", () => {
-  test("default settings serialize to the locked 27-slot layout", () => {
-    expect(SETTINGS_LENGTH).toBe(27);
+  test("default settings serialize to the locked 28-slot layout", () => {
+    expect(SETTINGS_LENGTH).toBe(28);
     expectFloatArrayClose(toFloat32Array(DEFAULT_SETTINGS), [
       10.0,  // 0 glowTau
       0.004, // 1 pointRadius default-written quarantine slot
@@ -50,6 +50,7 @@ describe("VisualSettings Float32Array contract", () => {
       0.14,  // 24 longRangeReachFrac
       14.0,  // 25 maxReachCells
       30.0,  // 26 arrivalHoldTicks
+      0.0,   // 27 revealOnArrival (default off)
     ]);
   });
 

@@ -72,9 +72,10 @@ spot-checks these against code:
 - The `MorphSegment` field order/size (48 B, branch-only; Rust `crates/brain-visualizer/src/sim/morphology.rs` ↔ WGSL
   `render_morphology.wgsl`) and any edge-event layout.
 - The `MorphSphereInstance` field order/size (48 B, soma-only; Rust `crates/brain-visualizer/src/sim/morphology.rs → MorphSphereInstance` ↔ the WGSL sphere struct in `render_morphology.wgsl`; includes `root_dir`/`root_pull` fields added for the axon-root pull pass).
-- `MorphUniforms` size (192 B; Rust `crates/brain-visualizer/src/sim/gpu/resources.rs → MorphUniforms` ↔ WGSL `render_morphology.wgsl`; must update both sides atomically). Includes the lighting/brightness fields `resting_brightness`/`active_boost`, the true-opacity fields `active_opacity`/`inactive_opacity_floor` (repurposed from the former trailing `_pad4`/`_pad5`), and `arrival_hold_ticks` (the until-arrival fade duration, repurposed from `_pad_a`). All three pad repurposes are `u32`→`f32` in place, so the size is unchanged at 192 B.
+- `MorphUniforms` size (192 B; Rust `crates/brain-visualizer/src/sim/gpu/resources.rs → MorphUniforms` ↔ WGSL `render_morphology.wgsl`; must update both sides atomically). Includes the lighting/brightness fields `resting_brightness`/`active_boost`, the true-opacity fields `active_opacity`/`inactive_opacity_floor` (repurposed from the former trailing `_pad4`/`_pad5`), `arrival_hold_ticks` (the until-arrival fade duration, repurposed from `_pad_a`, `u32`→`f32`), and `reveal_on_arrival` (the reveal-on-arrival front-gate flag at byte offset 136, repurposed from `_pad_b`, kept `u32`; `_pad_c` stays the final pad). All pad repurposes are in place, so the size is unchanged at 192 B.
 - The `VisualSettings` Float32Array index contract (`web/src/core/settings.ts` ↔
-  `crates/brain-visualizer/src/sim/gpu/mod.rs`), including the heavy-tailed-reach
+  `crates/brain-visualizer/src/sim/gpu/mod.rs`; `SETTINGS_LENGTH` 28, with
+  `reveal_on_arrival` at index 27), including the heavy-tailed-reach
   indices `longRangeReachFrac`/`maxReachCells` that `set_visual_settings` packs
   (as integers over `REACH_FRAC_DEN`) into the `ConnectUniforms` `long_range_frac`/`max_reach`
   slots (Rust `resources.rs` ↔ WGSL `scatter.wgsl`, still 32 B).

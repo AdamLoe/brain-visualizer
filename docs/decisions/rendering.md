@@ -246,10 +246,10 @@
 
 ## Active-layer coverage knobs live in LightingConfig, not the VisualSettings Float32Array
 
-- **Decision.** The legacy `active_opacity` and `inactive_opacity_floor` fields live in the morph-config-owned `LightingConfig` and ride two repurposed trailing `MorphUniforms` pad slots — the locked `VisualSettings` Float32Array index contract is untouched. Their UI labels describe active/inactive coverage because visible tube fragments are rendered solid. The until-arrival fade reuses the same trick: `arrival_hold_ticks` rides the repurposed `_pad_a` slot (offset 128, `u32`→`f32` in place) so render can compute the mode-2 ramp from the same value `CompactUniforms` already carries — no new uniform field, no new Float32Array index.
+- **Decision.** The legacy `active_opacity` and `inactive_opacity_floor` fields live in the morph-config-owned `LightingConfig` and ride two repurposed trailing `MorphUniforms` pad slots — the locked `VisualSettings` Float32Array index contract is untouched. Their UI labels describe active/inactive coverage because visible tube fragments are rendered solid. The until-arrival fade reuses the same trick: `arrival_hold_ticks` rides the repurposed `_pad_a` slot (offset 128, `u32`→`f32` in place) so render can compute the mode-2 ramp from the same value `CompactUniforms` already carries. The `reveal_on_arrival` boolean rides the repurposed `_pad_b` slot (offset 136, kept `u32`); it does grow the `VisualSettings` Float32Array (index 27, `SETTINGS_LENGTH` 28) because it is a user-facing toggle rather than a morph-config value, but the `MorphUniforms` side stays at 192 B — no new uniform field, just a pad repurpose.
 - **Why.** `LightingConfig` is the established, contract-light path for morphology beauty knobs (it already carries `resting_brightness` / `active_boost` through `MorphUniforms`). Growing the Float32Array would touch the locked Rust↔TS index contract and the persistence schema for no benefit; repurposing reserved `MorphUniforms` pads keeps the 192 B layout assert green under `cargo test`.
 - **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md)
-- **Code anchors.** `crates/brain-visualizer/src/sim/morphology.rs → LightingConfig` (`active_opacity`, `inactive_opacity_floor`); `crates/brain-visualizer/src/sim/gpu/resources.rs → MorphUniforms` (`active_opacity`/`inactive_opacity_floor` were `_pad4`/`_pad5`; `arrival_hold_ticks` was `_pad_a`); set from `self.visual.arrival_hold_ticks` at `crates/brain-visualizer/src/sim/gpu/mod.rs → render_full`.
+- **Code anchors.** `crates/brain-visualizer/src/sim/morphology.rs → LightingConfig` (`active_opacity`, `inactive_opacity_floor`); `crates/brain-visualizer/src/sim/gpu/resources.rs → MorphUniforms` (`active_opacity`/`inactive_opacity_floor` were `_pad4`/`_pad5`; `arrival_hold_ticks` was `_pad_a`; `reveal_on_arrival` was `_pad_b`); set from `self.visual.arrival_hold_ticks` / `self.visual.reveal_on_arrival` at `crates/brain-visualizer/src/sim/gpu/mod.rs → render_full`.
 
 ## Connection visibility modes reuse GPU-indirect segment selection
 
@@ -269,6 +269,22 @@
 - **Why.** Frame cost must scale with visible spike activity rather than total generated segment count, while the until-arrival mode needs a readable whole-connection context that resolves smoothly instead of popping out. Reusing compaction and indirect args keeps selection on the existing GPU-side path; the fade is a pure shader ramp so it adds no new pass or readback.
 - **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md), [`../architecture/gpu-backend.md`](../architecture/gpu-backend.md), [`../architecture/scaling.md`](../architecture/scaling.md)
 - **Code anchors.** `crates/brain-visualizer/src/sim/gpu/shaders/compact_morph_segments.wgsl → reset / compact / write_args`; `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl → arrival_fade_factor` (the `[28 .. 28+hold]` ramp, applied in `fs_main` / `fs_main_active`); `crates/brain-visualizer/src/sim/gpu/mod.rs → render_full`; `crates/brain-visualizer/src/sim/gpu/pipelines.rs → build_morph_pipelines`; `crates/brain-visualizer/src/sim/gpu/resources.rs → MorphSegmentChunk / MorphBuffers`.
+
+## Reveal-on-arrival is a hard front-gate, render-only, not a soft fade-in
+
+- **Decision.** `reveal_on_arrival` is an opt-in boolean (default off) that layers
+  on until-arrival (`connection_layer >= 2`, ignored otherwise). When on, a tube
+  segment is **hard front-gated** — discarded/zeroed until the impulse front
+  reaches its START (`impulse_travel(arrival_age) >= segment_start`, reveal-as-drawn),
+  then it follows the arrival-hold + fade path unchanged. Render-only: compaction
+  still selects the whole fired arbor and has no `reveal_on_arrival` field, so the
+  geometry is held ready and revealed without extra compute.
+- **Why.** Reveal-as-drawn reads as the impulse growing the arbor along the pulse,
+  more legible than the whole arbor popping in at once. A hard discard (not a soft
+  fade-in) was the explicit product choice — a partial fade-in muddies the
+  "drawn by the front" read; render-only avoids a second compaction predicate.
+- **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md), [`../architecture/dev-panel.md`](../architecture/dev-panel.md)
+- **Code anchors.** `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl → reveal_gated` (applied in `fs_main` / `fs_main_active`); `crates/brain-visualizer/src/sim/gpu/mod.rs → VisualSettings` (index 27 `reveal_on_arrival`), `render_full` (writes `MorphUniforms.reveal_on_arrival`); `web/src/core/settings.ts → toFloat32Array` (`a[27]`); `web/src/ui/dev-panel.ts` ("Reveal on arrival" toggle).
 
 ## Per-frame segment selection is GPU-indirect, never CPU readback
 
