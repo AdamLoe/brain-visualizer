@@ -185,6 +185,9 @@ const AXON_FLOW_POWER: f32 = 1.35;
 const BRAIN_REST_PINK: vec3<f32> = vec3<f32>(1.0, 0.18, 0.54);
 const BRAIN_ACTIVE_BLUE: vec3<f32> = vec3<f32>(0.08, 0.56, 1.0);
 const BRAIN_SOFT_BLUE: vec3<f32> = vec3<f32>(0.30, 0.68, 1.0);
+// Brain 2 (color_by == 7u): resting neuron reads blue, firing region reads red.
+const BRAIN2_RESTING_BLUE: vec3<f32> = vec3<f32>(0.0, 0.15, 1.0);
+const BRAIN2_FIRING_RED: vec3<f32> = vec3<f32>(1.0, 0.0, 0.0);
 
 fn has_spiked(packed: u32) -> bool {
     return (packed & HAS_SPIKED_MASK) != 0u;
@@ -284,6 +287,9 @@ fn branch_base_color(kind: u32, region: u32, ei: u32, color_by: u32, neuron_id: 
     if color_by == 6u {
         return BRAIN_REST_PINK;
     }
+    if color_by == 7u {
+        return BRAIN2_RESTING_BLUE;
+    }
     var color: vec3<f32>;
     if kind == 0u {
         color = vec3<f32>(0.22, 0.34, 0.5);
@@ -307,6 +313,9 @@ fn branch_base_color(kind: u32, region: u32, ei: u32, color_by: u32, neuron_id: 
 fn soma_base_color(region: u32, ei: u32, color_by: u32, neuron_id: u32) -> vec3<f32> {
     if color_by == 6u {
         return BRAIN_REST_PINK;
+    }
+    if color_by == 7u {
+        return BRAIN2_RESTING_BLUE;
     }
     var color: vec3<f32>;
     if color_by == 0u {
@@ -332,9 +341,23 @@ fn brain_tube_tint(material: vec3<f32>, legacy: f32, packet: f32) -> vec3<f32> {
     return mix(mix(material, BRAIN_SOFT_BLUE, halo_t), BRAIN_ACTIVE_BLUE, packet_t);
 }
 
+// Brain 2 tube tint: blue at rest, saturating to red where the fragment is firing.
+// `activity` is the per-fragment legacy + packet_flow signal; k is chosen so a
+// passing impulse clearly pushes the segment to full red.
+fn brain2_tube_tint(activity: f32) -> vec3<f32> {
+    let firing_t = clamp(activity * 6.0, 0.0, 1.0);
+    return mix(BRAIN2_RESTING_BLUE, BRAIN2_FIRING_RED, firing_t);
+}
+
 fn brain_soma_material(material: vec3<f32>, glow: f32, flash: f32) -> vec3<f32> {
     let active_t = clamp(glow * 0.25 + flash * 0.75, 0.0, 1.0);
     return mix(material, BRAIN_SOFT_BLUE, active_t);
+}
+
+// Brain 2 soma body: blue at rest, saturating to red as the soma fires (glow/flash).
+fn brain2_soma_material(glow: f32, flash: f32) -> vec3<f32> {
+    let firing_t = clamp(glow * 0.5 + flash * 1.0, 0.0, 1.0);
+    return mix(BRAIN2_RESTING_BLUE, BRAIN2_FIRING_RED, firing_t);
 }
 
 fn tube_material(
@@ -689,9 +712,13 @@ fn fs_main(in: TubeVertOut) -> @location(0) vec4<f32> {
     let activity = legacy + packet_flow;
     let material = tube_material(in.base_color, N, in.world_pos, in.path_pos, in.neuron_id, in.kind);
     let tint = select(
-        mix(material, vec3<f32>(1.0), clamp(packet_flow * 0.18, 0.0, 0.18)),
-        brain_tube_tint(material, legacy, packet_flow),
-        u.color_by == 6u,
+        select(
+            mix(material, vec3<f32>(1.0), clamp(packet_flow * 0.18, 0.0, 0.18)),
+            brain_tube_tint(material, legacy, packet_flow),
+            u.color_by == 6u,
+        ),
+        brain2_tube_tint(activity),
+        u.color_by == 7u,
     );
     let resting_base = tube_resting_brightness(u.connection_layer, u.resting_brightness);
     // Mode-2 only: fade the subdued resting term to nothing over the hold window so
@@ -738,9 +765,13 @@ fn fs_main_active(in: TubeVertOut) -> @location(0) vec4<f32> {
     let activity = legacy + packet_flow;
     let material = tube_material(in.base_color, N, in.world_pos, in.path_pos, in.neuron_id, in.kind);
     let tint = select(
-        mix(material, vec3<f32>(1.0), clamp(packet_flow * 0.18, 0.0, 0.18)),
-        brain_tube_tint(material, legacy, packet_flow),
-        u.color_by == 6u,
+        select(
+            mix(material, vec3<f32>(1.0), clamp(packet_flow * 0.18, 0.0, 0.18)),
+            brain_tube_tint(material, legacy, packet_flow),
+            u.color_by == 6u,
+        ),
+        brain2_tube_tint(activity),
+        u.color_by == 7u,
     );
     let resting_base = tube_resting_brightness(u.connection_layer, u.resting_brightness);
     // Same mode-2 resting fade as fs_main (see there). Resting-only; packet unfaded.
@@ -938,14 +969,22 @@ fn fs_sphere(in: SphereVertOut) -> @location(0) vec4<f32> {
     let V = normalize(in.view_dir);
     let L = normalize(su.light_dir);
     let raw_material = soma_material(in.base_color, N, in.world_pos, in.neuron_id, in.glow, in.flash);
-    let material = select(raw_material, brain_soma_material(raw_material, in.glow, in.flash), su.color_by == 6u);
+    let material = select(
+        select(raw_material, brain_soma_material(raw_material, in.glow, in.flash), su.color_by == 6u),
+        brain2_soma_material(in.glow, in.flash),
+        su.color_by == 7u,
+    );
     let brightness = su.resting_brightness + (in.glow * 0.55 + in.flash * 1.15) * su.active_boost;
 
     let lambert = max(dot(N, L), 0.0);
     let nv = max(dot(N, V), 0.0);
     let rim = pow(1.0 - nv, su.rim_power) * su.rim_intensity * (1.0 + in.flash * 0.45);
     let lighting = su.ambient + su.diffuse_intensity * lambert + rim;
-    let core_color = select(mix(material, vec3<f32>(1.0), 0.70), BRAIN_ACTIVE_BLUE, su.color_by == 6u);
+    let core_color = select(
+        select(mix(material, vec3<f32>(1.0), 0.70), BRAIN_ACTIVE_BLUE, su.color_by == 6u),
+        BRAIN2_FIRING_RED,
+        su.color_by == 7u,
+    );
     let core = core_color * in.core * 0.85;
 
     let c = (material * brightness + core) * lighting;
@@ -965,14 +1004,22 @@ fn fs_sphere_active(in: SphereVertOut) -> @location(0) vec4<f32> {
     let V = normalize(in.view_dir);
     let L = normalize(su.light_dir);
     let raw_material = soma_material(in.base_color, N, in.world_pos, in.neuron_id, in.glow, in.flash);
-    let material = select(raw_material, brain_soma_material(raw_material, in.glow, in.flash), su.color_by == 6u);
+    let material = select(
+        select(raw_material, brain_soma_material(raw_material, in.glow, in.flash), su.color_by == 6u),
+        brain2_soma_material(in.glow, in.flash),
+        su.color_by == 7u,
+    );
     let brightness = su.resting_brightness + (in.glow * 0.55 + in.flash * 1.15) * su.active_boost;
 
     let lambert = max(dot(N, L), 0.0);
     let nv = max(dot(N, V), 0.0);
     let rim = pow(1.0 - nv, su.rim_power) * su.rim_intensity * (1.0 + in.flash * 0.45);
     let lighting = su.ambient + su.diffuse_intensity * lambert + rim;
-    let core_color = select(mix(material, vec3<f32>(1.0), 0.70), BRAIN_ACTIVE_BLUE, su.color_by == 6u);
+    let core_color = select(
+        select(mix(material, vec3<f32>(1.0), 0.70), BRAIN_ACTIVE_BLUE, su.color_by == 6u),
+        BRAIN2_FIRING_RED,
+        su.color_by == 7u,
+    );
     let core = core_color * in.core * 0.85;
 
     let c = (material * brightness + core) * lighting;

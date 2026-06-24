@@ -73,6 +73,15 @@ option lists/defaults live in `web/src/core/settings.ts → DEFAULT_SETTINGS` an
 through `VisualSettings::from_slice`. Tombstoned Float32Array slots stay in
 place and are written by the web settings boundary.
 
+`color_by` is read UNCLAMPED from Float32Array index 18, so new modes are purely
+additive (no `SETTINGS_LENGTH` change, no uniform repad). **Brain** (6) and
+**Brain 2** (7) are the themed activity languages spanning all three color
+shaders; Brain 2 reads near-black background, blue at rest, red where the
+per-fragment `activity = legacy + packet_flow` signal (and soma glow/flash/core)
+fires, reusing that existing signal rather than a new buffer. See
+[`../decisions/rendering.md`](../decisions/rendering.md) for the themed-mode
+rationale.
+
 ## Morphology Rendering
 
 Morphology geometry is generated at network build time and uploaded as chunked

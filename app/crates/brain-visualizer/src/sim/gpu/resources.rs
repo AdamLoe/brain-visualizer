@@ -351,7 +351,7 @@ pub struct RenderUniforms {
     // ─── V2 Phase E: orthogonal color/visibility/radius controls ─────────────
     // New 16-byte block (offset 128). Field order MUST match `Uniforms` in
     // render_far.wgsl verbatim (#1 corruption source — do not reorder).
-    /// color_by mode: 0=region,1=E/I,2=spike-age,3=voltage,4=activity,5=identity,6=brain (default 6).
+    /// color_by mode: 0=region,1=E/I,2=spike-age,3=voltage,4=activity,5=identity,6=brain,7=brain2 (default 6).
     pub color_by: u32,
     /// neuron_visibility: 0=all,1=active-emphasis,2=active-only (default 0).
     pub neuron_visibility: u32,

@@ -334,7 +334,9 @@
   both files carry authoritative inline comments and executable contract tests.
   Removed settings reserve their existing indices and are zero/default-written
   rather than shifting later slots, while additive enum values such as
-  `connectionLayer = 2` reuse the existing slot.
+  `connectionLayer = 2` or the themed `colorBy = 7` ("Brain 2") reuse the
+  existing slot (`colorBy` is read unclamped at index 18, so a new color mode
+  needs no length/index change — see [`rendering.md`](rendering.md)).
 - **Why.** WASM passes a raw byte slice — there is no named-field protocol.
   Using a flat array with documented indices is simpler than building a
   serialisation layer, and the `from_slice` implementation is length-tolerant

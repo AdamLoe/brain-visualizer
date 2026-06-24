@@ -170,7 +170,7 @@ function normalizeVisualSettings(settings: VisualizerSettings): VisualizerSettin
     heterogeneity:            normalizedRange(settings.heterogeneity, 0, 1, base.heterogeneity),
     morphRestingOpacity:      normalizedRange(settings.morphRestingOpacity, 0, 1, base.morphRestingOpacity),
     connectionLayer:          normalizeConnectionLayer(settings.connectionLayer),
-    colorBy:                  normalizeEnum(settings.colorBy, [0, 1, 2, 3, 4, 5, 6], base.colorBy),
+    colorBy:                  normalizeEnum(settings.colorBy, [0, 1, 2, 3, 4, 5, 6, 7], base.colorBy),
     neuronVisibility:         normalizeEnum(settings.neuronVisibility, [0, 1, 2], base.neuronVisibility),
     weightNormalization:      normalizeEnum(settings.weightNormalization, [0, 1, 2], base.weightNormalization),
     inputMode:                normalizeEnum(settings.inputMode, [0, 1, 2, 3, 4, 5], base.inputMode),

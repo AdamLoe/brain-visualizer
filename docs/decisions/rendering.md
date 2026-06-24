@@ -77,6 +77,31 @@
   `crates/brain-visualizer/src/sim/gpu/resources.rs → ManifoldUniforms` threads
   `color_by` to the optional surface without increasing the uniform size.
 
+## Brain 2 color mode: near-black scene, firing red, resting blue
+
+- **Decision.** Brain 2 (`color_by == 7u`) is a second themed activity language:
+  the scene background reads near-black (far resting cloud + manifold surface),
+  resting neuron structure reads blue, and the currently-firing region reads red.
+  Red-vs-blue is driven by the existing per-fragment `activity = legacy +
+  packet_flow` signal in the morphology tube passes and by soma glow/flash/core
+  in the soma passes and far billboards — a passing impulse saturates the segment
+  to red, then relaxes back to blue. It is a purely additive enum value: `color_by`
+  is read UNCLAMPED from Float32Array index 18, so no `SETTINGS_LENGTH` change,
+  uniform repad, or Rust struct change was needed.
+- **Why.** Brain mode's pink-resting / blue-active language is the default, but a
+  high-contrast "firing = red on a near-black field" view reads the traveling
+  impulse more starkly. Reusing the already-plumbed `activity` signal keeps it a
+  pure shader color branch with no new buffer or contract.
+- **Applies to.** [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md),
+  [`../architecture/dev-panel.md`](../architecture/dev-panel.md).
+- **Code anchors.** `web/src/ui/dev-panel.ts → COLOR_BY_OPTIONS`;
+  `web/src/core/settings.ts → normalizeEnum` (colorBy allowed set);
+  `crates/brain-visualizer/src/sim/gpu/shaders/render_morphology.wgsl →
+  brain2_tube_tint / brain2_soma_material / branch_base_color / soma_base_color`
+  (BRAIN2_RESTING_BLUE / BRAIN2_FIRING_RED);
+  `crates/brain-visualizer/src/sim/gpu/shaders/render_far.wgsl → color_for / fs_main`;
+  `crates/brain-visualizer/src/sim/gpu/shaders/render_manifold.wgsl → fs_main`.
+
 ## Morphology pass supersedes and deletes ribbon/cylinder connection visuals
 
 - **Decision.** Procedural neuron morphology (soma + dendrite tree + shared

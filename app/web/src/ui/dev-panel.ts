@@ -317,6 +317,7 @@ export const COLOR_BY_OPTIONS = [
   { value: 4, label: "Activity" },
   { value: 5, label: "Identity" },
   { value: 6, label: "Brain" },
+  { value: 7, label: "Brain 2" },
 ] as const;
 
 export const COLOR_BY_LABELS = COLOR_BY_OPTIONS.map((option) => option.label);

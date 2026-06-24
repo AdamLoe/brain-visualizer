@@ -38,7 +38,13 @@ fn vs_main(
 fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
     // Base dark surface tint. mode 1 (dim) = half brightness, mode 2 (normal) = full.
     let brain_rest_pink = vec3<f32>(1.0, 0.18, 0.54);
-    let base = select(vec3<f32>(0.09, 0.09, 0.14), brain_rest_pink, u.color_by == 6u);
+    // Brain 2 (mode 7): near-black surface so the scene reads near-black.
+    let brain2_near_black = vec3<f32>(0.01, 0.01, 0.02);
+    let base = select(
+        select(vec3<f32>(0.09, 0.09, 0.14), brain_rest_pink, u.color_by == 6u),
+        brain2_near_black,
+        u.color_by == 7u,
+    );
     let mode_scale = select(0.5, 1.0, u.surface_mode == 2u);
     let rgb = base * mode_scale * u.surface_opacity;
     return vec4(rgb, u.surface_opacity);

@@ -104,8 +104,15 @@ The tab also contains a "Morphology Lighting" section that renders the
 `_buildMorphLightingRows`. These are `live`/`uniform` lighting controls;
 `applyKind === "uniform"` rows call `onMorphLive` immediately.
 
-The `Color by` selector includes Brain mode and reuses the existing `colorBy`
-setting rather than adding a persistence key. Point-radius and surface controls
+The `Color by` selector includes the themed **Brain** and **Brain 2** modes
+(the full option list is owned by `web/src/ui/dev-panel.ts → COLOR_BY_OPTIONS`,
+with `web/src/ui/dev-panel.ts → COLOR_BY_LABELS` driving the Debug-tab readout)
+and reuses the existing `colorBy` setting rather than adding a persistence key.
+`colorBy` is read unclamped at Float32Array index 18, so adding a color mode is
+purely additive: `web/src/core/settings.ts → normalizeEnum` widens the allowed
+set, the index/length contract is untouched. Brain 2 renders near-black
+background, blue at rest, red where firing — see
+[`gpu-rendering.md`](gpu-rendering.md) for the shader behavior. Point-radius and surface controls
 are not exposed or persisted; their Float32Array slots remain
 compatibility slots written from defaults. The Rust surface path is active
 through the default-written `surface = 1` slot so first boot has a dim
