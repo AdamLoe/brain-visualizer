@@ -56,15 +56,6 @@ import {
 } from "./boot-failure";
 import { applyMobileConfig } from "./core/mobile-config";
 
-// v0.3.1: morphology-config WASM entry point. The Rust agent adds
-// `set_morphology_config(json: &str)` to WasmGpuBackend in parallel; until the
-// pkg .d.ts is regenerated the method is not on the generated type, so we declare
-// the expected signature here and cast at the single call site (no `any`).
-// TODO(v0.3.1): drop this shim once the regenerated pkg exports the method.
-interface MorphCapableBackend {
-  set_morphology_config(json: string): void;
-}
-
 interface PreparedNetworkCapableBackend {
   startup_begin_prepared_network(
     version: number,
@@ -1050,7 +1041,7 @@ async function boot(): Promise<void> {
             gpuBackend!.update_settings(settings);
           },
           applyMorphConfig(json): void {
-            (gpuBackend! as unknown as MorphCapableBackend).set_morphology_config(json);
+            gpuBackend!.set_morphology_config(json);
           },
         }, {
           visualSettings: () => toFloat32Array(getSettings()),
