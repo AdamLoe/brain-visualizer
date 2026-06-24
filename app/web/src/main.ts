@@ -21,10 +21,7 @@ import { CornerHud } from "./ui/hud";
 import { Profiler } from "./render/profiler";
 import { Renderer } from "./render/renderer";
 import { RebuildCoordinator } from "./rebuild/rebuild-coordinator";
-import {
-  morphConfigRequiresPreparedNetwork,
-  settingsRequirePreparedNetwork,
-} from "./rebuild/rebuild-intent";
+import { settingsRequirePreparedNetwork } from "./rebuild/rebuild-intent";
 import {
   NetworkBuildClient,
   type PreparedNetworkProgress,
@@ -780,12 +777,13 @@ async function boot(): Promise<void> {
         onMorphLive(json: string): void {
           rebuildCoordinator.requestMorphConfig(json);
         },
+        // Rebuild Morphology = geometry, rebuilt in-place. A generator change
+        // only regenerates axon-tree geometry (Rust set_morphology_config →
+        // regenerate_morphology), never network topology — topology changes go
+        // through Regenerate Network. So this always takes the cheap in-place
+        // path, never a worker network prepare.
         onMorphRebuild(json: string): void {
-          if (morphConfigRequiresPreparedNetwork(appliedMorphConfigJson, json)) {
-            requestPreparedNetwork("morphology generator", json);
-          } else {
-            rebuildCoordinator.requestMorphConfig(json);
-          }
+          rebuildCoordinator.requestMorphConfig(json);
         },
       });
     }
