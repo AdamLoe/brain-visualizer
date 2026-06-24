@@ -88,6 +88,10 @@ pub mod params {
     pub const AXON_STOP_FRACTION: f32 = 0.85;
     /// Axon trunk radius at the soma (fraction of R0).
     pub const AXON_R0_FRACTION: f32 = 0.90;
+    /// Soma sphere radius as a multiple of `R0` — a bold cell body that reads as
+    /// a distinct soma rather than a point the arbor sprouts from. The sphere
+    /// pass adds the firing pulse on top, so a firing soma visibly swells.
+    pub const SOMA_RADIUS_FRACTION: f32 = 3.5;
 }
 
 /// Locked morphology parameter preset used by the generator.
@@ -220,7 +224,7 @@ impl MorphologyParams {
             socket_radius_lo: 0.008,
             socket_radius_hi: 0.018,
             socket_tip_preference: 0.78,
-            trunk_length_fraction: 0.32,
+            trunk_length_fraction: 0.5,
             twig_radius_fraction: 0.16,
             taper_curve: 2.1,
             dendrite_primary_root_count: 4,
@@ -875,9 +879,9 @@ pub struct Morphology {
 /// Build the flat soma-sphere instance list from neuron positions and source
 /// types. Emits exactly one `MorphSphereInstance` per neuron (index == neuron_id).
 ///
-/// Soma radius = `params.base_radius` (same R0 that seeds the dendrite/axon
-/// radius at the soma attachment point — this makes the sphere diameter
-/// visually match the tube's root footprint).
+/// Soma radius = `params.base_radius * SOMA_RADIUS_FRACTION` — a bold cell body
+/// that reads as a distinct soma the trunk emerges from, not a point the arbor
+/// sprouts from. The sphere pass (`vs_sphere`) adds the firing pulse on top.
 pub fn emit_soma_spheres(
     positions: &[[f32; 3]],
     source_types: &[u8],
@@ -905,7 +909,7 @@ pub fn emit_soma_spheres(
                 .unwrap_or(([0.0; 3], 0.0));
             MorphSphereInstance {
                 center: pos,
-                radius: params.base_radius,
+                radius: params.base_radius * params::SOMA_RADIUS_FRACTION,
                 neuron_id: i as u32,
                 kind: 2,
                 _pad0: 0,
@@ -2634,6 +2638,16 @@ pub fn generate_with_progress(
                 let frac = tree[idx].subtree_weight as f32 / total_weight as f32;
                 (r_trunk * frac.max(0.0).sqrt()).max(r_floor)
             };
+        }
+        // Force the soma-root (node 0) and the first-fork (node 1) to full trunk
+        // width so the soma_root → first_fork edge renders as a thick main process
+        // emerging from the cell body, then tapers into the arbor — instead of the
+        // √-rule starting the trunk as thin as a terminal twig.
+        if !tree.is_empty() {
+            tree[0].radius = r_trunk;
+        }
+        if tree.len() > 1 {
+            tree[1].radius = r_trunk;
         }
 
         // ── Stats: fork-degree histogram (internal nodes), depth, width bands.

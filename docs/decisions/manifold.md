@@ -159,7 +159,8 @@
 - **Decision.** Branch radius encodes signal-carrying capacity via
   the bottom-up area-preserving width rule in `generate` for root/internal
   nodes. Terminal leaf nodes are set to the twig floor. The descriptor trunk
-  starts at full radius; each fork sheds its children's weight share.
+  (soma-root + first-fork nodes) is pinned to full `r_trunk` after the width pass;
+  each fork past it sheds its children's weight share.
 - **Why.** Area-preserving √ scaling (Murray/Rall) keeps shared trunks visually
   substantial while still letting thin twigs read. The locked
   `axon_root_radius_fraction` keeps the primary trunk substantial against the
@@ -315,6 +316,28 @@
 - **Alternatives considered.** Keeping soma as the far-glow billboard only — no layout change, but no true 3D body.
 - **Tradeoffs.** Separate storage buffers and bind groups instead of one; the sphere bind group uses distinct binding slots to avoid WGSL name clashes with the tube bindings in the shared shader module. The soma instance carries one dominant root direction and pull strength, avoiding a third soma deformation bind group.
 - **Code anchors.** `crates/brain-visualizer/src/sim/morphology.rs → MorphSphereInstance / emit_soma_spheres`; `crates/brain-visualizer/src/sim/gpu/pipelines.rs → GpuPipelines` (`render_soma_spheres` field); `crates/brain-visualizer/src/sim/gpu/resources.rs → init_morph_resources`
+
+## Bold soma body + thick trunk before the arbor branches
+
+- **Decision.** A neuron reads as a clear cell body with a thick main process
+  emerging from it, not branches sprouting from a point. The soma sphere radius is
+  a bold multiple of `R0` (`params::SOMA_RADIUS_FRACTION`), the soma-root and
+  first-fork nodes are pinned to full `r_trunk` in the width pass so the trunk edge
+  renders thick (instead of letting the √-rule start it thin), and
+  `trunk_length_fraction` pushes the first fork out from the soma so a trunk gap is
+  visible before the arbor forks.
+- **Why.** The prior look read as "a branching tree starting from one branch": the
+  soma was `R0`-sized (no visible body) and the fork sat close to the soma, so the
+  trunk read as just another twig. The √-rule already resolves the trunk nodes to
+  full subtree weight, so pinning `r_trunk` is the explicit, robust guarantee of
+  that look rather than a new code path. Shipped as locked constants/preset values
+  so no `GeneratorConfig` field or `MORPH_CONFIG_LS_KEY` churn was needed; no
+  `MorphSphereInstance`/`MorphSegment` layout change (radius is an existing field).
+- **Applies to.** [`../architecture/manifold.md`](../architecture/manifold.md), [`../architecture/gpu-rendering.md`](../architecture/gpu-rendering.md)
+- **Tradeoffs.** `trunk_length_fraction` is bounded against the ~0.15 inter-neuron
+  spacing — the first fork lands near the mean target midpoint and the trunk tapers
+  before reaching a neighbour, so neighbouring trunks do not fuse.
+- **Code anchors.** `crates/brain-visualizer/src/sim/morphology.rs → emit_soma_spheres, generate` (width-pass trunk pin), `MorphologyParams::locked_default` (`trunk_length_fraction`), `params::SOMA_RADIUS_FRACTION`.
 
 ## Morphology generator exposed for tuning; budgets/slack/salts stay protected
 

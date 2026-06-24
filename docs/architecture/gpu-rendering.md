@@ -44,7 +44,9 @@ current docs must not describe those as dormant runtime surfaces.
 4. **Morphology tubes** when `connection_layer != 0`; additive, no depth,
    drawn only through each chunk's GPU-written indirect args.
 5. **Soma spheres** when `connection_layer != 0`; additive, one shader-built
-   sphere per neuron.
+   sphere per neuron. The sphere is a bold cell body (`emit_soma_spheres` scales
+   the radius by `params::SOMA_RADIUS_FRACTION`), and `vs_sphere` adds the firing
+   pulse on top so a firing soma visibly swells.
 6. **Active tube redraw** when the active pipelines exist; depth-tested alpha
    over both additive morphology passes.
 7. **Active soma redraw**; depth-tested alpha, loading the active-tube depth.
@@ -96,7 +98,8 @@ count, not the Rust/WGSL storage layout or compaction predicate.
 Axon impulse emphasis is weighted by the same downstream synaptic-flow signal
 that shapes the baked axon tree: generator radii encode subtree synaptic weight
 (`sqrt(subtree_weight / total_weight)` for internal branches, terminal twig
-floor for leaves), and the shader derives `flow_strength` from the interpolated
+floor for leaves, full `r_trunk` pinned on the soma-root/first-fork trunk), and
+the shader derives `flow_strength` from the interpolated
 unscaled radius. As an impulse splits, child branches are already physically
 smaller and their packet brightness/tint/active opacity fade with the carried
 flow. The renderer does not bind `i_current` / `I_next` for this because those

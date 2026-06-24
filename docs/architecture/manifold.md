@@ -97,13 +97,17 @@ branchlets and twigs are explicitly self-owned and bounded by
 `effective_decor_group_max`, so they cannot invent presynaptic activity.
 
 Each source neuron also gets a `ProcessRoot` descriptor and a single axon arbor.
-The protected soma-root to first-fork trunk is emitted before the tree grows.
-The remaining tree is built by a deterministic Prim-like greedy attach loop with
-local relaxation; leaves are unique non-self targets. Internal trunk/fork edges
-carry the source id so shared paths stay source-lit, and only terminal leaf edges
-carry the real target id. Width is computed bottom-up from synaptic weight using
-the area-preserving rule described in
-[`../decisions/manifold.md`](../decisions/manifold.md).
+The protected soma-root to first-fork trunk is emitted before the tree grows, and
+reads as a bold main process: the soma sphere is a multiple of `R0`
+(`params::SOMA_RADIUS_FRACTION`), the soma-root and first-fork nodes are pinned to
+full trunk width (`r_trunk`) so the trunk renders thick instead of as a thin twig,
+and `trunk_length_fraction` sets the first fork clearly out from the cell body
+without fusing neighbouring trunks. The remaining tree is built by a deterministic
+Prim-like greedy attach loop with local relaxation; leaves are unique non-self
+targets. Internal trunk/fork edges carry the source id so shared paths stay
+source-lit, and only terminal leaf edges carry the real target id. Width past the
+trunk is computed bottom-up from synaptic weight using the area-preserving rule
+described in [`../decisions/manifold.md`](../decisions/manifold.md).
 
 `adaptive_subsegments` controls deterministic CPU path sampling from edge
 length, curvature, and long-range classification. The renderer then bends each
