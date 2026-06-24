@@ -40,7 +40,7 @@ describe("VisualSettings Float32Array contract", () => {
       0.50,  // 14 heterogeneity
       0.0,   // 15 morphRestingOpacity
       0.0,   // 16 signalSource zero-written quarantine slot
-      1.0,   // 17 connectionLayer
+      2.0,   // 17 connectionLayer (default: Until arrival)
       6.0,   // 18 colorBy
       0.0,   // 19 neuronVisibility
       1.0,   // 20 surface default-written quarantine slot

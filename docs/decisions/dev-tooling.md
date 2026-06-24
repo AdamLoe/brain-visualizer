@@ -254,6 +254,23 @@
 - **Applies to.** [`../architecture/dev-panel.md`](../architecture/dev-panel.md).
 - **Code anchors.** `web/src/ui/dev-panel.ts → _buildTooltip, _attachTip`.
 
+## Connections default is until-arrival; "Arrival hold" is the fade-out duration
+
+- **Decision.** The "Connections" dropdown defaults to **until-arrival** (mode 2)
+  for fresh/cleared state, and the "Arrival hold" slider's tooltip describes a
+  **fade-out duration**: after the aggregate packet arrival point the subdued full
+  branch ramps its brightness and opacity to nothing over those ticks (0 = drop
+  immediately), rather than "extra ticks kept fully visible".
+- **Why.** The render shader now fades the until-arrival branch out over the hold
+  window instead of hard-cutting, so the slider's user-facing meaning changed and
+  the default mode is the one that benefits from the smoother resolve. Persisted
+  values are unaffected (fresh-state default only).
+- **Applies to.** [`../architecture/dev-panel.md`](../architecture/dev-panel.md),
+  [`../architecture/web-frontend.md`](../architecture/web-frontend.md).
+- **Code anchors.** `web/src/ui/dev-panel.ts` ("Connections" / "Arrival hold"
+  tooltips); `web/src/core/settings.ts → DEFAULT_SETTINGS.connectionLayer`. The
+  fade itself is owned by [`rendering.md`](rendering.md).
+
 ## Float32Array index contract is the shared Rust/TS boundary
 
 - **Decision.** The `Float32Array` of length `SETTINGS_LENGTH` produced by

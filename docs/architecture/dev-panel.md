@@ -63,11 +63,13 @@ _buildAppearanceTab`; index assignment, tombstones, and default-written slots ar
 owned by `web/src/core/settings.ts → VisualizerSettings, toFloat32Array`.
 
 `connectionLayer` is surfaced as the "Connections" dropdown in the "Morphology
-Visibility" section. It offers off, active/recent, and until-arrival visibility;
-the until-arrival mode keeps subdued connections visible for the aggregate
-packet-arrival window plus the live "Arrival hold" setting, because individual
-morphology segments do not carry a per-tree final endpoint. Its current values
-and normalization live in
+Visibility" section. It offers off, active/recent, and until-arrival visibility,
+and the fresh-state default is **until-arrival** (mode 2). Until-arrival keeps a
+subdued view of the whole fired arbor until the aggregate packet arrives, then
+fades it out over the live "Arrival hold" window; the "Arrival hold" slider is
+the **fade-out duration** in ticks (the subdued branch ramps brightness and
+opacity to nothing over those ticks, not "extra ticks kept fully visible").
+Its current values and normalization live in
 `web/src/core/settings.ts → normalizeConnectionLayer` and
 `crates/brain-visualizer/src/sim/gpu/mod.rs → normalize_connection_layer`. The
 resting-debug mode is not exposed and is not a runtime mode.

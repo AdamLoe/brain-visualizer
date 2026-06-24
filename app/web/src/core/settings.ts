@@ -38,7 +38,7 @@ export interface VisualizerSettings {
   morphRestingOpacity:      number;   // 15 opacity of non-active structure (0..1)
   // ── index 16–23: mode enums ──────────────
   signalSource:             number;   // 16 RESERVED/INERT — signal source removed; index kept for the Rust↔TS contract
-  connectionLayer:          number;   // 17 connection layer mode: 0=Off, 1=Active/recent only (default), 2=Visible until impulse arrival
+  connectionLayer:          number;   // 17 connection layer mode: 0=Off, 1=Active/recent only, 2=Visible until impulse arrival (default)
   colorBy:                  number;   // 18 color-by mode
   neuronVisibility:         number;   // 19 neuron visibility mode
   surface:                  number;   // 20 surface display mode
@@ -71,8 +71,8 @@ export const DEFAULT_SETTINGS: VisualizerSettings = {
   heterogeneity:            0.50,
   morphRestingOpacity:      0.0,   // Morphology: resting structure hidden by default (0=only pulses)
   signalSource:             0,
-  // Morphology connection layer: 0=Off, 1=Active/recent only, 2=Visible until impulse arrival.
-  connectionLayer:          1,
+  // Morphology connection layer: 0=Off, 1=Active/recent only, 2=Visible until impulse arrival (default).
+  connectionLayer:          2,
   colorBy:                  6,
   neuronVisibility:         0,
   surface:                  1,

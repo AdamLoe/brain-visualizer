@@ -598,8 +598,8 @@ pub struct VisualSettings {
     // ── mode enums (stored as integer cast to f32) ─────────────────────────
     /// index 16 — reserved_zero (signalSource removed)
     pub signal_source: u32,
-    /// index 17 — connection_layer mode: 0=Off, 1=Active/recent only (default),
-    /// 2=Visible until impulse arrival
+    /// index 17 — connection_layer mode: 0=Off, 1=Active/recent only,
+    /// 2=Visible until impulse arrival (default)
     pub connection_layer: u32,
     /// index 18 — color_by mode (default 6 = Brain)
     pub color_by: u32,
@@ -649,8 +649,8 @@ impl Default for VisualSettings {
             morph_resting_opacity: 0.0,
             signal_source: 0,
             // Morphology controls: 0=Off, 1=Active/recent only, 2=Visible until
-            // impulse arrival.
-            connection_layer: 1,
+            // impulse arrival (default).
+            connection_layer: 2,
             color_by: 6,
             neuron_visibility: 0,
             surface: 1,
@@ -1962,7 +1962,9 @@ impl GpuBackend {
                     base_brightness: self.visual.morph_resting_opacity,
                     connection_layer: self.visual.connection_layer,
                     color_by: self.visual.color_by,
-                    _pad_a: 0,
+                    // Until-arrival fade duration (mirrors the CompactUniforms clamp
+                    // at the compaction site); render ramps mode-2 over this window.
+                    arrival_hold_ticks: self.visual.arrival_hold_ticks.clamp(0.0, 300.0),
                     _pad_b: 0,
                     _pad_c: 0,
                     // v0.3.1: lighting + brightness from the morphology config
@@ -2953,6 +2955,8 @@ mod tests {
         assert_eq!(settings.bloom_strength, 0.0);
         assert_eq!(settings.heterogeneity, 0.50);
         assert_eq!(settings.arrival_hold_ticks, 30.0);
+        // Fresh default is Until-arrival (2); must agree with the TS DEFAULT_SETTINGS.
+        assert_eq!(settings.connection_layer, 2);
     }
 
     #[test]

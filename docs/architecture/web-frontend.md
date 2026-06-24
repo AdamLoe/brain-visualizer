@@ -173,7 +173,11 @@ reentrancy rules). The data-layout contracts for `VisualSettings` and
 [`simulation.md`](simulation.md) respectively.
 `VisualSettings` changes remain latest-wins, and render-only knobs such as
 until-arrival hold should flow through that packed settings call rather than a
-structural rebuild path.
+structural rebuild path. `DEFAULT_SETTINGS.connectionLayer` is **2
+(until-arrival)**; this fresh-state default is applied only when there is no
+saved value — `loadSettings` returns the defaults on a missing/version-mismatched
+payload, and `mergeOver` keeps a persisted `connectionLayer` over the default, so
+existing saves are unaffected and there is no migration shim.
 
 The morphology config travels a **separate** channel from the Float32Array:
 `crates/brain-visualizer/src/lib.rs → WasmGpuBackend::set_morphology_config` takes

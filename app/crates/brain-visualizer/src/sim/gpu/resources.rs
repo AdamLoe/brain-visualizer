@@ -88,7 +88,7 @@ pub use crate::sim::morphology::{MorphSegment, MorphSphereInstance};
 ///  80:   camera_up:[f32;3] + width_scale:f32 (16 B)
 ///  96:   camera_pos:[f32;3] + light_next:u32 (16 B)
 /// 112:   light_past:u32 + glow_tau:f32 + base_brightness:f32 + connection_layer:u32 (16 B)
-/// 128:   color_by:u32 + _pad_a:u32 + _pad_b:u32 + _pad_c:u32 (16 B)
+/// 128:   color_by:u32 + arrival_hold_ticks:f32 + _pad_b:u32 + _pad_c:u32 (16 B)
 /// 144:   light_dir:[f32;3] + ambient:f32 (16 B)
 /// 160:   diffuse_intensity:f32 + rim_intensity:f32 + rim_power:f32 + _pad3:u32 (16 B)
 /// 176:   resting_brightness:f32 + active_boost:f32 + active_opacity:f32 + inactive_opacity_floor:f32 (16 B)
@@ -117,8 +117,12 @@ pub struct MorphUniforms {
     pub base_brightness: f32,
     pub connection_layer: u32,
     pub color_by: u32,
-    pub _pad_a: u32, // pad block to 16-B boundary before light_dir
-    pub _pad_b: u32,
+    // Until-arrival fade duration (ticks), threaded into render so mode-2 segments
+    // ramp out over [28 .. 28+hold] instead of hard-cutting at the compaction drop.
+    // Same value `CompactUniforms.arrival_hold_ticks` carries; repurposed from the
+    // former `_pad_a` (u32→f32 in place, so the 192 B layout is unchanged).
+    pub arrival_hold_ticks: f32,
+    pub _pad_b: u32, // pad block to 16-B boundary before light_dir
     pub _pad_c: u32,
     // ── Lighting preset (Stage 0 / v0.3.0) ────────────────────────────────────
     // Defaults locked here; dev-panel exposure in v0.3.1.

@@ -109,12 +109,22 @@ generated axon fanout. This prevents high-frequency source neurons from
 constantly resetting the visible packet near the soma before it reaches the
 generated outgoing leaves. In the default active/recent mode, compaction keeps only
 segments whose packet band is about to light, lit, or recently lit. In
-visible-until-arrival mode, every segment owned by a recent visual spike stays
-selected until the packet front has passed that segment endpoint; non-packet
-fragments render as subdued resting structure rather than lit signal. Both modes
-write chunk-local `DrawIndirectArgs`, and both additive and active tube passes
-use the same indirect args, so per-frame selected counts stay GPU-side.
-`GpuBackend::read_active_segment_count` is diagnostics-only.
+visible-until-arrival mode (the fresh-state default), every segment owned by a
+recent visual spike stays selected for the whole `28 + arrival_hold_ticks`
+lifetime; non-packet fragments render as subdued resting structure rather than
+lit signal. That subdued branch does not pop out at the compaction drop point —
+the render shader **fades it out** over the `[28 .. 28+hold]` window
+(`render_morphology.wgsl → arrival_fade_factor`): the mode-2 resting brightness
+(in both `fs_main` and `fs_main_active`) and the mode-2 opacity floor (in
+`fs_main_active`) ramp from the subdued rest value to zero, then the segment
+drops as compaction stops selecting it. The fade is render-only (compaction
+selection is unchanged) and applies only when `connection_layer >= 2`, so the
+off / active-recent paths are byte-identical. `arrival_hold_ticks` reaches render
+through the repurposed `_pad_a` slot of `MorphUniforms` (the same value
+`CompactUniforms` carries). Both modes write chunk-local `DrawIndirectArgs`, and
+both additive and active tube passes use the same indirect args, so per-frame
+selected counts stay GPU-side. `GpuBackend::read_active_segment_count` is
+diagnostics-only.
 
 The layout contracts are the corruption-sensitive part:
 
@@ -154,8 +164,14 @@ active redraw.
 
 The legacy `active_opacity` and `inactive_opacity_floor` field names live in
 `crates/brain-visualizer/src/sim/morphology.rs → LightingConfig` and ride the
-existing 192 B `MorphUniforms` layout. They now act as coverage/emphasis inputs
-for the solid redraw rather than allowing see-through tube fragments.
+existing 192 B `MorphUniforms` layout (repurposed from the former trailing
+`_pad4`/`_pad5`). They now act as coverage/emphasis inputs for the solid redraw
+rather than allowing see-through tube fragments. `arrival_hold_ticks` (the
+until-arrival fade duration) rides the same trick — it repurposes the former
+`_pad_a` slot (`u32`→`f32` in place), so the 192 B layout and its
+`morph_layouts_locked` assert are unchanged. See
+`crates/brain-visualizer/src/sim/gpu/resources.rs → MorphUniforms` for the field
+order.
 
 ## Bloom
 

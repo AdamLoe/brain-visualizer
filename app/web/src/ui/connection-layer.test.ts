@@ -56,13 +56,13 @@ describe("connectionLayer index contract", () => {
 // ── connectionLayer: default value ───────────────────────────────────────────
 
 describe("connectionLayer default", () => {
-  test("default is 1 (Active/recent only)", () => {
-    expect(DEFAULT_SETTINGS.connectionLayer).toBe(1);
+  test("default is 2 (Until arrival)", () => {
+    expect(DEFAULT_SETTINGS.connectionLayer).toBe(2);
   });
 
-  test("default is serialised as 1 at index 17", () => {
+  test("default is serialised as 2 at index 17", () => {
     const arr = toFloat32Array(DEFAULT_SETTINGS);
-    expect(arr[17]).toBe(1);
+    expect(arr[17]).toBe(2);
   });
 });
 
@@ -117,12 +117,12 @@ describe("connectionLayer mode semantics", () => {
     expect(untilArrival[17]).not.toBe(active[17]);
   });
 
-  test("resting connections are hidden by default (morphRestingOpacity=0 + mode 1)", () => {
-    // The 'fully hidden by default' requirement for resting connections:
-    // morphRestingOpacity must be 0 at default (only active pulses visible),
-    // and the default mode must be 1 (active/recent), not 0 (off).
+  test("resting connections are hidden by default (morphRestingOpacity=0 + mode 2)", () => {
+    // Idle structure stays hidden: morphRestingOpacity must be 0 at default (only
+    // fired arbors show, via the until-arrival subdued visibility), and the default
+    // mode must be 2 (until-arrival), not 0 (off).
     expect(DEFAULT_SETTINGS.morphRestingOpacity).toBe(0.0);
-    expect(DEFAULT_SETTINGS.connectionLayer).toBe(1);
+    expect(DEFAULT_SETTINGS.connectionLayer).toBe(2);
   });
 
   test("persisted mode 2 loads as until-arrival mode", () => {

@@ -54,7 +54,7 @@ struct MorphSegment {
 //  80:   camera_up     vec3<f32>      (12 B) | width_scale f32 (4 B)
 //  96:   camera_pos    vec3<f32>      (12 B) | light_next  u32 (4 B)
 // 112:   light_past u32 | glow_tau f32 | base_brightness f32 | connection_layer u32
-// 128:   color_by u32 | _pad_a u32 | _pad_b u32 | _pad_c u32
+// 128:   color_by u32 | arrival_hold_ticks f32 | _pad_b u32 | _pad_c u32
 // 144:   light_dir     vec3<f32>      (12 B) | ambient         f32 (4 B)
 // 160:   diffuse_intensity f32 | rim_intensity f32 | rim_power f32 | _pad3 u32
 // 176:   resting_brightness f32 | active_boost f32 | active_opacity f32 | inactive_opacity_floor f32
@@ -71,7 +71,7 @@ struct MorphUniforms {
     base_brightness: f32,  // Morphology controls: resting structure brightness (morph_resting_opacity)
     connection_layer: u32, // Morphology controls: 0 = off, 1 = on (structure + signal lighting)
     color_by: u32,
-    _pad_a: u32,
+    arrival_hold_ticks: f32, // until-arrival fade duration; mirrors CompactUniforms (was _pad_a)
     _pad_b: u32,
     _pad_c: u32,
     // Stage 0 lighting fields (v0.3.0 defaults; dev-panel exposure in v0.3.1)
@@ -170,6 +170,10 @@ const DENDRITE_ECHO_STRENGTH: f32 = 0.28;
 const DENDRITE_ECHO_RANGE: f32 = 0.075;
 const ACTIVE_OPACITY_SOFT_MIN: f32 = 0.10;
 const ARRIVAL_MODE_REST_BRIGHTNESS: f32 = 0.11;
+// Mirror of compact_morph_segments.wgsl ARRIVAL_MODE_MAX_TRAVEL_TICKS: in mode 2
+// compaction keeps a segment selected while age <= 28 + arrival_hold_ticks. The
+// render fade starts here so the [28 .. 28+hold] ramp window matches selection.
+const ARRIVAL_MODE_MAX_TRAVEL_TICKS: f32 = 28.0;
 // Axon branch radii are generated from downstream subtree synaptic weight:
 // internal radius = root_radius * sqrt(subtree_weight / total_weight), with
 // terminal leaves at the configured twig floor. The renderer uses that baked
@@ -440,6 +444,17 @@ fn tube_resting_brightness(connection_layer: u32, configured: f32) -> f32 {
     return select(configured, max(configured, ARRIVAL_MODE_REST_BRIGHTNESS), connection_layer >= 2u);
 }
 
+// Mode-2 fade factor over the [28 .. 28+hold] window, matching the compaction
+// selection lifetime (28 + arrival_hold_ticks). Returns 1.0 at/below age 28
+// (unchanged subdued rest value), ramps 1.0→0.0 across the hold window, and 0.0
+// at/after the compaction drop point. `denom = max(hold, 1.0)` guards hold == 0
+// (where compaction drops the segment at age 28, leaving no real fade window).
+fn arrival_fade_factor(arrival_age: f32, hold_ticks: f32) -> f32 {
+    let hold = max(hold_ticks, 0.0);
+    let denom = max(hold, 1.0);
+    return 1.0 - clamp((arrival_age - ARRIVAL_MODE_MAX_TRAVEL_TICKS) / denom, 0.0, 1.0);
+}
+
 struct TubeVertOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) base_color: vec3<f32>,
@@ -456,6 +471,10 @@ struct TubeVertOut {
     @location(11) @interpolate(flat) long_range: u32,
     @location(12) packet_gate: f32,
     @location(13) flow_strength: f32,
+    // Ungated spike age (ticks) on the same visual_spike word compaction uses.
+    // Unlike spike_age (gated by spike_enabled), this is always the real age so
+    // the mode-2 fade can ramp the subdued resting branch out over the hold window.
+    @location(14) arrival_age: f32,
 }
 
 struct SphereVertOut {
@@ -626,6 +645,10 @@ fn vs_main(
     out.long_range = select(0u, 1u, seg.path_len >= LONG_RANGE_PATH);
     out.packet_gate = select(0.0, 1.0, spike_enabled);
     out.flow_strength = impulse_flow_strength(unscaled_radius, seg.kind);
+    // Mode-2 fade age: ungated, real spike age on the compaction word. A never-fired
+    // segment (not selected by compaction in mode 2) gets a large age so it reads as
+    // fully faded if a boundary fragment ever samples it. Used only when layer >= 2u.
+    out.arrival_age = select(1e9, spike_age(u.tick, activity_packed), has_spiked(activity_packed));
     return out;
 }
 
@@ -649,7 +672,13 @@ fn fs_main(in: TubeVertOut) -> @location(0) vec4<f32> {
         brain_tube_tint(material, legacy, packet_flow),
         u.color_by == 6u,
     );
-    let resting_brightness = tube_resting_brightness(u.connection_layer, u.resting_brightness);
+    let resting_base = tube_resting_brightness(u.connection_layer, u.resting_brightness);
+    // Mode-2 only: fade the subdued resting term to nothing over the hold window so
+    // the until-arrival branch ramps out instead of popping. The packet/active term
+    // (`activity * active_boost`) is left unfaded — a still-traveling pulse should
+    // punch through. Modes 0/1 are byte-identical (fade factor selected off).
+    let arrival_fade = arrival_fade_factor(in.arrival_age, u.arrival_hold_ticks);
+    let resting_brightness = select(resting_base, resting_base * arrival_fade, u.connection_layer >= 2u);
     let brightness = resting_brightness + activity * u.active_boost;
 
     let lambert = max(dot(N, L), 0.0);
@@ -685,7 +714,10 @@ fn fs_main_active(in: TubeVertOut) -> @location(0) vec4<f32> {
         brain_tube_tint(material, legacy, packet_flow),
         u.color_by == 6u,
     );
-    let resting_brightness = tube_resting_brightness(u.connection_layer, u.resting_brightness);
+    let resting_base = tube_resting_brightness(u.connection_layer, u.resting_brightness);
+    // Same mode-2 resting fade as fs_main (see there). Resting-only; packet unfaded.
+    let arrival_fade = arrival_fade_factor(in.arrival_age, u.arrival_hold_ticks);
+    let resting_brightness = select(resting_base, resting_base * arrival_fade, u.connection_layer >= 2u);
     let brightness = resting_brightness + activity * u.active_boost;
 
     let lambert = max(dot(N, L), 0.0);
@@ -707,7 +739,11 @@ fn fs_main_active(in: TubeVertOut) -> @location(0) vec4<f32> {
     // Packet proximity drives opacity continuously from the inactive floor to
     // the active ceiling. active_opacity=0 maps to a soft low-end ceiling so the
     // active pass still damps additive blowout instead of disappearing.
-    let visible_selected = select(0.0, 1.0, u.connection_layer >= 2u);
+    // Mode-2: the selection floor was a constant 1.0 (segment fully opaque until
+    // compaction dropped it). Ramp it with arrival_fade so opacity fades to 0 over
+    // the hold window; the active packet term still drives alpha up via the mix.
+    // As arrival_fade → 0 the floor reaches 0 and the discard below cleanly drops it.
+    let visible_selected = select(0.0, arrival_fade, u.connection_layer >= 2u);
     let active_alpha = max(mix(inactive_floor, active_ceiling, segment_activity), visible_selected);
     // Below epsilon, write neither color nor depth (in-shader inactive skip).
     if active_alpha < 0.004 { discard; }

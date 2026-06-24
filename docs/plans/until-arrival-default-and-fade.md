@@ -1,8 +1,8 @@
 ---
-status:        draft
+status:        shipped
 owner:         unassigned
 last_updated:  2026-06-23
-okay_to_delete: false
+okay_to_delete: true
 long_lived:    false
 owning_docs:
   - architecture/gpu-rendering.md
@@ -281,21 +281,36 @@ browser.
    `_pad_a/_pad_b/_pad_c/_pad3` works; `_pad_a` keeps the rename local to the
    `color_by` block. Not load-bearing — pick one and update both sides atomically.
 
-## Migration notes (filled in at ship time)
+## Migration notes (shipped)
 
-Route at ship time:
-- Mode-2 fade behavior + the `28 .. 28+hold` window → `architecture/gpu-rendering.md`
-  and the revised `decisions/rendering.md` entries above.
+All durable context migrated; this plan is `okay_to_delete: true`.
+
+- Mode-2 render fade + the `[28 .. 28+hold]` window → `architecture/gpu-rendering.md`
+  (visible-until-arrival paragraph) and `decisions/rendering.md` ("Connection
+  visibility modes reuse GPU-indirect segment selection" mode-2 revision).
 - `arrival_hold_ticks` now in `MorphUniforms` (repurposed `_pad_a`, still 192 B)
-  → `architecture/gpu-rendering.md`, `decisions/rendering.md:249-252`, and the
-  `manifest.md` drift-verification note.
-- Default = 2 (fresh-state only) → `architecture/web-frontend.md`,
-  `architecture/dev-panel.md`, `decisions/dev-tooling.md`.
-- Tooltip semantics for Connections / Arrival hold → `architecture/dev-panel.md`.
+  → `architecture/gpu-rendering.md` (Active Opacity layout note),
+  `decisions/rendering.md` ("Active-layer coverage knobs..." pad decision extended),
+  and the `manifest.md` drift-verification `MorphUniforms` note.
+- Default = 2 (fresh-state only) → `decisions/rendering.md` ("Default connection
+  visibility is until-arrival..." entry, rewritten from the old packet-band
+  default), `architecture/web-frontend.md` (DEFAULT_SETTINGS note),
+  `architecture/dev-panel.md`, and `decisions/dev-tooling.md` (new entry).
+- Tooltip semantics for Connections / Arrival hold → `architecture/dev-panel.md`
+  and `decisions/dev-tooling.md`.
 
-Set `status: shipped` + `okay_to_delete: true` once all the above land; there is
-no durable context that cannot be migrated, so this plan should not go
-`long_lived`.
+Implementation deltas vs. the plan as written:
+- The Rust default-flip test was the new `connection_layer == 2` assertion added
+  to `visual_settings_default_matches_product_defaults` (mod.rs), not an edit at
+  the cited `:2997` — that line is the index-mapping test (`from_slice` value 18 →
+  `normalize_connection_layer` → 1) and must stay `== 1`.
+- Fade math is GPU-only; visual proof is the deterministic CPU mirror test
+  `crates/brain-visualizer/tests/arrival_fade_factor.rs` (pins the ramp shape and
+  the hold==0 guard) plus the shader compiling/running clean under llvmpipe
+  (`gpu_sim_dynamics`). An aggregate-luminance render sweep was inconclusive
+  because the live recurrent population has no single global spike age.
+- Open decision #1: faded **only** the mode-2 resting term, left the packet/active
+  term unfaded. Open decision #2: repurposed `_pad_a` (offset 128).
 
 ## See also
 

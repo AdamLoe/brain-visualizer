@@ -1585,11 +1585,11 @@ export class DevPanel {
     // ── Morphology visibility (procedural neuron connectivity) ──────────────
     root.appendChild(this._sep("Morphology Visibility"));
 
-    // connectionLayer: 0=Off, 1=Active/recent, 2=Visible until impulse arrival.
+    // connectionLayer: 0=Off, 1=Active/recent, 2=Visible until impulse arrival (default).
     this._selectRow(root, {
       key: "connectionLayer",
       label: "Connections",
-      tooltip: "Morphology rendering mode. Off: no morphology work. Active/recent: draw only segments near a spike. Until arrival: keep a subdued connection visible until its impulse reaches the endpoint.",
+      tooltip: "Morphology rendering mode (default: Until arrival). Off: no morphology work. Active/recent: draw only segments near a travelling spike. Until arrival: when a neuron fires, its whole fired arbor stays subdued-visible until the impulse reaches its endpoints, then fades out over the Arrival hold window.",
       options: [
         { value: 0, label: "Off" },
         { value: 1, label: "Active/recent" },
@@ -1600,7 +1600,7 @@ export class DevPanel {
     this._sliderRow(root, {
       key: "arrivalHoldTicks",
       label: "Arrival hold",
-      tooltip: "Extra ticks that Until arrival keeps the subdued full branch visible after the aggregate packet arrival point.",
+      tooltip: "Until arrival fade-out duration (ticks). After the aggregate packet arrival point, the subdued full branch ramps its brightness and opacity to nothing over this many ticks instead of popping out. 0 = drop immediately at arrival.",
       min: 0, max: 180, step: 1,
       decimals: 0,
     }, s.arrivalHoldTicks, "live");
