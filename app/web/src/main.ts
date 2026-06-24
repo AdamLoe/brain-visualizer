@@ -473,7 +473,7 @@ async function boot(): Promise<void> {
   let nextNetworkBuildSequence = 1;
   let lastReportedNetworkBuildFailure = 0;
   let appliedMorphConfigJson = morphConfigToJson(loadMorphConfig());
-  let lastSettingsSnapshot = getSettings();
+  let lastSettingsSnapshot = { ...getSettings() };
   let lastAppliedConfig: AppConfig = { ...config };
   rebuildCoordinator.requestSettingsPush();
   rebuildCoordinator.requestMorphConfig(appliedMorphConfigJson);
@@ -620,7 +620,7 @@ async function boot(): Promise<void> {
           payload.droppedCount,
         );
         appliedMorphConfigJson = payload.morphConfigJson;
-        lastSettingsSnapshot = getSettings();
+        lastSettingsSnapshot = { ...getSettings() };
         // Observability: fold the worker's MorphTimer sub-phase ms (already in
         // the payload stats) into the boot summary so the dominant payload phase
         // is itemized (incoming/dendrite/axon) — the seconds the user sees as the
@@ -964,7 +964,7 @@ async function boot(): Promise<void> {
     config.seed = payload.seed >>> 0;
     config.regionAssignmentMode = payload.regionAssignmentMode;
     appliedMorphConfigJson = payload.morphConfigJson;
-    lastSettingsSnapshot = getSettings();
+    lastSettingsSnapshot = { ...getSettings() };
     lastAppliedConfig = { ...config };
     saveSettings({ ...lastSettingsSnapshot });
     saveAppliedMorphConfigJson(appliedMorphConfigJson);
