@@ -83,12 +83,17 @@ backend mutator: when the latest payload is ready it calls
 re-push so any newer UI state is restored after the structural rebuild.
 
 `web/src/rebuild/rebuild-coordinator.ts → RebuildCoordinator` still owns
-latest-wins immediate settings pushes and non-generator morphology config
-pushes. `web/src/rebuild/rebuild-intent.ts` classifies structural UI changes:
-N/K/seed, region assignment, connection-curve lift, reach knobs, and morphology generator config
-changes request a worker-prepared payload for the current network; uniform-only
-lighting and render-quality-only morphology changes can still flow through
-`set_morphology_config(json)` because they do not run the morphology generator.
+latest-wins immediate settings pushes and all morphology config pushes —
+including generator changes. `web/src/rebuild/rebuild-intent.ts →
+settingsRequirePreparedNetwork` classifies which `VisualSettings` changes are
+structural: connection-curve lift and the reach knobs request a worker-prepared
+payload for the current network (N/K/seed and region-assignment mode are
+`AppConfig` and route through their own prepared-network path). **Morphology
+generator changes do NOT request a worker prepare**: the Rebuild Morphology
+button always routes through `set_morphology_config(json)`, which regenerates
+axon-tree geometry in place. The semantic split is asserted — Regenerate Network
+= topology rebuild (worker prepare); Rebuild Morphology = geometry rebuild,
+in-place.
 
 After flushing, the loop calls `gpuBackend.tick(ticks, excitability)` then
 `gpuBackend.render_frame(mvp, right, up, eye, dist)`. Violating this ordering
@@ -183,10 +188,11 @@ The morphology config travels a **separate** channel from the Float32Array:
 `crates/brain-visualizer/src/lib.rs → WasmGpuBackend::set_morphology_config` takes
 a JSON string (the `MorphologyConfig` from `web/src/core/morph-config.ts`,
 persisted under its own `bv2_morph_v2` key) rather than a packed float array, and
-the backend chooses the narrowest immediate update path. The dev-panel apply is
-queued like the other backend calls through `RebuildCoordinator` only when the
-change is uniform-only or render-quality-only; generator changes request a
-worker-prepared payload instead. Boot passes `morphConfigToJson(loadMorphConfig())`
+the backend chooses the narrowest immediate update path (uniform-only for
+lighting, regenerate for generator, pipeline rebuild for render-quality). All
+dev-panel morphology applies — lighting, render-quality, and generator — are
+queued like the other backend calls through `RebuildCoordinator`; no morphology
+change requests a worker-prepared payload. Boot passes `morphConfigToJson(loadMorphConfig())`
 into the startup worker request, so persisted generator settings are already
 present in the prepared startup payload even when the user never touches a
 morphology slider.

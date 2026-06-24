@@ -63,6 +63,21 @@
   stay out of app-owned localStorage until backend apply succeeds, and failed
   structural preparation or application rolls controls back to the last applied
   settings/config/morphology state.
+- **Two rebuild controls, two semantics.** **Regenerate Network** is a topology
+  rebuild (full worker-prepared network via N/K/seed). **Rebuild Morphology** is
+  a geometry rebuild that runs **in-place**: `onMorphRebuild` always routes
+  through `set_morphology_config(json)` → Rust `regenerate_morphology`, never a
+  worker prepare. Morphology geometry is downstream of the network, so a
+  generator change cannot change topology; routing it in-place avoids a
+  pointless worker round-trip and the spurious network-failure rollback that the
+  old generator→worker path could trigger.
+- **Stale-failure rollback guard.** A superseded `failed` build sequence cannot
+  revert a newer applied build: the rafLoop guards on
+  `network-build-client.ts → isStaleFailure(seq)` (`seq !== latestRequested`)
+  alongside the existing `lastReportedNetworkBuildFailure` de-dupe. The worker
+  `onerror` path always produces a non-empty failure message (filename:lineno,
+  else a generic out-of-memory hint) so high-N OOM crashes — which fire with an
+  empty `event.message` — no longer surface a blank rollback toast.
 - **Why.** `heterogeneity`, `weightNormalization`, and `inputMode` are `"live"`
   because the integrate uniform is read from GPU memory every tick rather than
   cached at init. Reach knobs change target ids and generated geometry,
@@ -74,7 +89,9 @@
 - **Revisit when.** A truly structural setting is added (e.g. one that changes
   buffer sizes or requires re-uploading connectivity).
 - **Code anchors.** `web/src/main.ts → requestPreparedNetwork,
-  rollbackStructuralState, applyPreparedNetworkPayload`;
+  rollbackStructuralState, applyPreparedNetworkPayload, onMorphRebuild`;
+  `web/src/rebuild/rebuild-intent.ts → settingsRequirePreparedNetwork`;
+  `web/src/gpu-build/network-build-client.ts → isStaleFailure`;
   `web/src/ui/dev-panel.ts → rollbackMorphologyConfig`.
 
 ## Versioned localStorage with merge-over-defaults; static hidden review presets only
@@ -208,6 +225,17 @@
   their compile-time maxima, and path-sampling controls are clamped to the
   already-budgeted `EDGE_SUBSEGMENTS_MAX`. Allocation budgets, salts, waypoint
   counts, and shader tube-ring curvature remain protected.
+- **`axonCurveLift` is pinned, not exposed.** It has no `MORPH_DESCRIPTORS`
+  entry (never editable). TS pins it to `0.15` and omits it from the saved JSON;
+  the omit is inert because Rust's `#[serde(default)] = 0.15` supplies the same
+  value, and Rust is the effective source for the geometry. Both defaults are
+  locked at `0.15`; unpinning requires adding a descriptor.
+- **`edgeSubsegments` is demoted, not removed.** It stays an Advanced generator
+  descriptor. The Rust `edge_subsegments` field is only copied/serialized,
+  **never read** by the geometry sampler (adaptive subdivision uses
+  `edge_subsegments_max` / `EDGE_SUBSEGMENTS_MAX`), so it is an inert
+  future-removal candidate kept for now to avoid touching the morph-config JSON
+  + serde contract for no behavioral gain.
 - **Why.** The GPU morphology buffers are pre-allocated to fixed maxes at
   pipeline build time. Changing a buffer-sized parameter without resizing the
   buffer silently drops segments or overruns memory. The exposed path-sampling
@@ -238,6 +266,32 @@
 - **Applies to.** [`../architecture/dev-panel.md`](../architecture/dev-panel.md).
 - **Code anchors.** `web/src/ui/dev-panel.ts → TABS, _buildAppearanceTab,
   _buildMorphLightingRows, _buildMorphConfigRows, _buildDebugViewTab`.
+
+## Two-tier dev panel: Essentials (`?dev=1`) vs Advanced (`?dev=true`)
+
+- **Decision.** The panel renders in one of two tiers, fixed at construction
+  from the `dev` URL param. `?dev=1` (or backtick / gear) opens **Essentials**:
+  a curated ~dozen beauty knobs, with the **Network** and **Morphology** tabs
+  omitted and Monitor / Dynamics / Storage / Debug kept. `?dev=true` opens
+  **Advanced**: every row and tab. Reload switches tiers. Gating is **render-time
+  only** through a single allow-set primitive (`ESSENTIALS_SETTINGS` by settings
+  key, `ESSENTIALS_MORPH` by `jsonPath`, `ADVANCED_ONLY_TABS`); persistence and
+  the `VisualSettings` Float32Array are byte-identical in both tiers.
+- **Why.** Even the hidden dev panel had grown to dozens of network and
+  morphology tuning rows that drown the handful of knobs actually used for
+  beauty/screenshot work. A second URL flag keeps the full tuning surface one
+  reload away while letting the common case open a minimal, trustworthy panel —
+  without forking persistence or risking the frozen Float32Array index contract
+  (hiding a row must never change what is sent to Rust). One allow-set is the
+  keep-list source of truth, mirroring the `SETTING_IMPACT` single-source ethos
+  rather than scattering per-row `if` branches.
+- **Applies to.** [`../architecture/dev-panel.md`](../architecture/dev-panel.md).
+- **Tradeoffs.** Switching tiers needs a reload (no in-panel toggle — out of
+  scope). The keep-list is a hand-curated set that must be updated when a new
+  beauty knob should be Essentials-visible; the dev-panel unit test asserts the
+  exact membership so drift is caught.
+- **Code anchors.** `web/src/ui/dev-panel.ts → _advanced, ESSENTIALS_SETTINGS,
+  ESSENTIALS_MORPH, ADVANCED_ONLY_TABS`.
 
 ## Custom instant tooltips, not native `title=`
 

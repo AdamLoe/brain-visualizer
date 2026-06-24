@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-20
+last_updated:  2026-06-23
 ---
 
 # Dev Panel
@@ -51,6 +51,26 @@ still body-appended, but `_attachTip` also makes them focus-readable through
 `focusin`/`focusout`, so keyboard users can discover the same help as hover
 users. Sliders, number inputs, selects, reset buttons, and the public gear/pause
 buttons carry explicit accessible names.
+
+### Essentials vs Advanced (`?dev=1` vs `?dev=true`)
+
+The panel renders in one of two tiers, fixed at construction from the `dev` URL
+param (`web/src/ui/dev-panel.ts → _advanced`):
+
+- **Essentials** (`?dev=1`, or backtick / gear opening at the boot tier) shows
+  only a curated set of beauty knobs. The **Network** and **Morphology** tabs
+  are omitted; **Monitor / Dynamics / Storage / Debug** stay visible.
+- **Advanced** (`?dev=true`) reveals every row and every tab, exactly as the
+  full panel.
+
+Reload to switch tiers. Gating is **render-time only**: persistence and the
+`VisualSettings` Float32Array are identical in both tiers — hidden rows keep
+their persisted values, and hiding a row never changes what is sent to the
+backend. The gating uses a single allow-set primitive, the source of truth for
+the keep-list: `ESSENTIALS_SETTINGS` (by `VisualizerSettings` key),
+`ESSENTIALS_MORPH` (by `jsonPath`), and `ADVANCED_ONLY_TABS`, all in
+`web/src/ui/dev-panel.ts`. The Essentials keep-list is owned by those sets; see
+[`../decisions/dev-tooling.md`](../decisions/dev-tooling.md) for the rationale.
 
 ## Tabs
 
@@ -210,6 +230,17 @@ narrowest update. The impact-dot colors mean the same thing as in the table
 above; the only difference is that for morphology the red-dot controls are
 batched behind the Rebuild button instead of pushing on each change.
 
+**Rebuild Morphology runs in-place, never a worker prepare.** `onMorphRebuild`
+(`web/src/main.ts`) ALWAYS routes to
+`rebuildCoordinator.requestMorphConfig(json)`, which on the next rAF turn calls
+`gpuBackend.set_morphology_config(json)` → Rust `regenerate_morphology`. A
+generator edit therefore regenerates axon-tree geometry **in place** with no
+worker round-trip and no network rebuild. This asserts the semantic split:
+**Regenerate Network = topology rebuild** (full worker prepare via the N/K/seed
+controls); **Rebuild Morphology = geometry rebuild, in-place**. Morphology
+geometry is downstream of the network, so a generator change never changes
+topology.
+
 **Dendrite generator controls.** The target-owned incoming dendrite generator is
 controlled by descriptor rows for socket placement, soma-proximal branching,
 decoration, and bounded path sampling. The descriptor defaults/ranges are owned
@@ -219,9 +250,20 @@ controls are clamped to existing generator/buffer limits; shader tube curvature
 is render-owned rather than a separate dev-panel knob. Waypoint counts and
 allocation budgets remain protected.
 
-Obsolete persisted morphology fields such as `dendritePrimaryMin`,
-`dendritePrimarySpan`, and duplicate `generator.axonCurveLift` are accepted,
-normalized to the current known key set, and omitted on the next save.
+Obsolete persisted morphology fields such as `dendritePrimaryMin` and
+`dendritePrimarySpan` are accepted, normalized to the current known key set, and
+omitted on the next save.
+
+`generator.axonCurveLift` is a special non-editable case: it has **no
+`MORPH_DESCRIPTORS` entry**, so it is never user-tunable. `DEFAULT_MORPH_CONFIG`
+pins it to exactly `0.15` and `morphConfigToJson` omits it from the saved JSON
+(its `normalizeMorphConfig` omit-list ignores any persisted override). That omit
+is inert: Rust supplies the same `0.15` via `#[serde(default)]`
+(`crates/brain-visualizer/src/sim/morphology.rs → GeneratorConfig`), and Rust's
+`axon_curve_lift` is the **effective source** for real axon-tree geometry
+(consumed in the sampler). Both defaults are locked at `0.15`; unpinning the TS
+value requires adding a descriptor (see the deliberate-pin comment in
+`web/src/core/morph-config.ts → normalizeMorphConfig`).
 
 ## Settings persistence contract
 
@@ -297,6 +339,17 @@ succeeds. `web/src/main.ts → rollbackStructuralState` restores the last applie
 back through `_syncSliders`, `setInitialValues`, and
 `rollbackMorphologyConfig`, so reloads do not silently trust an unproven
 structural state.
+
+A **stale/superseded `failed` build never rolls back a newer applied build.**
+The rafLoop failed branch guards on
+`web/src/gpu-build/network-build-client.ts → isStaleFailure(sequence)`
+(`sequence !== latestRequested`) in addition to the existing
+`lastReportedNetworkBuildFailure` de-dupe, so a `failed` status from a
+superseded request cannot revert a build the user has since re-requested and
+applied. Worker `onerror` always surfaces a **non-empty** message —
+`filename:lineno` when available, else "network build worker crashed (likely out
+of memory at this N)" — so OOM-at-high-N crashes (which fire with an empty
+`event.message`) no longer produce a blank rollback toast.
 
 ## Float32Array index contract (corruption risk)
 
