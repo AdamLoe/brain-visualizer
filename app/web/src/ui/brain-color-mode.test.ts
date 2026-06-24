@@ -14,8 +14,9 @@ describe("Brain color mode", () => {
   });
 
   test("is exposed in the color selector and debug labels", () => {
-    expect(COLOR_BY_OPTIONS.map((option) => option.value)).toEqual([0, 1, 2, 3, 4, 5, 6]);
-    expect(COLOR_BY_OPTIONS.at(-1)).toEqual({ value: 6, label: "Brain" });
+    expect(COLOR_BY_OPTIONS.map((option) => option.value)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    expect(COLOR_BY_OPTIONS.at(-1)).toEqual({ value: 7, label: "Brain 2" });
     expect(COLOR_BY_LABELS[6]).toBe("Brain");
+    expect(COLOR_BY_LABELS[7]).toBe("Brain 2");
   });
 });

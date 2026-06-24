@@ -294,7 +294,11 @@ fn fs_main(in: VertOut) -> @location(0) vec4<f32> {
     );
     let core = core_color * in.core * falloff * 0.85;
     // V2 Phase B: voltage glow (debug) — adds brightness from membrane |v|.
-    let vglow_color = select(in.color, BRAIN_REST_PINK, u.color_by == 6u);
+    let vglow_color = select(
+        select(in.color, BRAIN_REST_PINK, u.color_by == 6u),
+        BRAIN2_RESTING_BLUE,
+        u.color_by == 7u,
+    );
     let vglow = vglow_color * in.vglow * falloff;
     // V2 Phase E: scale the resting/gray contribution by inactive opacity so the
     // active flash always reads at full strength, but resting fog can be dimmed.
