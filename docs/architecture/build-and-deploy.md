@@ -1,7 +1,7 @@
 ---
 status:        active
 owner:         adamg
-last_updated:  2026-06-20
+last_updated:  2026-06-25
 ---
 
 # Build and Deploy
@@ -14,7 +14,8 @@ serve with the correct cross-origin isolation headers for the browser runtime.
 
 - The npm scripts and their ordering (`web/package.json → scripts`).
 - The cross-platform Rust crate: `cdylib` for WASM, `rlib` for host unit tests (`crates/brain-visualizer/Cargo.toml → [lib]`).
-- COOP/COEP header strategy: dev/preview server headers (`web/vite.config.ts → crossOriginIsolation`) and the static-host service-worker shim (`web/public/coi-serviceworker.js`).
+- COOP/COEP header strategy: dev/preview server headers (`web/vite.config.ts → crossOriginIsolation`), the native static-host headers (`web/public/_headers`, copied to `dist/_headers` by Vite), and the static-host service-worker shim (`web/public/coi-serviceworker.js`).
+- The Cloudflare Pages compile-all build script (`app/cf-build.sh`).
 - The offline verification surface: the `crates/brain-visualizer/examples/` harnesses (see below).
 - The verification entry points: the manifest drift gates (`cargo test`,
   `npm run typecheck`, `npm test`, `npm run test:e2e`) plus the focused
@@ -84,15 +85,41 @@ delivery paths keep local preview and static hosting aligned:
 - **Dev and preview servers:** Vite injects `Cross-Origin-Opener-Policy:
   same-origin` and `Cross-Origin-Embedder-Policy: require-corp` on every
   response (`web/vite.config.ts → crossOriginIsolation`).
-- **GitHub Pages / static hosts:** Cannot set custom headers. The
+- **Cloudflare Pages (native headers):** The committed `web/public/_headers`
+  sets COOP/COEP/CORP — plus `Content-Security-Policy: frame-ancestors` limiting
+  embedding to `adamloe.com` — natively at the edge. Vite copies `public/` to
+  the dist root, so it ships as `dist/_headers`. This is the primary isolation
+  path on Cloudflare: the host sets the headers directly, so
+  `crossOriginIsolated === true` on the first load.
+- **GitHub Pages / static hosts that can't set headers:** The
   `web/public/coi-serviceworker.js` shim (coi-serviceworker v0.1.7) is registered
   on first load; it intercepts fetches and adds the required headers so
   `crossOriginIsolated === true` on subsequent loads.
 
-A key gotcha: on the very first page load the service worker is not yet
-registered, so `crossOriginIsolated` may be false until the follow-up load.
+The `_headers` file and the coi-serviceworker shim coexist harmlessly: a host
+that honours `_headers` (Cloudflare) never needs the shim, and a host that
+ignores `_headers` (GitHub Pages) falls back to it. A key gotcha for the shim
+path: on the very first page load the service worker is not yet registered, so
+`crossOriginIsolated` may be false until the follow-up load — the native
+`_headers` path does not have this first-load gap.
 `crates/brain-visualizer/src/lib.rs → log_cross_origin_isolation` logs the
 isolation state at boot for debugging.
+
+### Deploy (Cloudflare Pages)
+
+Cloudflare Pages uses the **compile-all** model: it rebuilds everything from
+source on every deploy via `app/cf-build.sh`. Nothing prebuilt is committed —
+`pkg/` and `dist/` stay gitignored. The script bootstraps a Rust toolchain on
+the CI image (no rust-toolchain.toml exists, so it pins the channel in-script),
+installs `wasm-pack`, then runs `npm ci && npm run build` in `app/web/`. Content
+hashing makes the emitted `dist/assets/*` safe to cache forever
+(`Cache-Control: ... immutable` in `_headers`).
+
+Dashboard settings:
+
+- **Root directory:** (leave blank — repo root)
+- **Build command:** `bash app/cf-build.sh`
+- **Build output directory:** `app/web/dist`
 
 The ES-module worker format (`web/vite.config.ts → worker: { format: "es" }`) is
 required for code-splitting inside the WASM-loading network-build worker
@@ -198,6 +225,8 @@ When the task is specifically about shipping/defaults/build behavior, also run
 
 - A new `crates/brain-visualizer/examples/` harness is added (update the table above).
 - The COOP/COEP strategy changes (e.g. GitHub Pages gains header support).
+- `app/cf-build.sh` or `web/public/_headers` change (toolchain pin, build
+  command, cache policy, frame-ancestors allowlist, or Cloudflare dashboard settings).
 - `wasm-pack` target or `web/vite.config.ts` worker format changes.
 - New test files are added to `crates/brain-visualizer/tests/`, `web/**/*.test.ts`, or `web/e2e/*.spec.ts`.
 
